@@ -40,4 +40,12 @@ describe("loadCatalog", () => {
     expect(cat.names()).toEqual(["tasks.list", "chats.recent"]);
     expect(() => cat.resolve("crm.deal.list")).toThrow(/not allowed/i);
   });
+
+  it("rejects prototype-chain names not present as own properties in the catalog", () => {
+    const cat = loadCatalog(path);
+    expect(() => cat.resolve("constructor")).toThrow(/not allowed/i);
+    expect(() => cat.resolve("toString")).toThrow(/not allowed/i);
+    expect(() => cat.resolve("hasOwnProperty")).toThrow(/not allowed/i);
+    expect(() => cat.resolve("__proto__")).toThrow(/not allowed/i);
+  });
 });

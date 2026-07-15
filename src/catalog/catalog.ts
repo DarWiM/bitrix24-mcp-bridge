@@ -25,9 +25,10 @@ export function loadCatalog(path: string): Catalog {
   const raw = fileSchema.parse(JSON.parse(readFileSync(path, "utf8")));
   return {
     resolve(name) {
-      const entry = raw[name];
-      if (!entry) throw new Error(`call "${name}" is not allowed (not in catalog)`);
-      return entry;
+      if (!Object.prototype.hasOwnProperty.call(raw, name)) {
+        throw new Error(`call "${name}" is not allowed (not in catalog)`);
+      }
+      return raw[name];
     },
     names() { return Object.keys(raw); },
   };
