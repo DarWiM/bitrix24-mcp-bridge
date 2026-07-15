@@ -1,7 +1,10 @@
 // Builds the browser extension from env config (single source of truth: .env).
 //
-// Reads BITRIX_MCP_TOKEN, BITRIX_ORIGIN, BITRIX_MCP_PORT, injects the token/port
-// into the content script (esbuild `define`) and the origin into the manifest.
+// The content-script JS is STATIC and config-driven: no per-user value is baked into it.
+// Instead we emit a per-user dist/config.json ({ token, port }) that the ISOLATED-world
+// connector fetches at runtime via chrome.runtime.getURL. Only BITRIX_ORIGIN is templated
+// into the manifest (matches / host_permissions / web_accessible_resources).
+//
 // Run via `bun run build:ext` — Bun auto-loads `.env` from the project root.
 import { build } from "esbuild";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -26,22 +29,25 @@ const capture = !!process.env.BITRIX_CAPTURE; // capture (recording) build
 
 mkdirSync(DIST, { recursive: true });
 
-// 1) bundle the MAIN-world content script with token/port injected as literals
+// 1) bundle the two STATIC content scripts (no token/port baked in).
+//    __BITRIX_CAPTURE__ is the only define — it lets esbuild dead-code-strip the recorder
+//    from normal builds.
 await build({
-  entryPoints: [`${SRC}/bridge-client.ts`],
+  entryPoints: [`${SRC}/connector.ts`, `${SRC}/sessid-shim.ts`],
   bundle: true,
   format: "iife",
-  outfile: `${DIST}/bridge-client.js`,
-  sourcemap: true, // emits dist/bridge-client.js.map + //# sourceMappingURL for DevTools
+  outdir: DIST,
+  sourcemap: true, // emits *.js.map + //# sourceMappingURL for DevTools
   minifySyntax: true, // drop dead branches (e.g. `if (false) installCapture(...)` in normal builds)
   define: {
-    __BITRIX_TOKEN__: JSON.stringify(token),
-    __BITRIX_PORT__: String(port),
     __BITRIX_CAPTURE__: String(capture),
   },
 });
 
-// 2) generate manifest.json from the template with the portal origin
+// 2) emit the per-user config.json the connector fetches at runtime (token lives ONLY here).
+writeFileSync(`${DIST}/config.json`, JSON.stringify({ token, port }, null, 2) + "\n");
+
+// 3) generate manifest.json from the template with the portal origin.
 const template = readFileSync(`${SRC}/manifest.template.json`, "utf8");
 writeFileSync(`${DIST}/manifest.json`, template.replaceAll("__ORIGIN__", origin));
 

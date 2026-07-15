@@ -5,8 +5,11 @@ import {
   buildSessidResponse,
   parseSessidRequest,
   parseSessidResponse,
+  buildCaptureForward,
+  parseCaptureForward,
   BRIDGE_MSG_SOURCE,
 } from "./bridge-protocol.ts";
+import type { CapturedEntry } from "./bridge-core.ts";
 
 describe("parseConfig", () => {
   test("parses a valid {token, port} document", () => {
@@ -92,5 +95,28 @@ describe("sessid postMessage protocol", () => {
     expect(parseSessidResponse({ source: "x", kind: "sessid-response", nonce: "n3", sessid: "S" }, "n3")).toBeNull();
     expect(parseSessidResponse(undefined, "n3")).toBeNull();
     expect(parseSessidResponse({ source: BRIDGE_MSG_SOURCE, kind: "sessid-response", nonce: "n3" }, "n3")).toBeNull();
+  });
+});
+
+describe("capture forwarding protocol", () => {
+  const entry: CapturedEntry = {
+    endpoint: "/bitrix/services/main/ajax.php",
+    action: "someAction",
+    method: "POST",
+    transport: "ajax",
+    sampleParams: { a: "1" },
+  };
+
+  test("round-trips a captured entry", () => {
+    const msg = buildCaptureForward(entry);
+    expect(msg).toEqual({ source: BRIDGE_MSG_SOURCE, kind: "capture", call: entry });
+    expect(parseCaptureForward(msg)).toEqual(msg);
+  });
+
+  test("rejects other envelopes and junk", () => {
+    expect(parseCaptureForward(buildSessidRequest("n"))).toBeNull();
+    expect(parseCaptureForward({ source: "x", kind: "capture", call: entry })).toBeNull();
+    expect(parseCaptureForward({ source: BRIDGE_MSG_SOURCE, kind: "capture" })).toBeNull();
+    expect(parseCaptureForward(null)).toBeNull();
   });
 });

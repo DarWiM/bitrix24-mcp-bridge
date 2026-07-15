@@ -11,5 +11,5 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["src/bridge-core.ts", "src/bridge-client.ts", "src/capture.ts"]
+  "include": ["src/bridge-core.ts", "src/bridge-protocol.ts", "src/connector.ts", "src/sessid-shim.ts", "src/capture.ts"]
 }
