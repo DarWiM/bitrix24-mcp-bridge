@@ -83,9 +83,8 @@ dist
 *.local
 .bitrix24-mcp
 captured.har
-extension/bridge-client.js
 .env
-extension/manifest.json
+extension/dist/
 
 # Internal (kept local, purged from history): planning, process, IDE, design docs
 .idea/

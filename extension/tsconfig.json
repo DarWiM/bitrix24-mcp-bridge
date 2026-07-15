@@ -11,5 +11,5 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["bridge-core.ts", "bridge-client.src.ts"]
+  "include": ["src/bridge-core.ts", "src/bridge-client.ts"]
 }

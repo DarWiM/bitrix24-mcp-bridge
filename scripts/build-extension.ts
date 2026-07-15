@@ -4,7 +4,10 @@
 // into the content script (esbuild `define`) and the origin into the manifest.
 // Run via `bun run build:ext` — Bun auto-loads `.env` from the project root.
 import { build } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+
+const SRC = "extension/src";
+const DIST = "extension/dist";
 
 function required(name: string): string {
   const v = process.env[name]?.trim();
@@ -20,12 +23,14 @@ const token = required("BITRIX_MCP_TOKEN");
 const origin = required("BITRIX_ORIGIN").replace(/\/+$/, "");
 const port = Number(process.env.BITRIX_MCP_PORT ?? 39917);
 
+mkdirSync(DIST, { recursive: true });
+
 // 1) bundle the MAIN-world content script with token/port injected as literals
 await build({
-  entryPoints: ["extension/bridge-client.src.ts"],
+  entryPoints: [`${SRC}/bridge-client.ts`],
   bundle: true,
   format: "iife",
-  outfile: "extension/bridge-client.js",
+  outfile: `${DIST}/bridge-client.js`,
   define: {
     __BITRIX_TOKEN__: JSON.stringify(token),
     __BITRIX_PORT__: String(port),
@@ -33,7 +38,7 @@ await build({
 });
 
 // 2) generate manifest.json from the template with the portal origin
-const template = readFileSync("extension/manifest.template.json", "utf8");
-writeFileSync("extension/manifest.json", template.replaceAll("__ORIGIN__", origin));
+const template = readFileSync(`${SRC}/manifest.template.json`, "utf8");
+writeFileSync(`${DIST}/manifest.json`, template.replaceAll("__ORIGIN__", origin));
 
-console.error(`[build:ext] built extension for ${origin} → ws://127.0.0.1:${port}`);
+console.error(`[build:ext] built extension/dist for ${origin} → ws://127.0.0.1:${port}`);

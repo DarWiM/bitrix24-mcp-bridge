@@ -120,7 +120,7 @@ BITRIX_CATALOG=actions.json # опционально
 ```bash
 bun run build:ext    # читает .env → создаёт extension/bridge-client.js и extension/manifest.json
 ```
-1. `chrome://extensions` → включи **Developer mode** → **Load unpacked** → выбери папку `extension/`.
+1. `chrome://extensions` → включи **Developer mode** → **Load unpacked** → выбери папку `extension/dist/`.
 2. Открой/обнови залогиненную вкладку портала.
 
 > Сменил токен/домен/порт? Поправь `.env`, снова `bun run build:ext`, и нажми «обновить» у расширения.

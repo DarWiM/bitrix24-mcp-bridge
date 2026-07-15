@@ -9,19 +9,22 @@ Main-world content script на вкладке портала: подключае
 Конфигурация (токен, порт, домен портала) берётся из корневого **`.env`** — исходники
 редактировать не нужно.
 
+Структура:
+- `extension/src/` — исходники (TypeScript): `bridge-core.ts`, `bridge-client.ts`, `manifest.template.json`, тесты.
+- `extension/dist/` — сборка (генерируется, gitignored): `bridge-client.js` + `manifest.json`. **Именно `dist/` грузится как расширение.**
+
 ```bash
 # в корне проекта, где лежит .env:
 bun run build:ext
 ```
-Генерирует:
-- `extension/bridge-client.js` — бандл (esbuild IIFE) с вшитыми `BITRIX_MCP_TOKEN` и `BITRIX_MCP_PORT`;
-- `extension/manifest.json` — из `manifest.template.json` с `matches` = `BITRIX_ORIGIN` + `/*`.
+Генерирует в `extension/dist/`:
+- `bridge-client.js` — бандл (esbuild IIFE) с вшитыми `BITRIX_MCP_TOKEN` и `BITRIX_MCP_PORT`;
+- `manifest.json` — из `src/manifest.template.json` с `matches` = `BITRIX_ORIGIN` + `/*`.
 
-Оба файла **генерируются** и в git не коммитятся. Источники (TypeScript) — `bridge-client.src.ts`,
-`bridge-core.ts`, `manifest.template.json`. Типы браузерной среды — в `extension/tsconfig.json`
-(отдельный от серверного, с `lib: DOM`); проверка: `bun run typecheck` гоняет и сервер, и расширение.
+Типы браузерной среды — в `extension/tsconfig.json` (отдельный от серверного, с `lib: DOM`);
+проверка: `bun run typecheck` гоняет и сервер, и расширение.
 
-Установка: `chrome://extensions` → **Developer mode** → **Load unpacked** → папка `extension/`.
+Установка: `chrome://extensions` → **Developer mode** → **Load unpacked** → папка **`extension/dist/`**.
 Держи открытой обычную залогиненную вкладку портала (где грузится `BX` и мессенджер).
 
 Примечание (G6): работает только в Chromium — `ws://127.0.0.1` из HTTPS разрешён исключением для loopback.
