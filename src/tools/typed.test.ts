@@ -36,15 +36,14 @@ describe("typed tools", () => {
     }));
   });
 
-  it("applies default LIMIT=20 and maps beforeId to FIRST_ID for chat messages", async () => {
+  it("applies default limit=20 and maps beforeId to filter[lastId] (im.v2) for chat messages", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ messages: [] });
     registerTools(server, { bridge: { call }, catalog });
 
-    await handlers["bitrix_chat_messages"]({ dialogId: "chat123", beforeId: 84869 });
+    await handlers["bitrix_chat_messages"]({ chatId: "485", beforeId: 84869 });
     expect(call).toHaveBeenCalledWith(expect.objectContaining({
-      endpoint: "/rest/im.dialog.messages.get",
-      params: { DIALOG_ID: "chat123", LIMIT: 20, FIRST_ID: 84869 },
+      params: { chatId: "485", limit: 20, "filter[lastId]": 84869 },
     }));
   });
 

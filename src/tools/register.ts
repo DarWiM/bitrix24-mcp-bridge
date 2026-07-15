@@ -67,16 +67,17 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       tool: "bitrix_chat_messages",
       catalogName: "chat.messages",
-      description: "История сообщений диалога (по умолчанию 20 последних; beforeId — для листания вглубь)",
+      description: "История сообщений чата по chatId (по умолчанию 20 последних; beforeId — для листания вглубь). chatId берётся из bitrix_chats_recent (im.v2).",
       inputSchema: {
-        dialogId: z.string(),
+        chatId: z.union([z.number(), z.string()]),
         limit: z.number().optional(),
-        beforeId: z.number().optional(),
+        beforeId: z.union([z.number(), z.string()]).optional(),
       },
+      // im.v2 param names (this portal's messenger): chatId / limit / filter[lastId]
       toParams: (a) => ({
-        DIALOG_ID: a.dialogId,
-        LIMIT: a.limit ?? 20, // G8: sane default guards against huge histories
-        ...(a.beforeId !== undefined ? { FIRST_ID: a.beforeId } : {}),
+        chatId: a.chatId,
+        limit: a.limit ?? 20, // G8: sane default guards against huge histories
+        ...(a.beforeId !== undefined ? { "filter[lastId]": a.beforeId } : {}),
       }),
     },
   ];
