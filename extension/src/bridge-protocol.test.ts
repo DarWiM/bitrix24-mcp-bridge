@@ -47,6 +47,13 @@ describe("parseConfig", () => {
     expect(() => parseConfig('{"token":"t","port":"x"}')).toThrow(/port/i);
   });
 
+  test("throws on an out-of-range or non-integer port", () => {
+    expect(() => parseConfig('{"token":"t","port":0}')).toThrow(/port/i);
+    expect(() => parseConfig('{"token":"t","port":65536}')).toThrow(/port/i);
+    expect(() => parseConfig('{"token":"t","port":-1}')).toThrow(/port/i);
+    expect(() => parseConfig('{"token":"t","port":1.5}')).toThrow(/port/i);
+  });
+
   test("throws when the document is not an object", () => {
     expect(() => parseConfig("42")).toThrow(/config\.json/i);
     expect(() => parseConfig("null")).toThrow(/config\.json/i);

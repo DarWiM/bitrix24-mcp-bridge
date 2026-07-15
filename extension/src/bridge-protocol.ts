@@ -33,7 +33,7 @@ export function parseConfig(raw: string): BridgeConfig {
   const token = typeof obj.token === "string" ? obj.token.trim() : "";
   if (!token) throw new Error("config.json is missing a non-empty `token`");
   const port = Number(obj.port);
-  if (!Number.isFinite(port) || port <= 0) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("config.json is missing a numeric `port`");
   }
   return { token, port };

@@ -21,7 +21,8 @@
   "web_accessible_resources": [
     {
       "resources": ["config.json"],
-      "matches": ["__ORIGIN__/*"]
+      "matches": ["__ORIGIN__/*"],
+      "use_dynamic_url": true
     }
   ]
 }

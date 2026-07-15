@@ -1,7 +1,11 @@
 // ISOLATED-world connector. This is where the token and the WebSocket live — never in
-// the page's MAIN world, so a hostile page script cannot read the token or hijack the
-// socket. It has `chrome.runtime`, so it loads the per-user config from the packaged
-// config.json at runtime (nothing per-user is baked into this JS — the file is static).
+// the page's MAIN world, so the page cannot read the token without knowing the dynamic
+// (`use_dynamic_url`) resource URL for config.json, and cannot hijack the socket. It has
+// `chrome.runtime`, so it loads the per-user config from the packaged config.json at
+// runtime (nothing per-user is baked into this JS — the file is static). The actual
+// boundary is `use_dynamic_url: true` on config.json in the manifest: it makes the
+// resource URL unguessable from the page while `chrome.runtime.getURL()` here still
+// resolves it.
 //
 // Per daemon call it asks the MAIN shim for a FRESH sessid over postMessage (nonce-matched),
 // then reuses the pure bridge-core helpers to build the request, fetch it with the page's
@@ -77,7 +81,13 @@ function connect(config: BridgeConfig): void {
     socket = ws;
   });
   ws.addEventListener("message", async (ev: MessageEvent) => {
-    const req = JSON.parse(ev.data) as CallRequest;
+    let req: CallRequest;
+    try {
+      req = JSON.parse(ev.data) as CallRequest;
+    } catch (e) {
+      console.error("[bitrix-bridge] malformed WS frame, dropping:", e);
+      return;
+    }
     if (req.type !== "call") return;
     try {
       const r = await handleCall(req);
