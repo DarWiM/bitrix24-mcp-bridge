@@ -35,11 +35,14 @@ export function buildRequest(
   return { url, body };
 }
 
-// Bitrix wraps errors in HTTP 200: { status:"error", errors:[{code}] } or { error, error_description }
+// Bitrix wraps errors in HTTP 200: { status:"error", errors:[{code}] } or { error, error_description }.
+// NOTE: successful ajax responses carry an EMPTY `errors: []` array — a truthy value in JS — so we
+// must treat only a NON-EMPTY errors list (or status:"error"/a top-level error) as a real failure.
 export function interpret(json: any): InterpretResult {
-  const errors = json && (json.errors ?? (json.error ? [{ code: json.error }] : null));
-  if (json && (json.status === "error" || errors)) {
-    const first = errors && errors[0];
+  const list = json && (Array.isArray(json.errors) ? json.errors : json.error ? [{ code: json.error }] : []);
+  const hasErrors = Array.isArray(list) && list.length > 0;
+  if (json && (json.status === "error" || hasErrors)) {
+    const first = list[0];
     const code = (first && (first.code || first.message)) || json.error || "bitrix_error";
     const description = json.error_description || (first && first.message);
     const error = description && description !== code ? `${code}: ${description}` : code;

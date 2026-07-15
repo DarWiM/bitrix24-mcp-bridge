@@ -61,7 +61,11 @@ export class Bridge {
     clearTimeout(p.timer);
     this.pending.delete(result.id);
     if (result.ok) p.resolve(result.data);
-    else p.reject(new Error(result.error ?? "extension error"));
+    else {
+      // surface the Bitrix error envelope (not just the code) for diagnosis
+      const detail = result.data !== undefined ? ` — ${JSON.stringify(result.data).slice(0, 1200)}` : "";
+      p.reject(new Error((result.error ?? "extension error") + detail));
+    }
   }
 
   call(target: CallTarget): Promise<unknown> {

@@ -52,6 +52,10 @@ describe("interpret", () => {
   it("passes a normal payload through", () => {
     expect(interpret({ status: "success", data: { x: 1 } })).toEqual({ ok: true, data: { status: "success", data: { x: 1 } } });
   });
+  it("treats an empty errors[] array (present in ajax success responses) as success", () => {
+    const payload = { status: "success", data: { tasks: [] }, errors: [] };
+    expect(interpret(payload)).toEqual({ ok: true, data: payload });
+  });
   it("surfaces error_description alongside the top-level error code", () => {
     const r = interpret({ error: "QUERY_LIMIT_EXCEEDED", error_description: "too many" });
     expect(r.ok).toBe(false);
