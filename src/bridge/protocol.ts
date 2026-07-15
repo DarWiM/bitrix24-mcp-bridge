@@ -13,4 +13,13 @@ export interface CallResult {
   data?: unknown;
   error?: string;
 }
-export type ExtensionMessage = AuthMessage | CallResult;
+// Sent by the extension's capture build while recording (see src/capture-server.ts).
+export interface CapturedEntry {
+  endpoint: string;
+  action: string | null;
+  method: "GET" | "POST";
+  transport: "ajax" | "rest" | "other";
+  sampleParams: Record<string, string>;
+}
+export interface CaptureMessage { type: "capture"; call: CapturedEntry; }
+export type ExtensionMessage = AuthMessage | CallResult | CaptureMessage;

@@ -8,6 +8,8 @@
     "dev": "bun run src/index.ts",
     "typecheck": "bunx tsc --noEmit && bunx tsc -p extension/tsconfig.json",
     "build:ext": "bun run scripts/build-extension.ts",
+    "build:ext:capture": "BITRIX_CAPTURE=1 bun run scripts/build-extension.ts",
+    "capture": "bun run src/capture-server.ts",
     "catalog:draft": "bun run src/catalog/build-catalog.ts captured.har > actions.draft.json",
     "catalog": "bun run src/catalog/build-catalog.ts"
   },

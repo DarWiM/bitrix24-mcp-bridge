@@ -1,8 +1,13 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import type { CallRequest, CallResult, CallTarget, ExtensionMessage } from "./protocol.js";
+import type { CallRequest, CallResult, CallTarget, CapturedEntry, ExtensionMessage } from "./protocol.js";
 
-interface BridgeOptions { port: number; token: string; allowedOrigin?: string; }
+interface BridgeOptions {
+  port: number;
+  token: string;
+  allowedOrigin?: string;
+  onCapture?: (call: CapturedEntry) => void; // recording mode (src/capture-server.ts)
+}
 interface Pending { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; }
 
 const CALL_TIMEOUT_MS = 30_000;
@@ -45,6 +50,7 @@ export class Bridge {
         return;
       }
       if (msg.type === "result") this.resolvePending(msg);
+      else if (msg.type === "capture") this.opts.onCapture?.(msg.call);
     });
     ws.on("close", () => { this.extensions.delete(ws); });
   }

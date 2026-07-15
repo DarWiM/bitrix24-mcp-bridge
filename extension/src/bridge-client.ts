@@ -1,8 +1,10 @@
-import { buildRequest, interpret, type CallRequest, type InterpretResult } from "./bridge-core.ts";
+import { buildRequest, interpret, type CallRequest, type InterpretResult, type CapturedEntry } from "./bridge-core.ts";
+import { installCapture } from "./capture.ts";
 
 // Injected at build time by scripts/build-extension.ts (esbuild `define`) from .env.
 declare const __BITRIX_TOKEN__: string;
 declare const __BITRIX_PORT__: number;
+declare const __BITRIX_CAPTURE__: boolean;
 
 // window.BX is provided by the Bitrix24 page itself (MAIN world).
 declare global {
@@ -36,9 +38,14 @@ async function handleCall(req: CallRequest): Promise<InterpretResult> {
   return interpret(json); // G3
 }
 
+let socket: WebSocket | null = null;
+
 function connect(): void {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
-  ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "auth", token: TOKEN })));
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "auth", token: TOKEN })); // auth first (server closes non-auth)
+    socket = ws;
+  });
   ws.addEventListener("message", async (ev: MessageEvent) => {
     const req = JSON.parse(ev.data) as CallRequest;
     if (req.type !== "call") return;
@@ -49,6 +56,17 @@ function connect(): void {
       ws.send(JSON.stringify({ type: "result", id: req.id, ok: false, error: String(e) }));
     }
   });
-  ws.addEventListener("close", () => setTimeout(connect, 3000)); // auto-reconnect
+  ws.addEventListener("close", () => {
+    if (socket === ws) socket = null;
+    setTimeout(connect, 3000); // auto-reconnect
+  });
 }
+
+function sendCapture(call: CapturedEntry): void {
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ type: "capture", call }));
+  }
+}
+
 connect();
+if (__BITRIX_CAPTURE__) installCapture(sendCapture); // stripped from normal builds via esbuild define

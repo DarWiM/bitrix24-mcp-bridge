@@ -15,6 +15,15 @@ export interface InterpretResult {
   error?: string;
 }
 
+// Mirrors CapturedEntry in src/bridge/protocol.ts — streamed to the recorder in capture mode.
+export interface CapturedEntry {
+  endpoint: string;
+  action: string | null;
+  method: "GET" | "POST";
+  transport: "ajax" | "rest" | "other";
+  sampleParams: Record<string, string>;
+}
+
 export function encodeForm(params: Record<string, unknown>): string {
   const out = new URLSearchParams();
   const add = (key: string, val: unknown): void => {

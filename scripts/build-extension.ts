@@ -22,6 +22,7 @@ const token = required("BITRIX_MCP_TOKEN");
 // A browser Origin header carries no trailing slash; normalize to match the server's check.
 const origin = required("BITRIX_ORIGIN").replace(/\/+$/, "");
 const port = Number(process.env.BITRIX_MCP_PORT ?? 39917);
+const capture = !!process.env.BITRIX_CAPTURE; // capture (recording) build
 
 mkdirSync(DIST, { recursive: true });
 
@@ -32,9 +33,11 @@ await build({
   format: "iife",
   outfile: `${DIST}/bridge-client.js`,
   sourcemap: true, // emits dist/bridge-client.js.map + //# sourceMappingURL for DevTools
+  minifySyntax: true, // drop dead branches (e.g. `if (false) installCapture(...)` in normal builds)
   define: {
     __BITRIX_TOKEN__: JSON.stringify(token),
     __BITRIX_PORT__: String(port),
+    __BITRIX_CAPTURE__: String(capture),
   },
 });
 
@@ -42,4 +45,4 @@ await build({
 const template = readFileSync(`${SRC}/manifest.template.json`, "utf8");
 writeFileSync(`${DIST}/manifest.json`, template.replaceAll("__ORIGIN__", origin));
 
-console.error(`[build:ext] built extension/dist for ${origin} → ws://127.0.0.1:${port}`);
+console.error(`[build:ext] built extension/dist for ${origin} → ws://127.0.0.1:${port}${capture ? " [CAPTURE mode]" : ""}`);

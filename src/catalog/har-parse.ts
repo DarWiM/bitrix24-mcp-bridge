@@ -44,7 +44,7 @@ function tokenize(value: string | null): string[] {
  * substring matching — e.g. "tasks.task.estimate" must not be mistaken for
  * chats coverage just because "estimate" contains "im".
  */
-export function missingTriadDomains(calls: CapturedCall[]): string[] {
+export function missingTriadDomains(calls: Array<{ action: string | null; endpoint: string }>): string[] {
   const tokens = new Set<string>();
   for (const call of calls) {
     for (const t of tokenize(call.action)) tokens.add(t);

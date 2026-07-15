@@ -35,9 +35,11 @@
 ## Разработка
 
 ```bash
-bun test              # юнит-тесты (bun:test)
-bun run typecheck     # tsc --noEmit
-bun run build:ext     # собрать расширение (esbuild → extension/bridge-client.js)
+bun test               # юнит-тесты (bun:test)
+bun run typecheck      # tsc --noEmit (сервер + extension)
+bun run build:ext      # собрать расширение (esbuild → extension/dist/)
+bun run build:ext:capture  # capture-сборка (перехват вызовов для авто-разведки)
+bun run capture        # рекордер: пишет actions.draft.json из перехваченных вызовов
 ```
 
 ## Документация
