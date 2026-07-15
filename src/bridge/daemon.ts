@@ -22,6 +22,7 @@ export class Daemon {
   private clients = new Set<Socket>();
   private idleTimer?: NodeJS.Timeout;
   private ownsSocket = false;
+  private stopping = false;
 
   constructor(private opts: DaemonOptions) {
     this.bridge = new Bridge({
@@ -43,12 +44,20 @@ export class Daemon {
     }
     // We own the port → sole daemon. Only now is it safe to reclaim a stale UDS path.
     const sockPath = this.opts.sockPath;
-    if (existsSync(sockPath)) unlinkSync(sockPath);
-    this.uds = createServer((sock) => this.onClient(sock));
-    await new Promise<void>((resolve, reject) => {
-      this.uds!.once("error", reject);
-      this.uds!.listen(sockPath, () => resolve());
-    });
+    try {
+      if (existsSync(sockPath)) unlinkSync(sockPath);
+      this.uds = createServer((sock) => this.onClient(sock));
+      await new Promise<void>((resolve, reject) => {
+        this.uds!.once("error", reject);
+        this.uds!.listen(sockPath, () => resolve());
+      });
+    } catch (e) {
+      // UDS setup failed AFTER the WS port was bound. Roll back so the port is released;
+      // otherwise the next daemon would falsely see DaemonAlreadyRunning on a dead one.
+      if (this.uds) { try { this.uds.close(); } catch {} this.uds = undefined; }
+      await this.bridge.stop();
+      throw e;
+    }
     this.ownsSocket = true;
     this.armIdle();
     console.error(`[daemon] ws :${this.opts.port} + uds ${sockPath}`);
@@ -89,9 +98,14 @@ export class Daemon {
   }
 
   private armIdle() {
+    // After stop() the socket destroys fire close/error handlers that call armIdle()
+    // again — cross-generation. Once stopping, every re-arm path is a no-op so a
+    // dead instance can never re-fire and stop() a NEW daemon on the same port/path.
+    if (this.stopping) return;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const ms = this.opts.idleMs ?? 300_000;
     this.idleTimer = setTimeout(() => {
+      if (this.stopping) return; // a late timer that slipped past clearTimeout is harmless
       if (this.clients.size === 0 && this.bridge.connectedOrigins().length === 0) {
         console.error("[daemon] idle — shutting down");
         this.stop();
@@ -101,6 +115,11 @@ export class Daemon {
   }
 
   async stop(): Promise<void> {
+    // Idempotent: a second stop() (e.g. a guarded loser, or a re-armed idle timer)
+    // must not run the teardown again. Set the latch FIRST so any close/error handler
+    // fired by the destroys below sees stopping and short-circuits armIdle().
+    if (this.stopping) return;
+    this.stopping = true;
     if (this.idleTimer) clearTimeout(this.idleTimer);
     for (const c of this.clients) { try { c.destroy(); } catch {} }
     this.clients.clear();

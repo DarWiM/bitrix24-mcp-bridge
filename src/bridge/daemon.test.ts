@@ -1,10 +1,11 @@
 import { describe, it, expect } from "bun:test";
 import { connect } from "node:net";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { Daemon } from "./daemon.js";
+import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 
 const sockIn = () => join(mkdtempSync(join(tmpdir(), "br24d-")), "bridge.sock");
@@ -55,7 +56,12 @@ describe("Daemon", () => {
     const b = new Daemon({ port: 39951, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
     await expect(b.start()).rejects.toThrow(/already running/i);
 
-    // Winner's UDS still routes after the loser bailed out.
+    // A guarded loser calling stop() must NOT unlink the winner's live socket
+    // (ownsSocket stayed false because it never bound the UDS).
+    await b.stop();
+    expect(existsSync(sock)).toBe(true);
+
+    // Winner's UDS still routes after the loser bailed out and stopped.
     await fakeExtension(39951, "https://d.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
     const res = await udsCall(sock, { type: "call", id: "9", portal: "d", endpoint: "/x", action: null, method: "POST", params: {} });
@@ -119,5 +125,61 @@ describe("Daemon", () => {
     const res = await udsCall(sock, { type: "call", id: "3", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
     expect(res).toEqual({ type: "result", id: "3", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
     await d.stop();
+  });
+
+  it("a stopped daemon's idle timer never deletes a NEW daemon's socket (cross-generation race)", async () => {
+    // Daemon A arms a short idle timer, then stops. Its destroys fire close/error
+    // handlers that (pre-fix) re-armed the timer past stop()'s clear. Daemon B then
+    // reclaims the SAME port + socket path. If A's dead timer fired, it would stop()
+    // again and unlink B's live socket. It must not.
+    const sock = sockIn();
+    const a = new Daemon({
+      port: 39956, token: "t", sockPath: sock, idleMs: 60,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await a.start();
+    // Open + immediately close a client so a close handler is queued behind stop().
+    await new Promise<void>((resolve, reject) => {
+      const c = connect(sock);
+      c.on("connect", () => c.end(resolve));
+      c.on("error", reject);
+    });
+    await a.stop();
+
+    const b = new Daemon({
+      port: 39956, token: "t", sockPath: sock, idleMs: 5_000,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await b.start();
+    expect(existsSync(sock)).toBe(true);
+
+    // Wait well past A's idleMs: A's stopped timer must not have fired to delete B's socket.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(existsSync(sock)).toBe(true);
+
+    // And B still routes.
+    await fakeExtension(39956, "https://acme.bitrix24.ru");
+    await new Promise((r) => setTimeout(r, 50));
+    const res = await udsCall(sock, { type: "call", id: "7", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
+    expect(res).toEqual({ type: "result", id: "7", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
+    await b.stop();
+  });
+
+  it("releases the WS port when UDS initialization fails (partial-init rollback)", async () => {
+    // Force listen()/unlink to fail by placing a DIRECTORY at the socket path: the
+    // start() UDS branch throws after bridge.start() already bound the port. The
+    // rollback must release that port so a fresh Bridge can bind it.
+    const sock = sockIn();
+    mkdirSync(sock); // now sockPath is a dir → unlinkSync/listen fails
+    const d = new Daemon({
+      port: 39957, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await expect(d.start()).rejects.toThrow();
+
+    // The port must be free again — a fresh Bridge binds it without EADDRINUSE.
+    const probe = new Bridge({ port: 39957, token: "t", allowedOrigins: [] });
+    await probe.start();
+    await probe.stop();
   });
 });
