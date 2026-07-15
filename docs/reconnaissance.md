@@ -6,8 +6,9 @@
    - Задачи: список задач + открой одну задачу.
    - Проекты: список рабочих групп + зайди в группу.
    - Чаты: открой мессенджер + один диалог + проскролль историю.
-4. ПКМ по списку → "Save all as HAR with content" → `src/catalog/captured.har`.
-5. `bun run src/catalog/build-catalog.ts src/catalog/captured.har > actions.draft.json`
+4. ПКМ по списку → "Save all as HAR with content" → `captured.har` (в корень проекта).
+5. `bun run catalog:draft` → создаст `actions.draft.json` в корне (скрипт всегда работает из корня проекта).
+   Для другого имени/пути HAR: `bun run catalog <путь.har> > actions.draft.json`.
 6. Прочитай предупреждения в stderr: если по какому-то домену "no captured call" —
    вернись в браузер и прокликай его ещё раз.
 7. Из `actions.draft.json` собери `actions.json`: присвой понятные ключи

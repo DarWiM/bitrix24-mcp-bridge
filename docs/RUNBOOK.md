@@ -82,11 +82,13 @@ BITRIX_CATALOG=actions.json # опционально
    - **Задачи**: список задач + открой одну задачу.
    - **Проекты**: список рабочих групп + зайди в группу.
    - **Чаты**: открой мессенджер + один диалог + проскролль историю.
-4. ПКМ по списку запросов → **Save all as HAR with content** → сохрани как `captured.har` в корень проекта.
+4. ПКМ по списку запросов → **Save all as HAR with content** → сохрани как `captured.har` **в корень проекта**.
 5. Построй черновик каталога:
    ```bash
-   bun run src/catalog/build-catalog.ts captured.har > actions.draft.json
+   bun run catalog:draft      # captured.har (в корне) → actions.draft.json (в корне)
    ```
+   Скрипт исполняется из корня проекта независимо от того, откуда ты его вызвал.
+   Для HAR под другим именем/путём — `bun run catalog <путь.har> > actions.draft.json`.
    Читай предупреждения в stderr: `⚠ nothing captured for "chats"…` означает, что домен не был
    прокликан — вернись в браузер и повтори по нему шаг 3.
 6. Собери из черновика **`actions.json`**, присвоив понятные ключи, которые ожидают типизированные

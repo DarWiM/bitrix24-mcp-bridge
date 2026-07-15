@@ -7,7 +7,9 @@
     "test": "bun test",
     "dev": "bun run src/index.ts",
     "typecheck": "bunx tsc --noEmit && bunx tsc -p extension/tsconfig.json",
-    "build:ext": "bun run scripts/build-extension.ts"
+    "build:ext": "bun run scripts/build-extension.ts",
+    "catalog:draft": "bun run src/catalog/build-catalog.ts captured.har > actions.draft.json",
+    "catalog": "bun run src/catalog/build-catalog.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

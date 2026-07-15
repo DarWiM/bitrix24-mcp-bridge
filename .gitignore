@@ -85,6 +85,8 @@ dist
 captured.har
 .env
 extension/dist/
+actions.json
+actions.draft.json
 
 # Internal (kept local, purged from history): planning, process, IDE, design docs
 .idea/
