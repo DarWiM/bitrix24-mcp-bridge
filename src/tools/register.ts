@@ -1,10 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { Bridge } from "../bridge/server.js";
+import type { CallSink } from "../bridge/uds-client.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { HELP } from "./help.js";
 
-export interface ToolDeps { bridge: Pick<Bridge, "call">; catalog: Catalog; }
+export interface ToolDeps { sink: CallSink; catalog: Catalog; defaultPortal: string; portals: string[]; }
 
 function ok(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }; }
 function fail(message: string) { return { isError: true, content: [{ type: "text" as const, text: message }] }; }
@@ -37,12 +37,12 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       description:
         "Вызвать разрешённый Bitrix24-вызов по имени из каталога (read-only). " +
         "Данные актуальны на момент запроса. Имена: " + deps.catalog.names().join(", "),
-      inputSchema: { name: z.string(), params: z.record(z.unknown()).optional() },
+      inputSchema: { name: z.string(), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
     },
-    async ({ name, params }: { name: string; params?: Record<string, unknown> }) => {
+    async ({ name, params, portal }: { name: string; params?: Record<string, unknown>; portal?: string }) => {
       try {
         const entry = deps.catalog.resolve(name);
-        const data = await deps.bridge.call({ ...entry, params: { ...entry.params, ...(params ?? {}) } });
+        const data = await deps.sink.call(portal ?? deps.defaultPortal, { ...entry, params: { ...entry.params, ...(params ?? {}) } });
         return ok(data);
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));
@@ -72,14 +72,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       description:
         "Список задач пользователя (read-only). Точная выборка через params: " +
         'filter (напр. {"RESPONSIBLE_ID":55,"REAL_STATUS":2}), select, order (напр. {"ID":"desc"}), start (сдвиг, шаг 50).',
-      inputSchema: { params: z.record(z.unknown()).optional() },
+      inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: () => ({ select: TASK_LIST_SELECT, order: { ID: "desc" } }),
     },
     {
       tool: "bitrix_task_get",
       catalogName: "task.get",
       description: "Карточка задачи по id (read-only). Поля по умолчанию; изменить через params.select (напр. добавить UF_*, TAGS, TIME_ESTIMATE).",
-      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional() },
+      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: (a) => ({ taskId: a.taskId, select: TASK_GET_SELECT }),
     },
     {
@@ -88,14 +88,14 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       description:
         "Список рабочих групп/проектов с именами (read-only). Точная выборка через params: " +
         'select, order (напр. {"NAME":"asc"}), filter.',
-      inputSchema: { params: z.record(z.unknown()).optional() },
+      inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: () => ({ select: GROUP_LIST_SELECT, order: { NAME: "asc" } }),
     },
     {
       tool: "bitrix_project_get",
       catalogName: "projects.get",
       description: "Полная карточка одной группы/проекта по groupId (read-only): участники, владелец, описание, чат.",
-      inputSchema: { groupId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional() },
+      inputSchema: { groupId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       // socialnetwork.api.workgroup.get wraps its arguments under `params[...]`
       toParams: (a) => ({ params: { groupId: a.groupId, select: GROUP_GET_SELECT } }),
     },
@@ -103,7 +103,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       tool: "bitrix_chats_recent",
       catalogName: "chats.recent",
       description: 'Недавние чаты/диалоги (read-only). params — доп. фильтры (напр. {"UNREAD_ONLY":"Y"}).',
-      inputSchema: { params: z.record(z.unknown()).optional() },
+      inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: () => ({}),
     },
     {
@@ -115,6 +115,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         limit: z.number().optional(),
         beforeId: z.union([z.number(), z.string()]).optional(),
         params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
       },
       // im.v2 param names (this portal's messenger): chatId / limit / filter[lastId]
       toParams: (a) => ({
@@ -136,7 +137,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           const entry = deps.catalog.resolve(t.catalogName);
           // agent-supplied `params` wins over the tool's defaults and the catalog defaults
           const params = { ...entry.params, ...t.toParams(args), ...(args.params ?? {}) };
-          const data = await deps.bridge.call({ ...entry, params });
+          const data = await deps.sink.call(args.portal ?? deps.defaultPortal, { ...entry, params });
           return ok(data);
         } catch (e) {
           return fail(e instanceof Error ? e.message : String(e));

@@ -23,15 +23,15 @@ const catalog: Catalog = {
 };
 
 describe("typed tools", () => {
-  it("registers a tasks tool that forwards the mapped CallTarget", async () => {
+  it("registers a tasks tool that forwards the mapped CallTarget with the default portal", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ tasks: [] });
-    registerTools(server, { bridge: { call }, catalog });
+    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default"] });
 
     expect(handlers["bitrix_tasks_list"]).toBeTypeOf("function");
     // default select/order applied; agent params merged last and override defaults
     await handlers["bitrix_tasks_list"]({ params: { filter: { REAL_STATUS: 2 }, order: { ID: "asc" } } });
-    expect(call).toHaveBeenCalledWith(expect.objectContaining({
+    expect(call).toHaveBeenCalledWith("default", expect.objectContaining({
       action: "tasks.task.list",
       params: expect.objectContaining({
         select: ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "DEADLINE", "GROUP_ID", "PRIORITY"],
@@ -41,20 +41,29 @@ describe("typed tools", () => {
     }));
   });
 
+  it("forwards an explicit portal for a typed tool instead of the default", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({ tasks: [] });
+    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default", "other"] });
+
+    await handlers["bitrix_tasks_list"]({ portal: "other" });
+    expect(call).toHaveBeenCalledWith("other", expect.objectContaining({ action: "tasks.task.list" }));
+  });
+
   it("applies default limit=20 and maps beforeId to filter[lastId] (im.v2) for chat messages", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ messages: [] });
-    registerTools(server, { bridge: { call }, catalog });
+    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default"] });
 
     await handlers["bitrix_chat_messages"]({ chatId: "485", beforeId: 84869 });
-    expect(call).toHaveBeenCalledWith(expect.objectContaining({
+    expect(call).toHaveBeenCalledWith("default", expect.objectContaining({
       params: { chatId: "485", limit: 20, "filter[lastId]": 84869 },
     }));
   });
 
   it("skips a typed tool whose catalog name is absent", () => {
     const { server, handlers } = fakeServer();
-    registerTools(server, { bridge: { call: mock() }, catalog });
+    registerTools(server, { sink: { call: mock() }, catalog, defaultPortal: "default", portals: ["default"] });
     expect(handlers["bitrix_projects_list"]).toBeUndefined();
   });
 });
