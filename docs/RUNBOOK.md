@@ -142,12 +142,18 @@ bun run build:ext    # читает .env → создаёт extension/bridge-cli
 Для **Claude Code**:
 
 ```bash
-claude mcp add bitrix24 -- \
-  bun --env-file=/path/to/bitrix24/.env \
-      run /path/to/bitrix24/src/index.ts
+claude mcp add bitrix24-bridge -s user -- \
+  "$(which bun)" --env-file=/path/to/bitrix24/.env \
+                 run /path/to/bitrix24/src/index.ts
 ```
 
-(Для другого MCP-клиента — тот же смысл: команда `bun --env-file=<abs>/.env run <abs>/src/index.ts`.
+⚠️ **Две вещи, которые ломают health-check («Failed to connect»):**
+- **Абсолютный `bun`.** `~/.bun/bin` часто нет в PATH, которым MCP-клиент спавнит сервер
+  (особенно при GUI-запуске). Поэтому `"$(which bun)"` (или полный путь вручную), а не голый `bun`.
+- **Абсолютные пути** к `.env` и `src/index.ts`. Клиент запускает сервер из **своего** cwd, не из
+  папки моста. (Каталог `actions.json` при этом резолвится от корня проекта автоматически — см. ниже.)
+
+(Для другого MCP-клиента — тот же смысл: команда `<abs>/bun --env-file=<abs>/.env run <abs>/src/index.ts`.
 Либо, если предпочитаешь, передай значения через механизм env самого клиента.)
 
 Переменные (все в `.env`):
@@ -156,8 +162,8 @@ claude mcp add bitrix24 -- \
 |---|---|---|---|
 | `BITRIX_MCP_TOKEN` | да | — | общий токен (тот же, что вшит в расширение при сборке) |
 | `BITRIX_ORIGIN` | да | — | `https://<портал>.bitrix24.ru`; проверка Origin вкладки (слэш в конце нормализуется) |
-| `BITRIX_MCP_PORT` | нет | `39917` | порт WS-моста |
-| `BITRIX_CATALOG` | нет | `actions.json` | путь к каталогу |
+| `BITRIX_MCP_PORT` | нет | `39917` | порт WS-моста (один активный инстанс на порт) |
+| `BITRIX_CATALOG` | нет | `actions.json` | путь к каталогу; относительный резолвится от корня проекта (не от cwd) |
 
 ### 6. Проверка
 

@@ -17,6 +17,17 @@ async function main() {
 
   await server.connect(new StdioServerTransport());
   console.error("[mcp] bitrix24-bridge running on stdio");
+
+  // Exit cleanly when the MCP client (Claude) closes stdio, so the WS port is
+  // released instead of lingering as an orphan process (PPID 1) that would
+  // block the next spawn with EADDRINUSE.
+  const shutdown = async () => {
+    try { await bridge.stop(); } finally { process.exit(0); }
+  };
+  process.stdin.on("end", shutdown);
+  process.stdin.on("close", shutdown);
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

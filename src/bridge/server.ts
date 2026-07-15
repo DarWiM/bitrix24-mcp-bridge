@@ -22,7 +22,15 @@ export class Bridge {
   start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({ host: "127.0.0.1", port: this.opts.port }, () => resolve());
-      this.wss.on("error", (err) => reject(err));
+      this.wss.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE") {
+          reject(new Error(
+            `port ${this.opts.port} is already in use — another bridge instance is running. ` +
+            `This bridge binds one fixed WS port; run a single instance at a time ` +
+            `(or set BITRIX_MCP_PORT to move it).`,
+          ));
+        } else reject(err);
+      });
       this.wss.on("connection", (ws, req) => this.onConnection(ws, req));
     });
   }

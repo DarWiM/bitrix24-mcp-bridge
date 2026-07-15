@@ -1,4 +1,5 @@
 import { describe, it, expect } from "bun:test";
+import { isAbsolute } from "node:path";
 import { loadConfig } from "./config.js";
 
 describe("loadConfig", () => {
@@ -15,6 +16,26 @@ describe("loadConfig", () => {
       port: 39917,
       catalogPath: "/tmp/actions.json",
     });
+  });
+
+  it("anchors a relative catalog path at the project root, not the cwd", () => {
+    const cfg = loadConfig({
+      BITRIX_MCP_TOKEN: "secret",
+      BITRIX_ORIGIN: "https://portal.bitrix24.ru",
+      // no BITRIX_CATALOG → default "actions.json"
+    });
+    // must be absolute (independent of spawn cwd) and end in the catalog file
+    expect(isAbsolute(cfg.catalogPath)).toBe(true);
+    expect(cfg.catalogPath.endsWith("/actions.json")).toBe(true);
+  });
+
+  it("leaves an absolute catalog path untouched", () => {
+    const cfg = loadConfig({
+      BITRIX_MCP_TOKEN: "secret",
+      BITRIX_ORIGIN: "https://portal.bitrix24.ru",
+      BITRIX_CATALOG: "/tmp/actions.json",
+    });
+    expect(cfg.catalogPath).toBe("/tmp/actions.json");
   });
 
   it("strips a trailing slash from the origin", () => {
