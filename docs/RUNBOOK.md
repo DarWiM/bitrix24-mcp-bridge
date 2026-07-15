@@ -73,9 +73,21 @@ BITRIX_CATALOG=actions.json # опционально
 
 ### 3. Разведка → собрать `actions.json`  ⚠️ главный ручной шаг
 
-Сервер **не стартует без `actions.json`** (в репозитории есть только `actions.example.json`).
-`action`-имена внутренних контроллеров Bitrix24 не документированы — их снимают из твоего браузера.
-Подробно — **[docs/reconnaissance.md](reconnaissance.md)**, там два способа. Рекомендуемый — авто-запись:
+Сервер **не стартует без `actions.json`** (в репозитории есть только `actions.example.json`). Есть два пути.
+
+**Быстрый старт — готовый каталог.** `actions.example.json` — это полноценный рабочий каталог,
+покрывающий все шесть типизированных инструментов. Для стандартной Триады (задачи/проекты/чаты)
+достаточно скопировать его:
+
+```bash
+cp actions.example.json actions.json
+```
+
+Собственная разведка нужна, только если хочешь добавить методы, которых нет в образце.
+
+**Свой каталог — разведка.** `action`-имена внутренних контроллеров Bitrix24 не документированы —
+их снимают из твоего браузера. Подробно — **[docs/reconnaissance.md](reconnaissance.md)**,
+там два способа. Рекомендуемый — авто-запись:
 
 ```bash
 bun run build:ext:capture   # capture-сборка расширения → перезагрузи его в chrome://extensions
@@ -95,6 +107,7 @@ bun run build:ext           # ВЕРНИ обычную сборку и снов
    | `tasks.list` | `bitrix_tasks_list` | список задач |
    | `task.get` | `bitrix_task_get` | карточка задачи |
    | `projects.list` | `bitrix_projects_list` | рабочие группы |
+   | `projects.get` | `bitrix_project_get` | карточка группы/проекта |
    | `chats.recent` | `bitrix_chats_recent` | недавние диалоги |
    | `chat.messages` | `bitrix_chat_messages` | история диалога |
 
