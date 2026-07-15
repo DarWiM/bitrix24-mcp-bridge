@@ -22,7 +22,7 @@ function flush(): void {
 const bridge = new Bridge({
   port: cfg.port,
   token: cfg.token,
-  allowedOrigin: cfg.bitrixOrigin,
+  allowedOrigins: cfg.allowedOrigins,
   onCapture: (call) => {
     const key = call.action ?? call.endpoint;
     if (!draft.has(key)) console.error(`+ ${call.transport}\t${call.method}\t${key}`);
