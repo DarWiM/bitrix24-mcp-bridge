@@ -88,6 +88,21 @@ extension/dist/
 actions.json
 actions.draft.json
 
+# OS / editor junk
+.DS_Store
+*.log
+
+# Env variants (keep the committed example)
+.env*
+!.env.example
+
+# HAR captures (keep the synthetic test fixture)
+*.har
+!src/catalog/fixtures/sample.har
+
+# Test coverage output
+coverage/
+
 # Internal (kept local, purged from history): planning, process, IDE, design docs
 .idea/
 .superpowers/
