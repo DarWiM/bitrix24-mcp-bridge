@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseHar } from "./har-parse.js";
+import { parseHar, missingTriadDomains, type CapturedCall } from "./har-parse.js";
 
 const har = JSON.parse(
   readFileSync(fileURLToPath(new URL("./fixtures/sample.har", import.meta.url)), "utf8"),
@@ -20,5 +20,70 @@ describe("parseHar", () => {
     const rest = calls.find((c) => c.transport === "rest")!;
     expect(rest.endpoint).toBe("/rest/im.recent.list");
     expect(rest.action).toBeNull();
+  });
+
+  it("captures an entry kept solely by application/json mimeType as transport 'other'", () => {
+    const har = {
+      log: {
+        entries: [
+          {
+            request: {
+              method: "POST",
+              url: "https://portal.bitrix24.ru/some/controller",
+              postData: { params: [{ name: "foo", value: "bar" }] },
+            },
+            response: { content: { mimeType: "application/json" } },
+          },
+        ],
+      },
+    };
+    const calls = parseHar(har);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.transport).toBe("other");
+    expect(calls[0]!.endpoint).toBe("/some/controller");
+  });
+});
+
+describe("missingTriadDomains", () => {
+  it("does not count 'estimate' substring as chats coverage, but does count tasks", () => {
+    const calls: CapturedCall[] = [
+      {
+        endpoint: "/bitrix/services/main/ajax.php",
+        action: "tasks.task.estimate",
+        method: "POST",
+        params: {},
+        transport: "ajax",
+      },
+    ];
+    const missing = missingTriadDomains(calls);
+    expect(missing).toContain("chats");
+    expect(missing).not.toContain("tasks");
+  });
+
+  it("returns [] when all three triad domains are present", () => {
+    const calls: CapturedCall[] = [
+      {
+        endpoint: "/bitrix/services/main/ajax.php",
+        action: "tasks.task.list",
+        method: "POST",
+        params: {},
+        transport: "ajax",
+      },
+      {
+        endpoint: "/bitrix/services/main/ajax.php",
+        action: "socialnetwork.api.workgroup.list",
+        method: "POST",
+        params: {},
+        transport: "ajax",
+      },
+      {
+        endpoint: "/rest/im.recent.list",
+        action: null,
+        method: "POST",
+        params: {},
+        transport: "rest",
+      },
+    ];
+    expect(missingTriadDomains(calls)).toEqual([]);
   });
 });

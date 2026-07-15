@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { parseHar } from "./har-parse.js";
+import { parseHar, missingTriadDomains } from "./har-parse.js";
 
 const path = process.argv[2];
 if (!path) {
@@ -9,17 +9,10 @@ if (!path) {
 const calls = parseHar(JSON.parse(readFileSync(path, "utf8")));
 
 // Coverage warnings — did we exercise each triad domain? (G1: no silent misses)
-const blob = JSON.stringify(calls).toLowerCase();
-for (const [domain, hints] of Object.entries({
-  tasks: ["task"],
-  projects: ["workgroup", "sonet", "group"],
-  chats: ["im", "dialog", "recent"],
-})) {
-  if (!hints.some((h) => blob.includes(h))) {
-    console.error(
-      `⚠ nothing captured for "${domain}" — exercise it in the browser and re-capture`
-    );
-  }
+for (const domain of missingTriadDomains(calls)) {
+  console.error(
+    `⚠ nothing captured for "${domain}" — exercise it in the browser and re-capture`
+  );
 }
 
 const draft: Record<string, unknown> = {};

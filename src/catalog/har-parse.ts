@@ -26,6 +26,39 @@ function classify(pathname: string): "ajax" | "rest" | "other" {
   return "other";
 }
 
+const TRIAD_HINT_TOKENS: Record<string, string[]> = {
+  tasks: ["tasks", "task"],
+  projects: ["socialnetwork", "workgroup", "sonet"],
+  chats: ["im", "dialog", "recent"],
+};
+
+function tokenize(value: string | null): string[] {
+  if (!value) return [];
+  return value.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+/**
+ * Returns the triad domain names ("tasks", "projects", "chats") that have
+ * NO captured call. Coverage is determined by exact token equality against
+ * each domain's hint tokens (tokenized from `action`/`endpoint`), NOT
+ * substring matching — e.g. "tasks.task.estimate" must not be mistaken for
+ * chats coverage just because "estimate" contains "im".
+ */
+export function missingTriadDomains(calls: CapturedCall[]): string[] {
+  const tokens = new Set<string>();
+  for (const call of calls) {
+    for (const t of tokenize(call.action)) tokens.add(t);
+    for (const t of tokenize(call.endpoint)) tokens.add(t);
+  }
+  const missing: string[] = [];
+  for (const [domain, hints] of Object.entries(TRIAD_HINT_TOKENS)) {
+    if (!hints.some((h) => tokens.has(h))) {
+      missing.push(domain);
+    }
+  }
+  return missing;
+}
+
 export function parseHar(har: {
   log?: { entries?: HarEntry[] };
 }): CapturedCall[] {
