@@ -1,27 +1,15 @@
 // Pure, browser-agnostic — unit-tested.
 
-export interface CallRequest {
-  type: "call";
-  id: string;
-  endpoint: string;
-  action: string | null;
-  method: "GET" | "POST";
-  params: Record<string, unknown>;
-}
+// Wire types come from the shared single source; re-exported so downstream
+// extension modules keep importing them from here.
+import type { CallRequest } from "../../shared/wire.ts";
+export type { CallRequest, CapturedEntry } from "../../shared/wire.ts";
 
+// Extension-only: the shape handleCall returns to the bridge (not a wire message).
 export interface InterpretResult {
   ok: boolean;
   data?: unknown;
   error?: string;
-}
-
-// Mirrors CapturedEntry in src/bridge/protocol.ts — streamed to the recorder in capture mode.
-export interface CapturedEntry {
-  endpoint: string;
-  action: string | null;
-  method: "GET" | "POST";
-  transport: "ajax" | "rest" | "other";
-  sampleParams: Record<string, string>;
 }
 
 export function encodeForm(params: Record<string, unknown>): string {
