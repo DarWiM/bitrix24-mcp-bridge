@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { connect } from "node:net";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
@@ -46,12 +46,78 @@ describe("Daemon", () => {
     await d.stop();
   });
 
-  it("refuses to start a second daemon on the same socket", async () => {
+  it("refuses to start a second daemon on the same port + socket, winner keeps working", async () => {
+    // Singleton is gated by the WS port: the loser must reject and must NOT touch
+    // the winner's live socket.
     const sock = sockIn();
     const a = new Daemon({ port: 39951, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
     await a.start();
-    const b = new Daemon({ port: 39952, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
+    const b = new Daemon({ port: 39951, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
     await expect(b.start()).rejects.toThrow(/already running/i);
+
+    // Winner's UDS still routes after the loser bailed out.
+    await fakeExtension(39951, "https://d.bitrix24.ru");
+    await new Promise((r) => setTimeout(r, 50));
+    const res = await udsCall(sock, { type: "call", id: "9", portal: "d", endpoint: "/x", action: null, method: "POST", params: {} });
+    expect(res).toEqual({ type: "result", id: "9", ok: true, data: { ok: "https://d.bitrix24.ru" } });
     await a.stop();
+  });
+
+  it("exits on idle when no clients and no extension are connected", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 39953, token: "t", sockPath: sock, idleMs: 100,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    expect(existsSync(sock)).toBe(true);
+
+    // Generous margin: after ~idleMs with nothing connected, the daemon stops itself
+    // and its socket file is gone.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(existsSync(sock)).toBe(false);
+  });
+
+  it("re-arms (does NOT exit) while an extension stays connected", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 39954, token: "t", sockPath: sock, idleMs: 100,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    await fakeExtension(39954, "https://acme.bitrix24.ru");
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Wait well past several idle intervals; the connected extension keeps it alive.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(existsSync(sock)).toBe(true);
+
+    const res = await udsCall(sock, { type: "call", id: "2", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
+    expect(res).toEqual({ type: "result", id: "2", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
+    await d.stop();
+  });
+
+  it("survives a malformed UDS frame and keeps serving valid calls", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 39955, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    await fakeExtension(39955, "https://acme.bitrix24.ru");
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Push garbage that fails JSON.parse in the data listener.
+    await new Promise<void>((resolve, reject) => {
+      const c = connect(sock);
+      c.on("connect", () => { c.write("not json\n"); c.end(resolve); });
+      c.on("error", reject);
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    // A fresh, valid call still succeeds → the daemon did not crash.
+    const res = await udsCall(sock, { type: "call", id: "3", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
+    expect(res).toEqual({ type: "result", id: "3", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
+    await d.stop();
   });
 });

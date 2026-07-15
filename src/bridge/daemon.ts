@@ -1,4 +1,4 @@
-import { createServer, connect, Server, Socket } from "node:net";
+import { createServer, Server, Socket } from "node:net";
 import { existsSync, unlinkSync } from "node:fs";
 import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
@@ -21,6 +21,7 @@ export class Daemon {
   private uds?: Server;
   private clients = new Set<Socket>();
   private idleTimer?: NodeJS.Timeout;
+  private ownsSocket = false;
 
   constructor(private opts: DaemonOptions) {
     this.bridge = new Bridge({
@@ -31,25 +32,26 @@ export class Daemon {
   }
 
   async start(): Promise<void> {
-    await this.reserveSocket();
-    await this.bridge.start();
+    // The WS port is the atomic singleton gate: bind() either succeeds (we are the
+    // sole daemon) or fails with EADDRINUSE. No probe→unlink TOCTOU on the socket file.
+    try {
+      await this.bridge.start();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("already in use")) throw new DaemonAlreadyRunning(this.opts.sockPath);
+      throw e;
+    }
+    // We own the port → sole daemon. Only now is it safe to reclaim a stale UDS path.
+    const sockPath = this.opts.sockPath;
+    if (existsSync(sockPath)) unlinkSync(sockPath);
     this.uds = createServer((sock) => this.onClient(sock));
     await new Promise<void>((resolve, reject) => {
       this.uds!.once("error", reject);
-      this.uds!.listen(this.opts.sockPath, () => resolve());
+      this.uds!.listen(sockPath, () => resolve());
     });
+    this.ownsSocket = true;
     this.armIdle();
-    console.error(`[daemon] ws :${this.opts.port} + uds ${this.opts.sockPath}`);
-  }
-
-  // Singleton: if the socket answers, another daemon owns it. If it's stale, unlink it.
-  private reserveSocket(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!existsSync(this.opts.sockPath)) return resolve();
-      const probe = connect(this.opts.sockPath);
-      probe.once("connect", () => { probe.destroy(); reject(new DaemonAlreadyRunning(this.opts.sockPath)); });
-      probe.once("error", () => { try { unlinkSync(this.opts.sockPath); } catch {} resolve(); });
-    });
+    console.error(`[daemon] ws :${this.opts.port} + uds ${sockPath}`);
   }
 
   private onClient(sock: Socket) {
@@ -57,17 +59,23 @@ export class Daemon {
     this.armIdle();
     const dec = new FrameDecoder();
     sock.on("data", (chunk) => {
-      for (const msg of dec.push(chunk) as any[]) {
-        if (msg?.type !== "call") continue;
-        const origin = this.resolveOrigin(msg.portal);
-        const reply = (r: CallResult) => sock.write(encodeFrame(r));
-        if (!origin) {
-          reply({ type: "result", id: msg.id, ok: false, error: `unknown portal "${msg.portal}"` });
-          continue;
+      // A malformed frame must never crash the daemon (that would kill routing for
+      // every portal). Drop the bad data for this connection and keep serving.
+      try {
+        for (const msg of dec.push(chunk) as any[]) {
+          if (msg?.type !== "call") continue;
+          const origin = this.resolveOrigin(msg.portal);
+          const reply = (r: CallResult) => sock.write(encodeFrame(r));
+          if (!origin) {
+            reply({ type: "result", id: msg.id, ok: false, error: `unknown portal "${msg.portal}"` });
+            continue;
+          }
+          this.bridge.call(origin, { endpoint: msg.endpoint, action: msg.action, method: msg.method, params: msg.params })
+            .then((data) => reply({ type: "result", id: msg.id, ok: true, data }))
+            .catch((e) => reply({ type: "result", id: msg.id, ok: false, error: e instanceof Error ? e.message : String(e) }));
         }
-        this.bridge.call(origin, { endpoint: msg.endpoint, action: msg.action, method: msg.method, params: msg.params })
-          .then((data) => reply({ type: "result", id: msg.id, ok: true, data }))
-          .catch((e) => reply({ type: "result", id: msg.id, ok: false, error: e instanceof Error ? e.message : String(e) }));
+      } catch (e) {
+        console.error(`[daemon] dropping malformed UDS data: ${e instanceof Error ? e.message : String(e)}`);
       }
     });
     sock.on("close", () => { this.clients.delete(sock); this.armIdle(); });
@@ -97,7 +105,9 @@ export class Daemon {
     for (const c of this.clients) { try { c.destroy(); } catch {} }
     this.clients.clear();
     await new Promise<void>((r) => (this.uds ? this.uds.close(() => r()) : r()));
-    try { if (existsSync(this.opts.sockPath)) unlinkSync(this.opts.sockPath); } catch {}
+    // Only unlink the socket if we won the singleton race and created it. A daemon that
+    // lost at bridge.start() must never delete the winner's live socket.
+    try { if (this.ownsSocket && existsSync(this.opts.sockPath)) unlinkSync(this.opts.sockPath); } catch {}
     await this.bridge.stop();
   }
 }
