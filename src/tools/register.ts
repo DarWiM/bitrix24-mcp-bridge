@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Bridge } from "../bridge/server.js";
 import type { Catalog } from "../catalog/catalog.js";
+import { HELP } from "./help.js";
 
 export interface ToolDeps { bridge: Pick<Bridge, "call">; catalog: Catalog; }
 
@@ -9,6 +10,27 @@ function ok(data: unknown) { return { content: [{ type: "text" as const, text: J
 function fail(message: string) { return { isError: true, content: [{ type: "text" as const, text: message }] }; }
 
 export function registerTools(server: McpServer, deps: ToolDeps): void {
+  // Self-describing: any MCP client can call bitrix_help (or read the resource) to learn
+  // param conventions, the response envelope, and field names without repo access.
+  server.registerTool(
+    "bitrix_help",
+    {
+      description:
+        "Справка по этому Bitrix24 MCP: список инструментов, формат ответа, конвенции params " +
+        "(select/filter/order/пагинация), имена полей, примеры. Вызови, если не уверен, как формировать params.",
+      inputSchema: {},
+    },
+    async () => ({ content: [{ type: "text" as const, text: HELP }] }),
+  );
+
+  // Same guide as an MCP resource, for clients that surface resources.
+  server.registerResource(
+    "bitrix-api-guide",
+    "bitrix://api-notes",
+    { title: "Bitrix24 MCP usage guide", description: "Как пользоваться инструментами: params, поля, формат ответа.", mimeType: "text/markdown" },
+    async (uri) => ({ contents: [{ uri: uri.href, mimeType: "text/markdown", text: HELP }] }),
+  );
+
   server.registerTool(
     "bitrix_call",
     {

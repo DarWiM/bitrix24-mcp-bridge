@@ -5,7 +5,7 @@ import type { Catalog } from "../catalog/catalog.js";
 function fakeServer() {
   const handlers: Record<string, Function> = {};
   return {
-    server: { registerTool: (n: string, _s: unknown, h: Function) => (handlers[n] = h) } as any,
+    server: { registerTool: (n: string, _s: unknown, h: Function) => (handlers[n] = h), registerResource: () => {} } as any,
     handlers,
   };
 }
