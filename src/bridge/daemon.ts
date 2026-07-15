@@ -1,5 +1,5 @@
 import { createServer, Server, Socket } from "node:net";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
@@ -46,13 +46,16 @@ export class Daemon {
     // We own the port → sole daemon. Only now is it safe to reclaim a stale UDS path.
     const sockPath = this.opts.sockPath;
     try {
-      mkdirSync(dirname(sockPath), { recursive: true });
+      mkdirSync(dirname(sockPath), { recursive: true, mode: 0o700 });
       if (existsSync(sockPath)) unlinkSync(sockPath);
       this.uds = createServer((sock) => this.onClient(sock));
       await new Promise<void>((resolve, reject) => {
         this.uds!.once("error", reject);
         this.uds!.listen(sockPath, () => resolve());
       });
+      // The design's sole UDS trust boundary is fs permissions (no token on the UDS):
+      // force 0600 regardless of umask now that the socket file exists.
+      chmodSync(sockPath, 0o600);
     } catch (e) {
       // UDS setup failed AFTER the WS port was bound. Roll back so the port is released;
       // otherwise the next daemon would falsely see DaemonAlreadyRunning on a dead one.

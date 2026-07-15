@@ -64,4 +64,15 @@ describe("loadConfig", () => {
       BITRIX24_MCP_BRIDGE_HOME: "/tmp/br24-does-not-exist",
     })).toThrow(/portal|origin/i);
   });
+
+  it("throws a descriptive error when a config.json portal is missing origin", () => {
+    const home = mkdtempSync(join(tmpdir(), "br24-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({
+      token: "file-token",
+      portals: {
+        acme: { catalog: "acme.json" },
+      },
+    }));
+    expect(() => loadConfig({ BITRIX24_MCP_BRIDGE_HOME: home })).toThrow(/origin/i);
+  });
 });

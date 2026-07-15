@@ -50,6 +50,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   // Portals: config.json map is the base; a dev BITRIX_ORIGIN defines a single "default" portal.
   const portals: Record<string, PortalConfig> = {};
   for (const [alias, p] of Object.entries(file.portals ?? {})) {
+    if (typeof p.origin !== "string" || !p.origin) {
+      throw new Error(`config.json portal "${alias}" is missing a string origin`);
+    }
     portals[alias] = { ...p, origin: stripSlash(p.origin) };
   }
   const envOrigin = env.BITRIX_ORIGIN?.trim();

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { connect } from "node:net";
-import { existsSync, mkdtempSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocket } from "ws";
@@ -44,6 +44,17 @@ describe("Daemon", () => {
 
     const res = await udsCall(sock, { type: "call", id: "1", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
     expect(res).toEqual({ type: "result", id: "1", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
+    await d.stop();
+  });
+
+  it("locks the UDS socket down to 0600 regardless of umask", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 39952, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    expect(statSync(sock).mode & 0o777).toBe(0o600);
     await d.stop();
   });
 
