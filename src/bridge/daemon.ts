@@ -1,5 +1,6 @@
 import { createServer, Server, Socket } from "node:net";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
 import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult } from "./protocol.js";
@@ -45,6 +46,7 @@ export class Daemon {
     // We own the port → sole daemon. Only now is it safe to reclaim a stale UDS path.
     const sockPath = this.opts.sockPath;
     try {
+      mkdirSync(dirname(sockPath), { recursive: true });
       if (existsSync(sockPath)) unlinkSync(sockPath);
       this.uds = createServer((sock) => this.onClient(sock));
       await new Promise<void>((resolve, reject) => {
