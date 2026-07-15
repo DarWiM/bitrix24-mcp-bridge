@@ -1,7 +1,33 @@
 {
-  "tasks.list":     { "action": "tasks.task.list", "method": "POST" },
-  "task.get":       { "action": "tasks.task.get", "method": "POST" },
-  "projects.list":  { "action": "socialnetwork.api.workgroup.list", "method": "POST" },
-  "chats.recent":   { "endpoint": "/rest/im.recent.list", "method": "POST" },
-  "chat.messages":  { "endpoint": "/rest/im.dialog.messages.get", "method": "POST" }
+  "tasks.list": {
+    "action": "tasks.task.list",
+    "method": "POST"
+  },
+  "task.get": {
+    "action": "tasks.task.get",
+    "method": "POST"
+  },
+  "projects.list": {
+    "action": "socialnetwork.api.workgroup.list",
+    "method": "POST"
+  },
+  "projects.get": {
+    "action": "socialnetwork.api.workgroup.get",
+    "method": "POST"
+  },
+  "chats.recent": {
+    "endpoint": "/rest/im.recent.list.json",
+    "method": "POST",
+    "params": {
+      "LIMIT": 50,
+      "SKIP_OPENLINES": "Y",
+      "GET_ORIGINAL_TEXT": "Y",
+      "PARSE_TEXT": "Y",
+      "WITH_COUNTERS": "N"
+    }
+  },
+  "chat.messages": {
+    "action": "im.v2.Chat.Message.list",
+    "method": "POST"
+  }
 }
