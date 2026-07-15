@@ -86,12 +86,13 @@ describe("bridge enforces allowedOrigin", () => {
     bridge = new Bridge({ port: PORT + 1, token: TOKEN, allowedOrigins: [ALLOWED] });
     await bridge.start();
     const ws = new WebSocket(`ws://127.0.0.1:${PORT + 1}`, { headers: { Origin: ALLOWED } });
-    const authed = await new Promise<boolean>((res) => {
+    const notClosed = await new Promise<boolean>((res) => {
       ws.on("open", () => { ws.send(JSON.stringify({ type: "auth", token: TOKEN })); });
       ws.on("close", () => res(false));
       setTimeout(() => res(true), 400);
     });
-    expect(authed).toBe(true);
+    expect(notClosed).toBe(true);
+    expect(bridge.connectedOrigins()).toContain(ALLOWED);
     ws.close();
   });
 
@@ -99,12 +100,13 @@ describe("bridge enforces allowedOrigin", () => {
     bridge = new Bridge({ port: PORT + 2, token: TOKEN, allowedOrigins: [ALLOWED] });
     await bridge.start();
     const ws = new WebSocket(`ws://127.0.0.1:${PORT + 2}`);
-    const authed = await new Promise<boolean>((res) => {
+    const notClosed = await new Promise<boolean>((res) => {
       ws.on("open", () => { ws.send(JSON.stringify({ type: "auth", token: TOKEN })); });
       ws.on("close", () => res(false));
       setTimeout(() => res(true), 400);
     });
-    expect(authed).toBe(true);
+    expect(notClosed).toBe(true);
+    expect(bridge.connectedOrigins()).toContain("");
     ws.close();
   });
 });

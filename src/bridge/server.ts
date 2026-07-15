@@ -93,7 +93,13 @@ export class Bridge {
         reject(new Error(`call ${target.action ?? target.endpoint} timed out`));
       }, CALL_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
-      live.send(JSON.stringify({ type: "call", id, ...target }));
+      try {
+        live.send(JSON.stringify({ type: "call", id, ...target }));
+      } catch (e) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(new Error(`send to portal ${origin} failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
     });
   }
 

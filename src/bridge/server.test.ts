@@ -67,6 +67,17 @@ describe("Bridge", () => {
     });
     expect(closed).toBe(true);
   });
+
+  it("rejects promptly (not after the 30s timeout) when send() throws after socket selection", async () => {
+    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [] });
+    await bridge.start();
+    await connect(TOKEN);
+    await new Promise((r) => setTimeout(r, 50));
+    // @ts-expect-error reach into internals to simulate the socket closing between selection and send
+    const live = [...bridge["byOrigin"].get("")][0];
+    live.send = () => { throw new Error("boom"); };
+    await expect(bridge.call("", target)).rejects.toThrow(/send to portal .* failed: boom/);
+  });
 });
 
 async function fakeExtension(port: number, token: string, origin: string) {
