@@ -31,6 +31,7 @@ await build({
   bundle: true,
   format: "iife",
   outfile: `${DIST}/bridge-client.js`,
+  sourcemap: true, // emits dist/bridge-client.js.map + //# sourceMappingURL for DevTools
   define: {
     __BITRIX_TOKEN__: JSON.stringify(token),
     __BITRIX_PORT__: String(port),

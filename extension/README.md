@@ -19,6 +19,7 @@ bun run build:ext
 ```
 Генерирует в `extension/dist/`:
 - `bridge-client.js` — бандл (esbuild IIFE) с вшитыми `BITRIX_MCP_TOKEN` и `BITRIX_MCP_PORT`;
+- `bridge-client.js.map` — source map (в DevTools бандл виден как исходный TS);
 - `manifest.json` — из `src/manifest.template.json` с `matches` = `BITRIX_ORIGIN` + `/*`.
 
 Типы браузерной среды — в `extension/tsconfig.json` (отдельный от серверного, с `lib: DOM`);
