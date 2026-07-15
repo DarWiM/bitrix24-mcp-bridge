@@ -27,7 +27,7 @@ async function assertRejectsWithTimeout(p: Promise<unknown>, ms: number, msg: st
 
 describe("bridge is loopback-only", () => {
   it("binds to 127.0.0.1", async () => {
-    bridge = new Bridge({ port: 39940, token: "t" });
+    bridge = new Bridge({ port: 39940, token: "t", allowedOrigins: [] });
     await bridge.start();
     // @ts-expect-error reach into the underlying server for the bound address
     const addr = bridge["wss"].address() as AddressInfo;
@@ -35,7 +35,7 @@ describe("bridge is loopback-only", () => {
   });
 
   it("closes a socket sending a wrong token even on loopback", async () => {
-    bridge = new Bridge({ port: 39941, token: "right" });
+    bridge = new Bridge({ port: 39941, token: "right", allowedOrigins: [] });
     await bridge.start();
     const ws = new WebSocket("ws://127.0.0.1:39941");
     await new Promise((r) => ws.on("open", r));
@@ -50,9 +50,9 @@ describe("bridge is loopback-only", () => {
 
 describe("bridge start() rejects on server error", () => {
   it("rejects when a second bridge starts on an already-bound port", async () => {
-    bridge = new Bridge({ port: 39942, token: "t" });
+    bridge = new Bridge({ port: 39942, token: "t", allowedOrigins: [] });
     await bridge.start();
-    bridge2 = new Bridge({ port: 39942, token: "t" });
+    bridge2 = new Bridge({ port: 39942, token: "t", allowedOrigins: [] });
     const err = await assertRejectsWithTimeout(
       bridge2.start(),
       2000,
@@ -68,7 +68,7 @@ describe("bridge enforces allowedOrigin", () => {
   const ALLOWED = "https://portal.bitrix24.ru";
 
   it("closes a connection whose Origin header mismatches allowedOrigin, even with the correct token", async () => {
-    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigin: ALLOWED });
+    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [ALLOWED] });
     await bridge.start();
     // Bun's built-in `ws`-compatible client only honors an explicit `headers`
     // option (not the ws-package `origin` shorthand) — see extension/README.md
@@ -83,7 +83,7 @@ describe("bridge enforces allowedOrigin", () => {
   });
 
   it("authenticates a connection with a matching Origin + correct token", async () => {
-    bridge = new Bridge({ port: PORT + 1, token: TOKEN, allowedOrigin: ALLOWED });
+    bridge = new Bridge({ port: PORT + 1, token: TOKEN, allowedOrigins: [ALLOWED] });
     await bridge.start();
     const ws = new WebSocket(`ws://127.0.0.1:${PORT + 1}`, { headers: { Origin: ALLOWED } });
     const authed = await new Promise<boolean>((res) => {
@@ -96,7 +96,7 @@ describe("bridge enforces allowedOrigin", () => {
   });
 
   it("authenticates a connection with no Origin header + correct token", async () => {
-    bridge = new Bridge({ port: PORT + 2, token: TOKEN, allowedOrigin: ALLOWED });
+    bridge = new Bridge({ port: PORT + 2, token: TOKEN, allowedOrigins: [ALLOWED] });
     await bridge.start();
     const ws = new WebSocket(`ws://127.0.0.1:${PORT + 2}`);
     const authed = await new Promise<boolean>((res) => {

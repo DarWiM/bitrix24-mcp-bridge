@@ -1,11 +1,11 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
-import type { CallRequest, CallResult, CallTarget, CapturedEntry, ExtensionMessage } from "./protocol.js";
+import type { CallResult, CallTarget, CapturedEntry, ExtensionMessage } from "./protocol.js";
 
 interface BridgeOptions {
   port: number;
   token: string;
-  allowedOrigin?: string;
+  allowedOrigins: string[];
   onCapture?: (call: CapturedEntry) => void; // recording mode (src/capture-server.ts)
 }
 interface Pending { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; }
@@ -14,7 +14,7 @@ const CALL_TIMEOUT_MS = 30_000;
 
 export class Bridge {
   private wss?: WebSocketServer;
-  private extensions = new Set<WebSocket>(); // registry of authenticated tabs (G4)
+  private byOrigin = new Map<string, Set<WebSocket>>(); // authed sockets keyed by reported origin
   private pending = new Map<string, Pending>();
 
   constructor(private opts: BridgeOptions) {}
@@ -25,9 +25,8 @@ export class Bridge {
       this.wss.on("error", (err: NodeJS.ErrnoException) => {
         if (err.code === "EADDRINUSE") {
           reject(new Error(
-            `port ${this.opts.port} is already in use — another bridge instance is running. ` +
-            `This bridge binds one fixed WS port; run a single instance at a time ` +
-            `(or set BITRIX_MCP_PORT to move it).`,
+            `port ${this.opts.port} is already in use — another daemon is running. ` +
+            `Run a single daemon at a time (or set BITRIX_MCP_PORT).`,
           ));
         } else reject(err);
       });
@@ -37,20 +36,21 @@ export class Bridge {
 
   private onConnection(ws: WebSocket, req: import("node:http").IncomingMessage) {
     const origin = req.headers.origin;
-    if (this.opts.allowedOrigin && origin && origin !== this.opts.allowedOrigin) {
+    if (origin && !this.opts.allowedOrigins.includes(origin)) {
       console.error(`[bridge] rejecting connection from origin ${origin}`);
       ws.close();
       return;
     }
     let authed = false;
+    const key = origin ?? ""; // non-browser peers report no origin
     ws.on("message", (raw) => {
       let msg: ExtensionMessage;
       try { msg = JSON.parse(raw.toString()); } catch { ws.close(); return; }
       if (!authed) {
         if (msg.type === "auth" && msg.token === this.opts.token) {
           authed = true;
-          this.extensions.add(ws);
-          console.error("[bridge] extension authenticated");
+          (this.byOrigin.get(key) ?? this.byOrigin.set(key, new Set()).get(key)!).add(ws);
+          console.error(`[bridge] extension authenticated (origin ${key || "<none>"})`);
         } else {
           console.error("[bridge] auth failed — closing socket");
           ws.close();
@@ -60,7 +60,7 @@ export class Bridge {
       if (msg.type === "result") this.resolvePending(msg);
       else if (msg.type === "capture") this.opts.onCapture?.(msg.call);
     });
-    ws.on("close", () => { this.extensions.delete(ws); });
+    ws.on("close", () => this.byOrigin.get(key)?.delete(ws));
   }
 
   private resolvePending(result: CallResult) {
@@ -76,47 +76,37 @@ export class Bridge {
     }
   }
 
-  call(target: CallTarget): Promise<unknown> {
-    const live = [...this.extensions].find((ws) => ws.readyState === WebSocket.OPEN);
-    if (!live) return Promise.reject(new Error("extension not connected"));
+  connectedOrigins(): string[] {
+    return [...this.byOrigin.entries()]
+      .filter(([, set]) => [...set].some((ws) => ws.readyState === WebSocket.OPEN))
+      .map(([origin]) => origin);
+  }
+
+  call(origin: string, target: CallTarget): Promise<unknown> {
+    const set = this.byOrigin.get(origin);
+    const live = set && [...set].find((ws) => ws.readyState === WebSocket.OPEN);
+    if (!live) return Promise.reject(new Error(`portal ${origin} not connected — open a logged-in tab`));
     const id = randomUUID();
-    const req: CallRequest = { type: "call", id, ...target };
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`call ${target.action ?? target.endpoint} timed out`));
       }, CALL_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
-      live.send(JSON.stringify(req));
+      live.send(JSON.stringify({ type: "call", id, ...target }));
     });
   }
 
   stop(): Promise<void> {
-    for (const ws of this.extensions) {
-      try { ws.close(); } catch {}
-    }
-    this.extensions.clear();
+    for (const set of this.byOrigin.values()) for (const ws of set) { try { ws.close(); } catch {} }
+    this.byOrigin.clear();
     for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error("bridge stopped")); }
     this.pending.clear();
     return new Promise((resolve) => {
-      if (!this.wss) {
-        resolve();
-        return;
-      }
-      let resolved = false;
-      const timeout = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          resolve();
-        }
-      }, 500);
-      this.wss.close(() => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          resolve();
-        }
-      });
+      if (!this.wss) return resolve();
+      let done = false;
+      const t = setTimeout(() => { if (!done) { done = true; resolve(); } }, 500);
+      this.wss.close(() => { if (!done) { done = true; clearTimeout(t); resolve(); } });
     });
   }
 }

@@ -14,7 +14,7 @@ export interface AuthMessage {
   token: string;
 }
 
-export type CallRequest = CallTarget & { type: "call"; id: string };
+export type CallRequest = CallTarget & { type: "call"; id: string; portal?: string };
 
 export interface CallResult {
   type: "result";
