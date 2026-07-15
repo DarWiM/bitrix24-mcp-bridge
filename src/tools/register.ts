@@ -28,7 +28,15 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     },
   );
 
-  // --- typed read tools, each mapped onto a catalog name ---
+  // Default field selections. Overridable per call via the tool's `params`.
+  const TASK_LIST_SELECT = ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "DEADLINE", "GROUP_ID", "PRIORITY"];
+  const TASK_GET_SELECT = ["ID", "TITLE", "DESCRIPTION", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "CREATED_DATE", "DEADLINE", "PRIORITY", "GROUP_ID", "CLOSED_DATE"];
+  const GROUP_LIST_SELECT = ["ID", "NAME", "DESCRIPTION", "NUMBER_OF_MEMBERS", "OWNER_ID", "DATE_CREATE", "PROJECT"];
+  const GROUP_GET_SELECT = ["ID", "NAME", "DESCRIPTION", "OWNER_DATA", "SUBJECT_DATA", "NUMBER_OF_MEMBERS", "DATE_CREATE"];
+
+  // --- typed read tools, each mapped onto a catalog name. Every tool accepts an
+  // optional `params` object (Bitrix-native shape) merged LAST, so the agent controls
+  // select / filter / order / pagination precisely and can override the defaults below. ---
   const typed: Array<{
     tool: string;
     catalogName: string;
@@ -39,39 +47,52 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       tool: "bitrix_tasks_list",
       catalogName: "tasks.list",
-      description: "Список задач пользователя (read-only, актуально на момент запроса)",
-      inputSchema: { page: z.number().optional() },
-      toParams: (a) => (a.page !== undefined ? { PAGE: a.page } : {}),
+      description:
+        "Список задач пользователя (read-only). Точная выборка через params: " +
+        'filter (напр. {"RESPONSIBLE_ID":55,"REAL_STATUS":2}), select, order (напр. {"ID":"desc"}), start (сдвиг, шаг 50).',
+      inputSchema: { params: z.record(z.unknown()).optional() },
+      toParams: () => ({ select: TASK_LIST_SELECT, order: { ID: "desc" } }),
     },
     {
       tool: "bitrix_task_get",
       catalogName: "task.get",
-      description: "Карточка одной задачи по id",
-      inputSchema: { taskId: z.union([z.number(), z.string()]) },
-      toParams: (a) => ({ taskId: a.taskId }),
+      description: "Карточка задачи по id (read-only). Поля по умолчанию; изменить через params.select (напр. добавить UF_*, TAGS, TIME_ESTIMATE).",
+      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional() },
+      toParams: (a) => ({ taskId: a.taskId, select: TASK_GET_SELECT }),
     },
     {
       tool: "bitrix_projects_list",
       catalogName: "projects.list",
-      description: "Список рабочих групп/проектов пользователя",
-      inputSchema: { page: z.number().optional() },
-      toParams: (a) => (a.page !== undefined ? { PAGE: a.page } : {}),
+      description:
+        "Список рабочих групп/проектов с именами (read-only). Точная выборка через params: " +
+        'select, order (напр. {"NAME":"asc"}), filter.',
+      inputSchema: { params: z.record(z.unknown()).optional() },
+      toParams: () => ({ select: GROUP_LIST_SELECT, order: { NAME: "asc" } }),
+    },
+    {
+      tool: "bitrix_project_get",
+      catalogName: "projects.get",
+      description: "Полная карточка одной группы/проекта по groupId (read-only): участники, владелец, описание, чат.",
+      inputSchema: { groupId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional() },
+      // socialnetwork.api.workgroup.get wraps its arguments under `params[...]`
+      toParams: (a) => ({ params: { groupId: a.groupId, select: GROUP_GET_SELECT } }),
     },
     {
       tool: "bitrix_chats_recent",
       catalogName: "chats.recent",
-      description: "Недавние чаты/диалоги пользователя",
-      inputSchema: {},
+      description: 'Недавние чаты/диалоги (read-only). params — доп. фильтры (напр. {"UNREAD_ONLY":"Y"}).',
+      inputSchema: { params: z.record(z.unknown()).optional() },
       toParams: () => ({}),
     },
     {
       tool: "bitrix_chat_messages",
       catalogName: "chat.messages",
-      description: "История сообщений чата по chatId (по умолчанию 20 последних; beforeId — для листания вглубь). chatId берётся из bitrix_chats_recent (im.v2).",
+      description: "История сообщений чата по chatId (по умолчанию 20 последних; beforeId — листать вглубь). chatId из bitrix_chats_recent (im.v2).",
       inputSchema: {
         chatId: z.union([z.number(), z.string()]),
         limit: z.number().optional(),
         beforeId: z.union([z.number(), z.string()]).optional(),
+        params: z.record(z.unknown()).optional(),
       },
       // im.v2 param names (this portal's messenger): chatId / limit / filter[lastId]
       toParams: (a) => ({
@@ -91,7 +112,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       async (args: any) => {
         try {
           const entry = deps.catalog.resolve(t.catalogName);
-          const data = await deps.bridge.call({ ...entry, params: { ...entry.params, ...t.toParams(args) } });
+          // agent-supplied `params` wins over the tool's defaults and the catalog defaults
+          const params = { ...entry.params, ...t.toParams(args), ...(args.params ?? {}) };
+          const data = await deps.bridge.call({ ...entry, params });
           return ok(data);
         } catch (e) {
           return fail(e instanceof Error ? e.message : String(e));

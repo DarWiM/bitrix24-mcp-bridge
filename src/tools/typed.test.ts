@@ -29,10 +29,15 @@ describe("typed tools", () => {
     registerTools(server, { bridge: { call }, catalog });
 
     expect(handlers["bitrix_tasks_list"]).toBeTypeOf("function");
-    await handlers["bitrix_tasks_list"]({ page: 2 });
+    // default select/order applied; agent params merged last and override defaults
+    await handlers["bitrix_tasks_list"]({ params: { filter: { REAL_STATUS: 2 }, order: { ID: "asc" } } });
     expect(call).toHaveBeenCalledWith(expect.objectContaining({
       action: "tasks.task.list",
-      params: { PAGE: 2 },
+      params: expect.objectContaining({
+        select: ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "DEADLINE", "GROUP_ID", "PRIORITY"],
+        filter: { REAL_STATUS: 2 },
+        order: { ID: "asc" }, // overrides the default { ID: "desc" }
+      }),
     }));
   });
 
