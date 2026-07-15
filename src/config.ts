@@ -1,34 +1,78 @@
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { runtimePaths } from "./paths.js";
+
+export interface PortalConfig {
+  origin: string;
+  catalog?: string;
+}
 
 export interface Config {
   port: number;
   token: string;
+  portals: Record<string, PortalConfig>;
+  defaultPortal: string;
   bitrixOrigin: string;
   catalogPath: string;
+  allowedOrigins: string[];
 }
 
-// Repo root, derived from THIS module's location (src/config.ts → ..), so it is
-// independent of process.cwd(). Claude Code spawns this stdio server from an
-// arbitrary working directory; a cwd-relative catalog path would ENOENT at
-// startup and surface as "Failed to connect". Mirrors tools/help.ts.
+// src/config.ts → ".." is the repo root; independent of process.cwd().
 const PROJECT_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
+const stripSlash = (o: string) => o.replace(/\/+$/, "");
+
+interface FileConfig {
+  token?: string;
+  port?: number;
+  defaultPortal?: string;
+  portals?: Record<string, PortalConfig>;
+  catalog?: string;
+}
+
+function readFileConfig(env: NodeJS.ProcessEnv): FileConfig {
+  const path = runtimePaths(env).configJson;
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as FileConfig;
+  } catch (e) {
+    throw new Error(`invalid config at ${path}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-  const token = env.BITRIX_MCP_TOKEN?.trim();
-  if (!token) throw new Error("BITRIX_MCP_TOKEN (shared token) is required");
-  const bitrixOriginRaw = env.BITRIX_ORIGIN?.trim();
-  if (!bitrixOriginRaw) throw new Error("BITRIX_ORIGIN (e.g. https://portal.bitrix24.ru) is required");
-  // Strip trailing slash(es): a browser Origin header never carries one, so the
-  // WS Origin check must compare against the bare origin.
-  const bitrixOrigin = bitrixOriginRaw.replace(/\/+$/, "");
-  // Relative catalog paths are anchored at the project root, not the cwd.
-  const rawCatalog = env.BITRIX_CATALOG?.trim() || "actions.json";
+  const file = readFileConfig(env);
+
+  const token = env.BITRIX_MCP_TOKEN?.trim() || file.token;
+  if (!token) throw new Error("BITRIX_MCP_TOKEN (shared token) is required — run setup or set the env var");
+
+  // Portals: config.json map is the base; a dev BITRIX_ORIGIN defines a single "default" portal.
+  const portals: Record<string, PortalConfig> = {};
+  for (const [alias, p] of Object.entries(file.portals ?? {})) {
+    portals[alias] = { ...p, origin: stripSlash(p.origin) };
+  }
+  const envOrigin = env.BITRIX_ORIGIN?.trim();
+  if (envOrigin) portals.default = { origin: stripSlash(envOrigin) };
+
+  const aliases = Object.keys(portals);
+  if (aliases.length === 0) {
+    throw new Error("no portal origin configured — set BITRIX_ORIGIN or add a portal in config.json");
+  }
+  const defaultPortal =
+    (file.defaultPortal && portals[file.defaultPortal] ? file.defaultPortal : undefined) ??
+    (portals.default ? "default" : aliases[0]);
+
+  const rawCatalog = env.BITRIX_CATALOG?.trim() || file.catalog || "actions.json";
   const catalogPath = isAbsolute(rawCatalog) ? rawCatalog : resolve(PROJECT_ROOT, rawCatalog);
+
   return {
     token,
-    bitrixOrigin,
-    port: Number(env.BITRIX_MCP_PORT ?? 39917),
+    port: Number(env.BITRIX_MCP_PORT ?? file.port ?? 39917),
+    portals,
+    defaultPortal,
+    bitrixOrigin: portals[defaultPortal].origin,
     catalogPath,
+    allowedOrigins: Object.values(portals).map((p) => p.origin),
   };
 }
