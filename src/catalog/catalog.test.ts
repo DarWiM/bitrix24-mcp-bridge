@@ -48,4 +48,17 @@ describe("loadCatalog", () => {
     expect(() => cat.resolve("hasOwnProperty")).toThrow(/not allowed/i);
     expect(() => cat.resolve("__proto__")).toThrow(/not allowed/i);
   });
+
+  it("throws at load time when a catalog entry's action looks mutating", () => {
+    const badPath = fixture({ "bad": { action: "im.message.add" } });
+    expect(() => loadCatalog(badPath)).toThrow(/read-only|mutating/i);
+  });
+
+  it("loads a purely-read catalog without throwing", () => {
+    const readOnlyPath = fixture({
+      "tasks.list": { action: "tasks.task.list" },
+      "chats.recent": { endpoint: "/rest/im.recent.list" },
+    });
+    expect(() => loadCatalog(readOnlyPath)).not.toThrow();
+  });
 });

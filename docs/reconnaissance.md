@@ -13,3 +13,7 @@
 7. Из `actions.draft.json` собери `actions.json`: присвой понятные ключи
    (tasks.list, task.get, projects.list, chats.recent, chat.messages),
    оставив поля endpoint/action/method/transport как есть.
+
+Примечание: HAR-парсер читает параметры из тела POST-запроса, а не из query-строки URL —
+GET-вызовы, у которых params/sessid лежат в query, будут захвачены с пустыми params
+(для текущей POST-based Триады это не проблема; важно только если позже добавите GET-действие).

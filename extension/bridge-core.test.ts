@@ -29,6 +29,18 @@ describe("buildRequest", () => {
     );
     expect(url).toBe("https://portal.bitrix24.ru/rest/im.recent.list");
   });
+
+  it("builds a rest-style GET target with params and sessid in the body", () => {
+    const { url, body } = buildRequest(
+      "https://p.bitrix24.ru",
+      { type: "call", id: "1", endpoint: "/rest/x", action: null, method: "GET", params: { A: 1 } },
+      "s",
+    );
+    expect(url).toBe("https://p.bitrix24.ru/rest/x");
+    const parsed = new URLSearchParams(body);
+    expect(parsed.get("A")).toBe("1");
+    expect(parsed.get("sessid")).toBe("s");
+  });
 });
 
 describe("interpret", () => {
@@ -39,5 +51,11 @@ describe("interpret", () => {
   });
   it("passes a normal payload through", () => {
     expect(interpret({ status: "success", data: { x: 1 } })).toEqual({ ok: true, data: { status: "success", data: { x: 1 } } });
+  });
+  it("surfaces error_description alongside the top-level error code", () => {
+    const r = interpret({ error: "QUERY_LIMIT_EXCEEDED", error_description: "too many" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("QUERY_LIMIT_EXCEEDED");
+    expect(r.error).toContain("too many");
   });
 });

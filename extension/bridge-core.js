@@ -23,7 +23,11 @@ export function buildRequest(origin, req, sessid) {
 export function interpret(json) {
   const errors = json && (json.errors ?? (json.error ? [{ code: json.error }] : null));
   if (json && (json.status === "error" || errors)) {
-    return { ok: false, error: (errors && errors[0] && errors[0].code) || "bitrix_error", data: json };
+    const first = errors && errors[0];
+    const code = (first && (first.code || first.message)) || json.error || "bitrix_error";
+    const description = json.error_description || (first && first.message);
+    const error = description && description !== code ? `${code}: ${description}` : code;
+    return { ok: false, error, data: json };
   }
   return { ok: true, data: json };
 }

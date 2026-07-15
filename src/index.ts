@@ -7,7 +7,7 @@ import { registerTools } from "./tools/register.js";
 
 async function main() {
   const cfg = loadConfig(process.env);
-  const bridge = new Bridge({ port: cfg.port, token: cfg.token });
+  const bridge = new Bridge({ port: cfg.port, token: cfg.token, allowedOrigin: cfg.bitrixOrigin });
   await bridge.start();
   console.error(`[bridge] listening on 127.0.0.1:${cfg.port}`);
 

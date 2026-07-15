@@ -2,7 +2,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
 import type { CallRequest, CallResult, CallTarget, ExtensionMessage } from "./protocol.js";
 
-interface BridgeOptions { port: number; token: string; }
+interface BridgeOptions { port: number; token: string; allowedOrigin?: string; }
 interface Pending { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; }
 
 const CALL_TIMEOUT_MS = 30_000;
@@ -15,13 +15,20 @@ export class Bridge {
   constructor(private opts: BridgeOptions) {}
 
   start(): Promise<void> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({ host: "127.0.0.1", port: this.opts.port }, () => resolve());
-      this.wss.on("connection", (ws) => this.onConnection(ws));
+      this.wss.on("error", (err) => reject(err));
+      this.wss.on("connection", (ws, req) => this.onConnection(ws, req));
     });
   }
 
-  private onConnection(ws: WebSocket) {
+  private onConnection(ws: WebSocket, req: import("node:http").IncomingMessage) {
+    const origin = req.headers.origin;
+    if (this.opts.allowedOrigin && origin && origin !== this.opts.allowedOrigin) {
+      console.error(`[bridge] rejecting connection from origin ${origin}`);
+      ws.close();
+      return;
+    }
     let authed = false;
     ws.on("message", (raw) => {
       let msg: ExtensionMessage;
