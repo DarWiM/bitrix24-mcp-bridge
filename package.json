@@ -7,7 +7,7 @@
     "test": "bun test",
     "dev": "bun run src/index.ts",
     "typecheck": "bunx tsc --noEmit",
-    "build:ext": "esbuild extension/bridge-client.src.js --bundle --format=iife --outfile=extension/bridge-client.js"
+    "build:ext": "bun run scripts/build-extension.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

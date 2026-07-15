@@ -45,17 +45,31 @@
 ```bash
 cd /path/to/bitrix24
 bun install
-bun test          # ожидаемо: 35 pass / 0 fail
+bun test          # ожидаемо: 36 pass / 0 fail
 ```
 
-### 2. Сгенерировать общий токен (один раз, храни)
+### 2. Настроить `.env` (единая точка правды)
+
+Вся конфигурация живёт в **`.env`** (gitignored). Его автоматически подхватывают и MCP-сервер,
+и сборка расширения — руками исходники редактировать не нужно.
 
 ```bash
+cp .env.example .env
+# сгенерировать токен:
 openssl rand -hex 32
 ```
 
-Это значение должно **совпадать в двух местах**: в расширении и в конфиге MCP-сервера.
+Заполни `.env`:
+
+```
+BITRIX_MCP_TOKEN=<вывод openssl rand -hex 32>
+BITRIX_ORIGIN=https://<твой-портал>.bitrix24.ru
+BITRIX_MCP_PORT=39917       # опционально
+BITRIX_CATALOG=actions.json # опционально
+```
+
 Токен — единственная защита локального порта, поэтому он должен быть длинным и случайным.
+Трейлинг-слэш в `BITRIX_ORIGIN` можно не убирать — он нормализуется автоматически.
 
 ### 3. Разведка → собрать `actions.json`  ⚠️ главный ручной шаг
 
@@ -101,41 +115,45 @@ openssl rand -hex 32
 
 ### 4. Собрать и установить расширение
 
-1. В `extension/manifest.json` замени `REPLACE_WITH_YOUR_PORTAL.bitrix24.ru` на свой домен портала.
-2. В `extension/bridge-client.src.js` замени `REPLACE_WITH_SHARED_TOKEN` на токен из шага 2.
-3. Собери бандл:
-   ```bash
-   bun run build:ext         # создаст extension/bridge-client.js
-   ```
-4. `chrome://extensions` → включи **Developer mode** → **Load unpacked** → выбери папку `extension/`.
-5. Открой/обнови залогиненную вкладку портала.
+Токен, порт и домen подставляются в расширение из `.env` на сборке — руками ничего не редактируешь.
+
+```bash
+bun run build:ext    # читает .env → создаёт extension/bridge-client.js и extension/manifest.json
+```
+1. `chrome://extensions` → включи **Developer mode** → **Load unpacked** → выбери папку `extension/`.
+2. Открой/обнови залогиненную вкладку портала.
+
+> Сменил токен/домен/порт? Поправь `.env`, снова `bun run build:ext`, и нажми «обновить» у расширения.
 
 ### 5. Зарегистрировать MCP-сервер у агента
 
-Токен и домен передаются серверу через переменные окружения. Для **Claude Code**:
+Сервер тоже читает `.env` (Bun подхватывает его через `--env-file`) — секреты не попадают в конфиг агента.
+Для **Claude Code**:
 
 ```bash
-claude mcp add bitrix24 \
-  -e BITRIX_MCP_TOKEN=<токен_из_шага_2> \
-  -e BITRIX_ORIGIN=https://<твой-портал>.bitrix24.ru \
-  -- bun run /path/to/bitrix24/src/index.ts
+claude mcp add bitrix24 -- \
+  bun --env-file=/path/to/bitrix24/.env \
+      run /path/to/bitrix24/src/index.ts
 ```
 
-Переменные окружения:
+(Для другого MCP-клиента — тот же смысл: команда `bun --env-file=<abs>/.env run <abs>/src/index.ts`.
+Либо, если предпочитаешь, передай значения через механизм env самого клиента.)
+
+Переменные (все в `.env`):
 
 | Переменная | Обязательна | По умолчанию | Назначение |
 |---|---|---|---|
-| `BITRIX_MCP_TOKEN` | да | — | общий токен (совпадает с расширением) |
-| `BITRIX_ORIGIN` | да | — | `https://<портал>.bitrix24.ru`; проверка Origin вкладки |
+| `BITRIX_MCP_TOKEN` | да | — | общий токен (тот же, что вшит в расширение при сборке) |
+| `BITRIX_ORIGIN` | да | — | `https://<портал>.bitrix24.ru`; проверка Origin вкладки (слэш в конце нормализуется) |
 | `BITRIX_MCP_PORT` | нет | `39917` | порт WS-моста |
 | `BITRIX_CATALOG` | нет | `actions.json` | путь к каталогу |
 
 ### 6. Проверка
 
-Пройди `docs/e2e-checklist.md`. Быстрый ручной старт сервера (без агента):
+Пройди `docs/e2e-checklist.md`. Быстрый ручной старт сервера (без агента) — `.env` подхватится сам:
 
 ```bash
-BITRIX_MCP_TOKEN=<токен> BITRIX_ORIGIN=https://<портал>.bitrix24.ru bun run src/index.ts
+bun run src/index.ts
 # stderr: [bridge] listening on 127.0.0.1:39917
 # после открытия вкладки портала: [bridge] extension authenticated
 ```
@@ -159,7 +177,7 @@ BITRIX_MCP_TOKEN=<токен> BITRIX_ORIGIN=https://<портал>.bitrix24.ru b
 Когда нужно вмешаться:
 - **Перелогинился/сменил пароль** → просто открой вкладку заново, сессия подхватится.
 - **Обновил `actions.json`** (добавил домен) → перезапусти MCP-сервер (в Claude Code — перезапуск клиента/переустановка MCP-записи). Расширение трогать не надо.
-- **Поменял токен или домен** → обнови и env сервера, и `bridge-client.src.js`/`manifest.json`, затем `bun run build:ext` и перезагрузи расширение.
+- **Поменял токен / домен / порт** → правишь только `.env`, затем `bun run build:ext` и «обновить» у расширения. Сервер перечитает `.env` при следующем старте — исходники не трогаешь.
 
 ---
 

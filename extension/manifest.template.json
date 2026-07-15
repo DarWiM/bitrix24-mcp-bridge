@@ -5,7 +5,7 @@
   "description": "Отдаёт данные текущей сессии Bitrix24 локальному MCP-серверу (read-only).",
   "content_scripts": [
     {
-      "matches": ["https://REPLACE_WITH_YOUR_PORTAL.bitrix24.ru/*"],
+      "matches": ["__ORIGIN__/*"],
       "js": ["bridge-client.js"],
       "world": "MAIN",
       "run_at": "document_idle"

@@ -17,11 +17,13 @@
 
 Коротко (первый запуск):
 1. `bun install && bun test`
-2. Сгенерировать токен: `openssl rand -hex 32`
+2. `cp .env.example .env` и заполнить: `BITRIX_MCP_TOKEN` (`openssl rand -hex 32`) и `BITRIX_ORIGIN`
 3. Снять HAR и собрать `actions.json` — см. [docs/reconnaissance.md](docs/reconnaissance.md)
-4. Вписать домен + токен в `extension/`, затем `bun run build:ext`, загрузить расширение в Chrome
-5. Зарегистрировать сервер у агента (`claude mcp add …`) с `BITRIX_MCP_TOKEN` и `BITRIX_ORIGIN`
+4. `bun run build:ext` (берёт конфиг из `.env`), загрузить папку `extension/` в Chrome (Load unpacked)
+5. Зарегистрировать сервер у агента: `claude mcp add bitrix24 -- bun --env-file=<abs>/.env run <abs>/src/index.ts`
 6. Проверить по [docs/e2e-checklist.md](docs/e2e-checklist.md)
+
+Вся конфигурация — в gitignored **`.env`** (единая точка правды для сервера и сборки расширения).
 
 Последующие запуски: держать открытой залогиненную вкладку портала — сервер поднимает агент сам.
 

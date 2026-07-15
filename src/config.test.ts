@@ -17,6 +17,14 @@ describe("loadConfig", () => {
     });
   });
 
+  it("strips a trailing slash from the origin", () => {
+    const cfg = loadConfig({
+      BITRIX_MCP_TOKEN: "secret",
+      BITRIX_ORIGIN: "https://example.bitrix24.ru/",
+    });
+    expect(cfg.bitrixOrigin).toBe("https://example.bitrix24.ru");
+  });
+
   it("throws when token is missing", () => {
     expect(() => loadConfig({ BITRIX_ORIGIN: "https://x.bitrix24.ru" })).toThrow(/token/i);
   });

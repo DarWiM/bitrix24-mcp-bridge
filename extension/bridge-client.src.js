@@ -1,7 +1,9 @@
 import { buildRequest, interpret } from "./bridge-core.js";
 
-const TOKEN = "REPLACE_WITH_SHARED_TOKEN";
-const PORT = 39917;
+// __BITRIX_TOKEN__ / __BITRIX_PORT__ are injected at build time by
+// scripts/build-extension.ts (esbuild `define`) from the .env config.
+const TOKEN = __BITRIX_TOKEN__;
+const PORT = __BITRIX_PORT__;
 const ORIGIN = location.origin;
 
 function freshSessid() {
