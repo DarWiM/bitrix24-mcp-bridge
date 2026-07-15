@@ -1,20 +1,33 @@
-import { buildRequest, interpret } from "./bridge-core.js";
+import { buildRequest, interpret, type CallRequest, type InterpretResult } from "./bridge-core.ts";
 
-// __BITRIX_TOKEN__ / __BITRIX_PORT__ are injected at build time by
-// scripts/build-extension.ts (esbuild `define`) from the .env config.
-const TOKEN = __BITRIX_TOKEN__;
-const PORT = __BITRIX_PORT__;
-const ORIGIN = location.origin;
+// Injected at build time by scripts/build-extension.ts (esbuild `define`) from .env.
+declare const __BITRIX_TOKEN__: string;
+declare const __BITRIX_PORT__: number;
 
-function freshSessid() {
-  return (window.BX && window.BX.bitrix_sessid && window.BX.bitrix_sessid()) || "";
+// window.BX is provided by the Bitrix24 page itself (MAIN world).
+declare global {
+  interface Window {
+    BX?: { bitrix_sessid?: () => string };
+  }
 }
 
-async function handleCall(req) {
+const TOKEN: string = __BITRIX_TOKEN__;
+const PORT: number = __BITRIX_PORT__;
+const ORIGIN = location.origin;
+
+function freshSessid(): string {
+  return (window.BX?.bitrix_sessid?.()) || "";
+}
+
+async function handleCall(req: CallRequest): Promise<InterpretResult> {
   const sessid = freshSessid();
   if (!sessid) return { ok: false, error: "session context not ready — open a normal Bitrix24 portal tab" }; // G5
   const { url, body } = buildRequest(ORIGIN, req, sessid);
-  const init = { method: req.method, credentials: "include", headers: { "Content-Type": "application/x-www-form-urlencoded" } };
+  const init: RequestInit = {
+    method: req.method,
+    credentials: "include",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  };
   let finalUrl = url;
   if (req.method === "POST") init.body = body;
   else finalUrl += (url.includes("?") ? "&" : "?") + body;
@@ -23,11 +36,11 @@ async function handleCall(req) {
   return interpret(json); // G3
 }
 
-function connect() {
+function connect(): void {
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}`);
   ws.addEventListener("open", () => ws.send(JSON.stringify({ type: "auth", token: TOKEN })));
-  ws.addEventListener("message", async (ev) => {
-    const req = JSON.parse(ev.data);
+  ws.addEventListener("message", async (ev: MessageEvent) => {
+    const req = JSON.parse(ev.data) as CallRequest;
     if (req.type !== "call") return;
     try {
       const r = await handleCall(req);

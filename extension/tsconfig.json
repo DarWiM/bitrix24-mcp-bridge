@@ -1,0 +1,15 @@
+{
+  "//": "Extension code targets the BROWSER (DOM), separate from the Bun server tsconfig.",
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": [],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["bridge-core.ts", "bridge-client.src.ts"]
+}

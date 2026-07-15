@@ -22,7 +22,7 @@ const port = Number(process.env.BITRIX_MCP_PORT ?? 39917);
 
 // 1) bundle the MAIN-world content script with token/port injected as literals
 await build({
-  entryPoints: ["extension/bridge-client.src.js"],
+  entryPoints: ["extension/bridge-client.src.ts"],
   bundle: true,
   format: "iife",
   outfile: "extension/bridge-client.js",

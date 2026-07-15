@@ -1,8 +1,23 @@
 // Pure, browser-agnostic — unit-tested.
 
-export function encodeForm(params) {
+export interface CallRequest {
+  type: "call";
+  id: string;
+  endpoint: string;
+  action: string | null;
+  method: "GET" | "POST";
+  params: Record<string, unknown>;
+}
+
+export interface InterpretResult {
+  ok: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+export function encodeForm(params: Record<string, unknown>): string {
   const out = new URLSearchParams();
-  const add = (key, val) => {
+  const add = (key: string, val: unknown): void => {
     if (val === null || val === undefined) return;
     if (Array.isArray(val)) val.forEach((v, i) => add(`${key}[${i}]`, v));
     else if (typeof val === "object") for (const [k, v] of Object.entries(val)) add(`${key}[${k}]`, v);
@@ -12,7 +27,11 @@ export function encodeForm(params) {
   return out.toString();
 }
 
-export function buildRequest(origin, req, sessid) {
+export function buildRequest(
+  origin: string,
+  req: CallRequest,
+  sessid: string,
+): { url: string; body: string } {
   const q = req.action ? `?action=${encodeURIComponent(req.action)}` : "";
   const url = `${origin}${req.endpoint}${q}`;
   const body = encodeForm({ ...req.params, sessid });
@@ -20,7 +39,7 @@ export function buildRequest(origin, req, sessid) {
 }
 
 // Bitrix wraps errors in HTTP 200: { status:"error", errors:[{code}] } or { error, error_description }
-export function interpret(json) {
+export function interpret(json: any): InterpretResult {
   const errors = json && (json.errors ?? (json.error ? [{ code: json.error }] : null));
   if (json && (json.status === "error" || errors)) {
     const first = errors && errors[0];

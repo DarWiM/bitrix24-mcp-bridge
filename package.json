@@ -6,7 +6,7 @@
   "scripts": {
     "test": "bun test",
     "dev": "bun run src/index.ts",
-    "typecheck": "bunx tsc --noEmit",
+    "typecheck": "bunx tsc --noEmit && bunx tsc -p extension/tsconfig.json",
     "build:ext": "bun run scripts/build-extension.ts"
   },
   "dependencies": {

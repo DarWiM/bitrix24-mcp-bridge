@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { encodeForm, buildRequest, interpret } from "./bridge-core.js";
+import { encodeForm, buildRequest, interpret } from "./bridge-core.ts";
 
 describe("encodeForm", () => {
   it("serializes nested objects PHP-style", () => {

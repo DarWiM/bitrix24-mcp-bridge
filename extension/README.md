@@ -17,8 +17,9 @@ bun run build:ext
 - `extension/bridge-client.js` — бандл (esbuild IIFE) с вшитыми `BITRIX_MCP_TOKEN` и `BITRIX_MCP_PORT`;
 - `extension/manifest.json` — из `manifest.template.json` с `matches` = `BITRIX_ORIGIN` + `/*`.
 
-Оба файла **генерируются** и в git не коммитятся. Источники — `bridge-client.src.js`,
-`bridge-core.js`, `manifest.template.json`.
+Оба файла **генерируются** и в git не коммитятся. Источники (TypeScript) — `bridge-client.src.ts`,
+`bridge-core.ts`, `manifest.template.json`. Типы браузерной среды — в `extension/tsconfig.json`
+(отдельный от серверного, с `lib: DOM`); проверка: `bun run typecheck` гоняет и сервер, и расширение.
 
 Установка: `chrome://extensions` → **Developer mode** → **Load unpacked** → папка `extension/`.
 Держи открытой обычную залогиненную вкладку портала (где грузится `BX` и мессенджер).
