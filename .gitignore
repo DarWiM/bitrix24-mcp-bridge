@@ -77,3 +77,10 @@ fabric.properties
 # Android studio 3.1+ serialized cache file
 .idea/caches/build_file_checksums.ser
 
+# Node/Bun project files
+node_modules
+dist
+*.local
+.bitrix24-mcp
+captured.har
+extension/bridge-client.js
