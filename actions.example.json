@@ -1,0 +1,7 @@
+{
+  "tasks.list":     { "action": "tasks.task.list", "method": "POST" },
+  "task.get":       { "action": "tasks.task.get", "method": "POST" },
+  "projects.list":  { "action": "socialnetwork.api.workgroup.list", "method": "POST" },
+  "chats.recent":   { "endpoint": "/rest/im.recent.list", "method": "POST" },
+  "chat.messages":  { "endpoint": "/rest/im.dialog.messages.get", "method": "POST" }
+}
