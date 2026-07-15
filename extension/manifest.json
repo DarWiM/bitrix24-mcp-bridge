@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Bitrix24 MCP Bridge",
+  "version": "0.1.0",
+  "description": "Отдаёт данные текущей сессии Bitrix24 локальному MCP-серверу (read-only).",
+  "content_scripts": [
+    {
+      "matches": ["https://REPLACE_WITH_YOUR_PORTAL.bitrix24.ru/*"],
+      "js": ["bridge-client.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    }
+  ]
+}
