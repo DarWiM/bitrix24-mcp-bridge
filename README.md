@@ -45,6 +45,7 @@ bun run capture        # рекордер: пишет actions.draft.json из п
 ## Документация
 
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — первый и последующие запуски, диагностика, безопасность
+- [docs/api-notes.md](docs/api-notes.md) — карта API Bitrix24 (транспорт, конвенции params, поля) — для любого агента
 - [docs/reconnaissance.md](docs/reconnaissance.md) — как снять HAR и собрать `actions.json`
 - [docs/e2e-checklist.md](docs/e2e-checklist.md) — сквозная проверка
 ```
