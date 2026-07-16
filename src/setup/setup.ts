@@ -11,6 +11,7 @@ import {
   readServerConfig,
   writeServerConfig,
   materializeExtension,
+  validateOrigin,
 } from "./config-core.js";
 import type { ServerConfig } from "./config-core.js";
 import { applySetupCommand } from "./setup-reducer.js";
@@ -90,14 +91,36 @@ function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupRe
   }
 }
 
+const MAX_ORIGIN_ATTEMPTS = 3;
+
 async function firstRun(ask: Ask, paths: RuntimePaths): Promise<void> {
   stdout.write("No configuration found — let's set up your first Bitrix24 portal.\n");
-  const origin = (await ask("Portal origin (e.g. https://acme.bitrix24.ru): ")).trim();
-  const suggested = defaultAlias(origin);
-  const aliasInput = (await ask(`Alias for this portal [${suggested}]: `)).trim();
-  const alias = aliasInput || suggested;
 
-  const config = createInitialConfig({ origin, alias });
+  let config: ServerConfig | undefined;
+  for (let attempt = 0; attempt < MAX_ORIGIN_ATTEMPTS && !config; attempt++) {
+    const rawOrigin = (await ask("Portal origin (e.g. https://acme.bitrix24.ru): ")).trim();
+    if (!rawOrigin) continue;
+    let origin: string;
+    try {
+      origin = validateOrigin(rawOrigin);
+    } catch (e) {
+      stdout.write(`Error: ${e instanceof Error ? e.message : String(e)}\n`);
+      continue;
+    }
+    const suggested = defaultAlias(origin);
+    const aliasInput = (await ask(`Alias for this portal [${suggested}]: `)).trim();
+    const alias = aliasInput || suggested;
+    try {
+      config = createInitialConfig({ origin, alias });
+    } catch (e) {
+      stdout.write(`Error: ${e instanceof Error ? e.message : String(e)}\n`);
+    }
+  }
+  if (!config) {
+    stdout.write("Setup cancelled: no valid portal origin was provided.\n");
+    return;
+  }
+
   writeServerConfig(paths.home, config);
   seedActions(paths);
   materializeExtension({ home: paths.home, config, staticExtDir: staticExtDir() });

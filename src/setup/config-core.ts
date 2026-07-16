@@ -20,7 +20,7 @@ function validateAlias(alias: string): string {
   return alias;
 }
 
-function validateOrigin(origin: string): string {
+export function validateOrigin(origin: string): string {
   const fail = (reason: string): never => {
     throw new Error(`invalid portal origin "${origin}" (${reason})`);
   };
