@@ -31,9 +31,10 @@
   `web_accessible_resources` для `config.json` с `use_dynamic_url: true`. Отдельного
   файла-шаблона манифеста больше нет.
 
-Смена набора порталов (`setup` → add/remove/edit) переписывает `manifest.json` → нужно
-**перезагрузить расширение** в `chrome://extensions`. Смена порта/токена меняет только
-`config.json` → достаточно **переоткрыть вкладку** портала.
+После правки через `setup` **перезапусти daemon** (он читает серверный `config.json` только на
+старте: `pkill -f -- --daemon`, следующий вызов агента поднимет новый). Дополнительно: смена набора
+порталов (`setup` → add/remove/edit) переписывает `manifest.json` → **перезагрузи расширение** в
+`chrome://extensions`; смена порта/токена меняет `config.json` расширения → **переоткрой вкладку** портала.
 
 Установка: `chrome://extensions` → **Developer mode** → **Load unpacked** → папка
 **`~/.bitrix24-mcp-bridge/extension/`**. Держи открытой обычную залогиненную вкладку портала
