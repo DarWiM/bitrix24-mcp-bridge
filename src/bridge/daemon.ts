@@ -5,6 +5,8 @@ import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult } from "./protocol.js";
 
+export interface PortalConnection { alias: string; origin: string; connected: boolean }
+
 export interface DaemonOptions {
   port: number;
   token: string;
@@ -77,6 +79,14 @@ export class Daemon {
       // every portal). Drop the bad data for this connection and keep serving.
       try {
         for (const msg of dec.push(chunk) as any[]) {
+          if (msg?.type === "status") {
+            const connected = this.bridge.connectedOrigins();
+            const portals: PortalConnection[] = Object.entries(this.opts.portals).map(
+              ([alias, p]) => ({ alias, origin: p.origin, connected: connected.includes(p.origin) }),
+            );
+            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { portals } }));
+            continue;
+          }
           if (msg?.type !== "call") continue;
           const origin = this.resolveOrigin(msg.portal);
           const reply = (r: CallResult) => sock.write(encodeFrame(r));

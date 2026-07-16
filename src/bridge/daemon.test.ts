@@ -193,4 +193,22 @@ describe("Daemon", () => {
     await probe.start();
     await probe.stop();
   });
+
+  it("replies to {type:'status'} with each configured portal and its connected flag", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 39958, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    try {
+      const res = await udsCall(sock, { type: "status", id: "1" });
+      expect(res.ok).toBe(true);
+      expect(res.data.portals).toEqual([
+        { alias: "acme", origin: "https://acme.bitrix24.ru", connected: false },
+      ]);
+    } finally {
+      await d.stop();
+    }
+  });
 });
