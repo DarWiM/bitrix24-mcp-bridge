@@ -92,17 +92,39 @@ export class UdsClient implements CallSink {
   close(): void { this.sock?.destroy(); }
 }
 
+let shutdownSeq = 0;
+
 export function requestDaemonShutdown(sockPath: string, timeoutMs = 2000): Promise<boolean> {
   return new Promise((resolve) => {
     const s = connect(sockPath);
+    const id = `shutdown-${++shutdownSeq}`;
     let done = false;
-    const finish = (v: boolean) => { if (!done) { done = true; try { s.destroy(); } catch {} resolve(v); } };
-    const timer = setTimeout(() => finish(false), timeoutMs);
+    let timer: ReturnType<typeof setTimeout>;
+    // Centralized here so every exit path (ack, close, error, timeout) clears it exactly once.
+    const finish = (v: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { s.destroy(); } catch {}
+      resolve(v);
+    };
+    timer = setTimeout(() => finish(false), timeoutMs);
     timer.unref?.();
     const dec = new FrameDecoder();
-    s.once("connect", () => s.write(encodeFrame({ type: "shutdown", id: "shutdown" })));
-    s.on("data", (c) => { for (const _ of dec.push(c)) { clearTimeout(timer); finish(true); } });
-    s.on("close", () => { clearTimeout(timer); finish(true); });   // daemon stopped after acking
-    s.on("error", () => { clearTimeout(timer); finish(false); });  // ENOENT/ECONNREFUSED → no daemon
+    s.once("connect", () => s.write(encodeFrame({ type: "shutdown", id })));
+    s.on("data", (c) => {
+      let msgs: unknown[];
+      try {
+        msgs = dec.push(c);
+      } catch {
+        return; // a malformed frame must never crash the caller; treat it as no ack
+      }
+      for (const msg of msgs as Array<{ type?: string; id?: string; ok?: boolean }>) {
+        // Only OUR matched, successful ack counts — a stray frame must never masquerade as one.
+        if (msg?.type === "result" && msg.id === id && msg.ok === true) finish(true);
+      }
+    });
+    s.on("close", () => finish(false));  // no confirmed ack before close → not a confirmed shutdown
+    s.on("error", () => finish(false));  // ENOENT/ECONNREFUSED → no daemon
   });
 }

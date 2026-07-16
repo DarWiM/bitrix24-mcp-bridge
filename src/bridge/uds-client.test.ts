@@ -164,6 +164,40 @@ describe("requestDaemonShutdown", () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "no-daemon.sock");
     await expect(requestDaemonShutdown(sock, 200)).resolves.toBe(false);
   });
+
+  it("resolves false when the peer replies with a mismatched id instead of acking", async () => {
+    // A stray/unrelated frame (wrong id) must never masquerade as a confirmed shutdown.
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const server = await startFakeUdsServer(sock, (msg, s) => {
+      s.write(encodeFrame({ type: "result", id: "not-the-real-id", ok: true, data: {} }));
+      s.end();
+    });
+    try {
+      await expect(requestDaemonShutdown(sock, 300)).resolves.toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("resolves false and does not throw uncaught when the peer sends a malformed frame", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const server = createServer((s) => {
+      s.on("data", () => { s.write("not json\n"); s.end(); });
+    });
+    await new Promise<void>((resolve) => server.listen(sock, resolve));
+
+    let uncaught: unknown;
+    const onUncaught = (e: unknown) => { uncaught = e; };
+    process.on("uncaughtException", onUncaught);
+
+    const result = await requestDaemonShutdown(sock, 300);
+
+    process.off("uncaughtException", onUncaught);
+    expect(uncaught).toBeUndefined();
+    expect(result).toBe(false);
+
+    server.close();
+  });
 });
 
 describe("UdsClient error resilience", () => {
