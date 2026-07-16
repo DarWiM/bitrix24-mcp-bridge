@@ -9,6 +9,7 @@ import {
   writeServerConfig,
   addPortal,
   removePortal,
+  editPortal,
   setPort,
   rotateToken,
   setDefaultPortal,
@@ -167,5 +168,33 @@ describe("mutators (immutable)", () => {
     const two = addPortal(base(), { alias: "beta", origin: "https://beta.bitrix24.ru" });
     expect(setDefaultPortal(two, "beta").defaultPortal).toBe("beta");
     expect(() => setDefaultPortal(two, "nope")).toThrow(/does not exist/i);
+  });
+
+  it("editPortal changes the origin, keeps the alias and its default status", () => {
+    const next = editPortal(base(), { alias: "acme", origin: "https://acme2.bitrix24.ru/" });
+    expect(next.portals.acme.origin).toBe("https://acme2.bitrix24.ru");
+    expect(Object.keys(next.portals)).toEqual(["acme"]);
+    expect(next.defaultPortal).toBe("acme");
+  });
+
+  it("editPortal preserves defaultPortal when editing a non-default portal", () => {
+    const two = addPortal(base(), { alias: "beta", origin: "https://beta.bitrix24.ru" });
+    const next = editPortal(two, { alias: "beta", origin: "https://beta2.bitrix24.ru" });
+    expect(next.portals.beta.origin).toBe("https://beta2.bitrix24.ru");
+    expect(next.defaultPortal).toBe("acme");
+  });
+
+  it("editPortal is the only portal edit case (does not require another portal to exist)", () => {
+    const next = editPortal(base(), { alias: "acme", origin: "https://acme2.bitrix24.ru" });
+    expect(next.defaultPortal).toBe("acme");
+    expect(Object.keys(next.portals)).toEqual(["acme"]);
+  });
+
+  it("editPortal rejects an unknown alias", () => {
+    expect(() => editPortal(base(), { alias: "nope", origin: "https://x.bitrix24.ru" })).toThrow(/does not exist/i);
+  });
+
+  it("editPortal validates the new origin", () => {
+    expect(() => editPortal(base(), { alias: "acme", origin: "ftp://x" })).toThrow(/origin/i);
   });
 });

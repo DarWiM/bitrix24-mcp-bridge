@@ -1,9 +1,10 @@
 import type { ServerConfig } from "./config-core.js";
-import { addPortal, removePortal, setPort, rotateToken, setDefaultPortal } from "./config-core.js";
+import { addPortal, removePortal, editPortal, setPort, rotateToken, setDefaultPortal } from "./config-core.js";
 
 export type SetupCommand =
   | { kind: "add-portal"; alias: string; origin: string; catalog?: string }
   | { kind: "remove-portal"; alias: string }
+  | { kind: "edit-portal"; alias: string; origin: string; catalog?: string }
   | { kind: "set-port"; port: number }
   | { kind: "rotate-token" }
   | { kind: "set-default"; alias: string }
@@ -26,6 +27,10 @@ export function applySetupCommand(config: ServerConfig, command: SetupCommand): 
     case "remove-portal": {
       const next = removePortal(config, command.alias);
       return { config: next, effects: ["write-config", "materialize-extension", "reload-extension"], message: `removed portal "${command.alias}"` };
+    }
+    case "edit-portal": {
+      const next = editPortal(config, command);
+      return { config: next, effects: ["write-config", "materialize-extension", "reload-extension"], message: `updated portal "${command.alias}" → ${command.origin}` };
     }
     case "set-port": {
       const next = setPort(config, command.port);

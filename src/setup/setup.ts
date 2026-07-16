@@ -115,6 +115,11 @@ async function promptCommand(ask: Ask, choice: string): Promise<SetupCommand | n
     }
     case "r":
       return { kind: "remove-portal", alias: (await ask("Alias to remove: ")).trim() };
+    case "e": {
+      const alias = (await ask("Alias to edit: ")).trim();
+      const origin = (await ask("New portal origin: ")).trim();
+      return { kind: "edit-portal", alias, origin };
+    }
     case "d":
       return { kind: "set-default", alias: (await ask("Alias to make default: ")).trim() };
     case "p":
@@ -134,7 +139,7 @@ async function editMenu(ask: Ask, paths: RuntimePaths, initial: ServerConfig): P
     printState(current, paths);
     const choice = (
       await ask(
-        "\n[a]dd portal  [r]emove portal  [d]efault portal  [p]ort  [t]oken rotate  [u]pdate extension  [q]uit: ",
+        "\n[a]dd portal  [r]emove portal  [e]dit portal  [d]efault portal  [p]ort  [t]oken rotate  [u]pdate extension  [q]uit: ",
       )
     ).trim().toLowerCase();
     if (choice === "q" || choice === "") break;
