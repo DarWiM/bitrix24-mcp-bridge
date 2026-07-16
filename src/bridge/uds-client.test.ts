@@ -27,10 +27,10 @@ function startFakeUdsServer(
 describe("UdsClient", () => {
   it("connects to a running daemon and proxies a call", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
-    const d = new Daemon({ port: 39960, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
     await d.start();
 
-    const ws = new WebSocket("ws://127.0.0.1:39960", { headers: { origin: "https://acme.bitrix24.ru" } });
+    const ws = new WebSocket(`ws://127.0.0.1:${d.port}`, { headers: { origin: "https://acme.bitrix24.ru" } });
     await new Promise((r) => ws.on("open", r));
     ws.send(JSON.stringify({ type: "auth", token: "t" }));
     ws.on("message", (raw) => {
@@ -53,7 +53,7 @@ describe("UdsClient", () => {
     const client = new UdsClient({
       sockPath: sock,
       spawnDaemon: () => {
-        started = new Daemon({ port: 39961, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
+        started = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
         started.start();
       },
       connectTimeoutMs: 3000,
@@ -65,7 +65,7 @@ describe("UdsClient", () => {
 
   it("status() round-trips a status request and resolves with the portals payload", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
-    const d = new Daemon({ port: 39962, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
     await d.start();
 
     const client = new UdsClient({ sockPath: sock });
