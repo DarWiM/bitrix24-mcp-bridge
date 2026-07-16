@@ -32,6 +32,32 @@ describe("createInitialConfig", () => {
     expect(() => createInitialConfig({ origin: "https://x.bitrix24.ru", alias: "bad alias" })).toThrow(/alias/i);
     expect(() => createInitialConfig({ origin: "ftp://x", alias: "acme" })).toThrow(/origin/i);
   });
+
+  it("normalizes a trailing-slash origin to its bare origin", () => {
+    expect(createInitialConfig({ origin: "https://acme.bitrix24.ru/", alias: "acme" }).portals.acme.origin).toBe(
+      "https://acme.bitrix24.ru",
+    );
+  });
+
+  it("rejects a wildcard hostname", () => {
+    expect(() => createInitialConfig({ origin: "https://*.bitrix24.ru", alias: "acme" })).toThrow(/origin/i);
+  });
+
+  it("rejects an origin with a path", () => {
+    expect(() => createInitialConfig({ origin: "https://acme.bitrix24.ru/some/path", alias: "acme" })).toThrow(/origin/i);
+  });
+
+  it("rejects an origin with a query string", () => {
+    expect(() => createInitialConfig({ origin: "https://acme.bitrix24.ru/?x=1", alias: "acme" })).toThrow(/origin/i);
+  });
+
+  it("rejects an origin with credentials", () => {
+    expect(() => createInitialConfig({ origin: "https://user:pass@acme.bitrix24.ru", alias: "acme" })).toThrow(/origin/i);
+  });
+
+  it("rejects an origin with a hash fragment", () => {
+    expect(() => createInitialConfig({ origin: "https://acme.bitrix24.ru/#frag", alias: "acme" })).toThrow(/origin/i);
+  });
 });
 
 describe("read/write server config", () => {

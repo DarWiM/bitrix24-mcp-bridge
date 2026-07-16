@@ -13,8 +13,6 @@ export interface ServerConfig {
   catalog?: string;
 }
 
-const stripSlash = (o: string): string => o.replace(/\/+$/, "");
-
 function validateAlias(alias: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(alias)) {
     throw new Error(`invalid portal alias "${alias}" (use letters, digits, "-" or "_")`);
@@ -23,10 +21,22 @@ function validateAlias(alias: string): string {
 }
 
 function validateOrigin(origin: string): string {
-  if (!/^https?:\/\/.+/.test(origin)) {
-    throw new Error(`invalid portal origin "${origin}" (must be an http(s):// URL)`);
+  const fail = (reason: string): never => {
+    throw new Error(`invalid portal origin "${origin}" (${reason})`);
+  };
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return fail("must be an http(s):// URL");
   }
-  return stripSlash(origin);
+  if (url.protocol !== "http:" && url.protocol !== "https:") return fail("must use http or https");
+  if (url.username || url.password) return fail("must not contain credentials");
+  if (!url.hostname || url.hostname.includes("*")) return fail("must not use a wildcard/empty hostname");
+  if (url.pathname !== "" && url.pathname !== "/") return fail("must not contain a path");
+  if (url.search) return fail("must not contain a query string");
+  if (url.hash) return fail("must not contain a hash fragment");
+  return url.origin;
 }
 
 function newToken(): string {
