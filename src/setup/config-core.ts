@@ -33,7 +33,7 @@ export function validateOrigin(origin: string): string {
   if (url.protocol !== "http:" && url.protocol !== "https:") return fail("must use http or https");
   if (url.username || url.password) return fail("must not contain credentials");
   if (!url.hostname || url.hostname.includes("*")) return fail("must not use a wildcard/empty hostname");
-  if (url.pathname !== "" && url.pathname !== "/") return fail("must not contain a path");
+  if (url.pathname !== "/") return fail("must not contain a path");
   if (url.search) return fail("must not contain a query string");
   if (url.hash) return fail("must not contain a hash fragment");
   return url.origin;

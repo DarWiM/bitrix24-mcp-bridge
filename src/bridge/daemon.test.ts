@@ -35,11 +35,11 @@ describe("Daemon", () => {
   it("routes a UDS call to the right portal's extension", async () => {
     const sock = sockIn();
     const d = new Daemon({
-      port: 39950, token: "t", sockPath: sock,
+      port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await d.start();
-    await fakeExtension(39950, "https://acme.bitrix24.ru");
+    await fakeExtension(d.port, "https://acme.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
 
     const res = await udsCall(sock, { type: "call", id: "1", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
@@ -50,7 +50,7 @@ describe("Daemon", () => {
   it("locks the UDS socket down to 0600 regardless of umask", async () => {
     const sock = sockIn();
     const d = new Daemon({
-      port: 39952, token: "t", sockPath: sock,
+      port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await d.start();
@@ -62,9 +62,9 @@ describe("Daemon", () => {
     // Singleton is gated by the WS port: the loser must reject and must NOT touch
     // the winner's live socket.
     const sock = sockIn();
-    const a = new Daemon({ port: 39951, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
+    const a = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
     await a.start();
-    const b = new Daemon({ port: 39951, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
+    const b = new Daemon({ port: a.port, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
     await expect(b.start()).rejects.toThrow(/already running/i);
 
     // A guarded loser calling stop() must NOT unlink the winner's live socket
@@ -73,7 +73,7 @@ describe("Daemon", () => {
     expect(existsSync(sock)).toBe(true);
 
     // Winner's UDS still routes after the loser bailed out and stopped.
-    await fakeExtension(39951, "https://d.bitrix24.ru");
+    await fakeExtension(a.port, "https://d.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
     const res = await udsCall(sock, { type: "call", id: "9", portal: "d", endpoint: "/x", action: null, method: "POST", params: {} });
     expect(res).toEqual({ type: "result", id: "9", ok: true, data: { ok: "https://d.bitrix24.ru" } });
@@ -83,7 +83,7 @@ describe("Daemon", () => {
   it("exits on idle when no clients and no extension are connected", async () => {
     const sock = sockIn();
     const d = new Daemon({
-      port: 39953, token: "t", sockPath: sock, idleMs: 100,
+      port: 0, token: "t", sockPath: sock, idleMs: 100,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await d.start();
@@ -98,11 +98,11 @@ describe("Daemon", () => {
   it("re-arms (does NOT exit) while an extension stays connected", async () => {
     const sock = sockIn();
     const d = new Daemon({
-      port: 39954, token: "t", sockPath: sock, idleMs: 100,
+      port: 0, token: "t", sockPath: sock, idleMs: 100,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await d.start();
-    await fakeExtension(39954, "https://acme.bitrix24.ru");
+    await fakeExtension(d.port, "https://acme.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
 
     // Wait well past several idle intervals; the connected extension keeps it alive.
@@ -117,11 +117,11 @@ describe("Daemon", () => {
   it("survives a malformed UDS frame and keeps serving valid calls", async () => {
     const sock = sockIn();
     const d = new Daemon({
-      port: 39955, token: "t", sockPath: sock,
+      port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await d.start();
-    await fakeExtension(39955, "https://acme.bitrix24.ru");
+    await fakeExtension(d.port, "https://acme.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
 
     // Push garbage that fails JSON.parse in the data listener.
@@ -145,10 +145,11 @@ describe("Daemon", () => {
     // again and unlink B's live socket. It must not.
     const sock = sockIn();
     const a = new Daemon({
-      port: 39956, token: "t", sockPath: sock, idleMs: 60,
+      port: 0, token: "t", sockPath: sock, idleMs: 60,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await a.start();
+    const port = a.port;
     // Open + immediately close a client so a close handler is queued behind stop().
     await new Promise<void>((resolve, reject) => {
       const c = connect(sock);
@@ -158,7 +159,7 @@ describe("Daemon", () => {
     await a.stop();
 
     const b = new Daemon({
-      port: 39956, token: "t", sockPath: sock, idleMs: 5_000,
+      port, token: "t", sockPath: sock, idleMs: 5_000,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await b.start();
@@ -169,7 +170,7 @@ describe("Daemon", () => {
     expect(existsSync(sock)).toBe(true);
 
     // And B still routes.
-    await fakeExtension(39956, "https://acme.bitrix24.ru");
+    await fakeExtension(b.port, "https://acme.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
     const res = await udsCall(sock, { type: "call", id: "7", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
     expect(res).toEqual({ type: "result", id: "7", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
@@ -182,14 +183,22 @@ describe("Daemon", () => {
     // rollback must release that port so a fresh Bridge can bind it.
     const sock = sockIn();
     mkdirSync(sock); // now sockPath is a dir → unlinkSync/listen fails
+
+    // Reserve an ephemeral port up front so the assertion below proves THIS
+    // specific port was released, not just that some free port exists.
+    const reserving = new Bridge({ port: 0, token: "t", allowedOrigins: [] });
+    await reserving.start();
+    const port = reserving.port;
+    await reserving.stop();
+
     const d = new Daemon({
-      port: 39957, token: "t", sockPath: sock,
+      port, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await expect(d.start()).rejects.toThrow();
 
     // The port must be free again — a fresh Bridge binds it without EADDRINUSE.
-    const probe = new Bridge({ port: 39957, token: "t", allowedOrigins: [] });
+    const probe = new Bridge({ port, token: "t", allowedOrigins: [] });
     await probe.start();
     await probe.stop();
   });
@@ -197,7 +206,7 @@ describe("Daemon", () => {
   it("replies to {type:'status'} with each configured portal and its connected flag", async () => {
     const sock = sockIn();
     const d = new Daemon({
-      port: 39958, token: "t", sockPath: sock,
+      port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
     });
     await d.start();
@@ -210,5 +219,29 @@ describe("Daemon", () => {
     } finally {
       await d.stop();
     }
+  });
+
+  it("exposes the actual bound port and gracefully shuts down on a {type:'shutdown'} frame", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    expect(d.port).toBeGreaterThan(0);
+
+    const res = await udsCall(sock, { type: "shutdown", id: "1" });
+    expect(res).toEqual({ type: "result", id: "1", ok: true, data: { stopping: true } });
+
+    // The reply must flush BEFORE the daemon actually stops; give it a beat, then
+    // confirm the socket is gone (daemon torn itself down).
+    await new Promise((r) => setTimeout(r, 500));
+    await expect(
+      new Promise((resolve, reject) => {
+        const c = connect(sock);
+        c.on("connect", () => { c.end(); resolve(undefined); });
+        c.on("error", reject);
+      }),
+    ).rejects.toThrow();
   });
 });

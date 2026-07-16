@@ -10,7 +10,7 @@ export type SetupCommand =
   | { kind: "set-default"; alias: string }
   | { kind: "update-extension" };
 
-export type SetupEffect = "write-config" | "materialize-extension" | "reload-extension" | "reopen-tab";
+export type SetupEffect = "write-config" | "materialize-extension" | "reload-extension" | "reopen-tab" | "restart-daemon";
 
 export interface SetupResult {
   config: ServerConfig;
@@ -22,27 +22,27 @@ export function applySetupCommand(config: ServerConfig, command: SetupCommand): 
   switch (command.kind) {
     case "add-portal": {
       const next = addPortal(config, command);
-      return { config: next, effects: ["write-config", "materialize-extension", "reload-extension"], message: `added portal "${command.alias}" → ${command.origin}` };
+      return { config: next, effects: ["write-config", "materialize-extension", "reload-extension", "restart-daemon"], message: `added portal "${command.alias}" → ${command.origin}` };
     }
     case "remove-portal": {
       const next = removePortal(config, command.alias);
-      return { config: next, effects: ["write-config", "materialize-extension", "reload-extension"], message: `removed portal "${command.alias}"` };
+      return { config: next, effects: ["write-config", "materialize-extension", "reload-extension", "restart-daemon"], message: `removed portal "${command.alias}"` };
     }
     case "edit-portal": {
       const next = editPortal(config, command);
-      return { config: next, effects: ["write-config", "materialize-extension", "reload-extension"], message: `updated portal "${command.alias}" → ${command.origin}` };
+      return { config: next, effects: ["write-config", "materialize-extension", "reload-extension", "restart-daemon"], message: `updated portal "${command.alias}" → ${command.origin}` };
     }
     case "set-port": {
       const next = setPort(config, command.port);
-      return { config: next, effects: ["write-config", "materialize-extension", "reopen-tab"], message: `port set to ${command.port}` };
+      return { config: next, effects: ["write-config", "materialize-extension", "reopen-tab", "restart-daemon"], message: `port set to ${command.port}` };
     }
     case "rotate-token": {
       const next = rotateToken(config);
-      return { config: next, effects: ["write-config", "materialize-extension", "reopen-tab"], message: "token rotated" };
+      return { config: next, effects: ["write-config", "materialize-extension", "reopen-tab", "restart-daemon"], message: "token rotated" };
     }
     case "set-default": {
       const next = setDefaultPortal(config, command.alias);
-      return { config: next, effects: ["write-config"], message: `default portal set to "${command.alias}"` };
+      return { config: next, effects: ["write-config", "restart-daemon"], message: `default portal set to "${command.alias}"` };
     }
     case "update-extension": {
       return { config, effects: ["materialize-extension", "reload-extension"], message: "extension refreshed from the installed package" };

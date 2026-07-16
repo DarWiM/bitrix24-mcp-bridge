@@ -16,6 +16,7 @@ import {
 import type { ServerConfig } from "./config-core.js";
 import { applySetupCommand } from "./setup-reducer.js";
 import type { SetupCommand, SetupResult } from "./setup-reducer.js";
+import { requestDaemonShutdown } from "../bridge/uds-client.js";
 
 type Ask = (query: string) => Promise<string>;
 
@@ -77,7 +78,7 @@ function printState(config: ServerConfig, paths: RuntimePaths): void {
   }
 }
 
-function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupResult): void {
+export async function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupResult): Promise<void> {
   if (result.effects.includes("write-config")) writeServerConfig(paths.home, config);
   if (result.effects.includes("materialize-extension")) {
     materializeExtension({ home: paths.home, config, staticExtDir: staticExtDir() });
@@ -88,6 +89,14 @@ function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupRe
   }
   if (result.effects.includes("reopen-tab")) {
     stdout.write("  → Reopen the portal tab to pick up the new port/token.\n");
+  }
+  if (result.effects.includes("restart-daemon")) {
+    const stopped = await requestDaemonShutdown(paths.sock);
+    stdout.write(
+      stopped
+        ? "\n  → daemon остановлен; поднимется с новым config при следующем вызове агента.\n"
+        : "\n  → работающий daemon не найден; новый config подхватится при следующем вызове агента.\n",
+    );
   }
 }
 
@@ -179,7 +188,7 @@ async function editMenu(ask: Ask, paths: RuntimePaths, initial: ServerConfig): P
       continue;
     }
     current = result.config;
-    applyEffects(paths, current, result);
+    await applyEffects(paths, current, result);
   }
 }
 

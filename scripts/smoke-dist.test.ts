@@ -10,7 +10,6 @@ describe("dist bundle smoke (node --daemon)", () => {
   it("boots the bundled daemon on plain node from a foreign cwd", async () => {
     execFileSync("node", ["scripts/build-dist.mjs"], { cwd: ROOT, stdio: "pipe" });
     const home = mkdtempSync(resolve(tmpdir(), "br24smoke-"));
-    const port = "39972"; // test-only free port
     const child = spawn("node", [resolve(ROOT, "dist/cli.js"), "--daemon"], {
       cwd: tmpdir(), // foreign cwd — proves no cwd-relative path assumptions
       env: {
@@ -18,7 +17,7 @@ describe("dist bundle smoke (node --daemon)", () => {
         BITRIX24_MCP_BRIDGE_HOME: home,
         BITRIX_MCP_TOKEN: "smoke-token",
         BITRIX_ORIGIN: "https://smoke.bitrix24.ru",
-        BITRIX_MCP_PORT: port,
+        BITRIX_MCP_PORT: "0", // ephemeral — avoids collisions with other tests/processes
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -28,11 +27,15 @@ describe("dist bundle smoke (node --daemon)", () => {
         let buf = "";
         child.stderr.on("data", (c) => {
           buf += c.toString();
-          if (buf.includes("[daemon] ws :")) { clearTimeout(t); res(buf); }
+          if (/\[daemon\] ws :\d+/.test(buf)) { clearTimeout(t); res(buf); }
         });
         child.on("exit", (code) => { clearTimeout(t); rej(new Error(`daemon exited early (${code}): ${buf}`)); });
       });
-      expect(line).toContain(`[daemon] ws :${port}`);
+      const match = line.match(/\[daemon\] ws :(\d+)/);
+      expect(match).not.toBeNull();
+      const port = Number(match![1]);
+      expect(Number.isInteger(port)).toBe(true);
+      expect(port).toBeGreaterThan(0);
     } finally {
       child.kill("SIGTERM");
     }
