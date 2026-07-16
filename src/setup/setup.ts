@@ -78,7 +78,7 @@ function printState(config: ServerConfig, paths: RuntimePaths): void {
   }
 }
 
-async function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupResult): Promise<void> {
+export async function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupResult): Promise<void> {
   if (result.effects.includes("write-config")) writeServerConfig(paths.home, config);
   if (result.effects.includes("materialize-extension")) {
     materializeExtension({ home: paths.home, config, staticExtDir: staticExtDir() });
@@ -91,8 +91,12 @@ async function applyEffects(paths: RuntimePaths, config: ServerConfig, result: S
     stdout.write("  → Reopen the portal tab to pick up the new port/token.\n");
   }
   if (result.effects.includes("restart-daemon")) {
-    await requestDaemonShutdown(paths.sock);
-    stdout.write("\n  → daemon остановлен; поднимется с новым config при следующем вызове агента.\n");
+    const stopped = await requestDaemonShutdown(paths.sock);
+    stdout.write(
+      stopped
+        ? "\n  → daemon остановлен; поднимется с новым config при следующем вызове агента.\n"
+        : "\n  → работающий daemon не найден; новый config подхватится при следующем вызове агента.\n",
+    );
   }
 }
 
