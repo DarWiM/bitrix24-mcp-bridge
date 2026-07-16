@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
+import type { AddressInfo } from "node:net";
 import type { CallResult, CallTarget, CapturedEntry, ExtensionMessage } from "./protocol.js";
 
 interface BridgeOptions {
@@ -18,6 +19,11 @@ export class Bridge {
   private pending = new Map<string, Pending>();
 
   constructor(private opts: BridgeOptions) {}
+
+  get port(): number {
+    const addr = this.wss?.address();
+    return addr && typeof addr === "object" ? (addr as AddressInfo).port : this.opts.port;
+  }
 
   start(): Promise<void> {
     return new Promise((resolve, reject) => {

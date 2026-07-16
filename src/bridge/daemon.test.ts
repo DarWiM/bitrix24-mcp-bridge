@@ -211,4 +211,28 @@ describe("Daemon", () => {
       await d.stop();
     }
   });
+
+  it("exposes the actual bound port and gracefully shuts down on a {type:'shutdown'} frame", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    expect(d.port).toBeGreaterThan(0);
+
+    const res = await udsCall(sock, { type: "shutdown", id: "1" });
+    expect(res).toEqual({ type: "result", id: "1", ok: true, data: { stopping: true } });
+
+    // The reply must flush BEFORE the daemon actually stops; give it a beat, then
+    // confirm the socket is gone (daemon torn itself down).
+    await new Promise((r) => setTimeout(r, 500));
+    await expect(
+      new Promise((resolve, reject) => {
+        const c = connect(sock);
+        c.on("connect", () => { c.end(); resolve(undefined); });
+        c.on("error", reject);
+      }),
+    ).rejects.toThrow();
+  });
 });

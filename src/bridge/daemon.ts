@@ -35,6 +35,10 @@ export class Daemon {
     });
   }
 
+  get port(): number {
+    return this.bridge.port;
+  }
+
   async start(): Promise<void> {
     // The WS port is the atomic singleton gate: bind() either succeeds (we are the
     // sole daemon) or fails with EADDRINUSE. No probe→unlink TOCTOU on the socket file.
@@ -67,7 +71,7 @@ export class Daemon {
     }
     this.ownsSocket = true;
     this.armIdle();
-    console.error(`[daemon] ws :${this.opts.port} + uds ${sockPath}`);
+    console.error(`[daemon] ws :${this.bridge.port} + uds ${sockPath}`);
   }
 
   private onClient(sock: Socket) {
@@ -79,6 +83,11 @@ export class Daemon {
       // every portal). Drop the bad data for this connection and keep serving.
       try {
         for (const msg of dec.push(chunk) as any[]) {
+          if (msg?.type === "shutdown") {
+            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { stopping: true } }));
+            setImmediate(() => this.stop());   // let the reply flush before tearing sockets down
+            continue;
+          }
           if (msg?.type === "status") {
             const connected = this.bridge.connectedOrigins();
             const portals: PortalConnection[] = Object.entries(this.opts.portals).map(
