@@ -4,7 +4,7 @@
   "name": "bitrix24-mcp-bridge",
   "version": "0.1.0",
   "bin": { "bitrix24-bridge": "dist/cli.js" },
-  "files": ["dist", "extension/dist", "extension/src/manifest.template.json", "docs/api-notes.md", "actions.example.json"],
+  "files": ["dist", "extension/dist", "docs/api-notes.md", "actions.example.json"],
   "scripts": {
     "test": "bun test",
     "dev": "bun run src/index.ts",
