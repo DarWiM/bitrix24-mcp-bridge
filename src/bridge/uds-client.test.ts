@@ -45,4 +45,20 @@ describe("UdsClient", () => {
     client.close();
     await started!.stop();
   });
+
+  it("status() round-trips a status request and resolves with the portals payload", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const d = new Daemon({ port: 39962, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
+    await d.start();
+
+    const client = new UdsClient({ sockPath: sock });
+    await client.connect();
+    try {
+      const res = await client.status();
+      expect(res.portals).toEqual([{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: false }]);
+    } finally {
+      client.close();
+      await d.stop();
+    }
+  });
 });

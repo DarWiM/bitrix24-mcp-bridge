@@ -21,7 +21,7 @@ describe("bitrix_call", () => {
   it("resolves name via catalog and forwards a merged CallTarget to sink", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ tasks: [] });
-    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default"] });
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog, defaultPortal: "default", portals: ["default"] });
 
     const res = await handlers["bitrix_call"]({ name: "tasks.list", params: { PAGE: 1 } });
 
@@ -37,7 +37,7 @@ describe("bitrix_call", () => {
   it("forwards an explicit portal instead of the default", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ tasks: [] });
-    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default", "other"] });
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog, defaultPortal: "default", portals: ["default", "other"] });
 
     await handlers["bitrix_call"]({ name: "tasks.list", portal: "other" });
 
@@ -47,7 +47,7 @@ describe("bitrix_call", () => {
   it("returns an error result for a disallowed name", async () => {
     const { server, handlers } = fakeServer();
     const call = mock();
-    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default"] });
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog, defaultPortal: "default", portals: ["default"] });
     const res = await handlers["bitrix_call"]({ name: "crm.deal.list" });
     expect(res.isError).toBe(true);
     expect(call).not.toHaveBeenCalled();

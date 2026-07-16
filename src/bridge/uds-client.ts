@@ -1,9 +1,11 @@
 import { connect, Socket } from "node:net";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallTarget, CallResult } from "./protocol.js";
+import type { PortalConnection } from "./daemon.js";
 
 export interface CallSink {
   call(portal: string | undefined, target: CallTarget): Promise<unknown>;
+  status(): Promise<{ portals: PortalConnection[] }>;
 }
 
 interface UdsClientOptions {
@@ -59,6 +61,16 @@ export class UdsClient implements CallSink {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       this.sock!.write(encodeFrame({ type: "call", id, portal, ...target }));
+    });
+  }
+
+  status(): Promise<{ portals: PortalConnection[] }> {
+    if (!this.sock) return Promise.reject(new Error("client not connected"));
+    const id = String(++this.seq);
+    return new Promise((resolve, reject) => {
+      // reuse the same pending map; daemon replies with a normal result envelope
+      this.pending.set(id, { resolve: (v) => resolve(v as { portals: PortalConnection[] }), reject });
+      this.sock!.write(encodeFrame({ type: "status", id }));
     });
   }
 
