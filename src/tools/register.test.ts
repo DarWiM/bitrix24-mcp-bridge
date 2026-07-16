@@ -21,7 +21,7 @@ describe("bitrix_call", () => {
   it("resolves name via catalog and forwards a merged CallTarget to sink", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ tasks: [] });
-    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default"] });
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog, defaultPortal: "default", portals: ["default"] });
 
     const res = await handlers["bitrix_call"]({ name: "tasks.list", params: { PAGE: 1 } });
 
@@ -37,7 +37,7 @@ describe("bitrix_call", () => {
   it("forwards an explicit portal instead of the default", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ tasks: [] });
-    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default", "other"] });
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog, defaultPortal: "default", portals: ["default", "other"] });
 
     await handlers["bitrix_call"]({ name: "tasks.list", portal: "other" });
 
@@ -47,9 +47,30 @@ describe("bitrix_call", () => {
   it("returns an error result for a disallowed name", async () => {
     const { server, handlers } = fakeServer();
     const call = mock();
-    registerTools(server, { sink: { call }, catalog, defaultPortal: "default", portals: ["default"] });
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog, defaultPortal: "default", portals: ["default"] });
     const res = await handlers["bitrix_call"]({ name: "crm.deal.list" });
     expect(res.isError).toBe(true);
     expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("bitrix_status tool", () => {
+  it("reports the default portal and each portal's connection state", async () => {
+    const { server, handlers } = fakeServer();
+    const sink = {
+      call: mock(),
+      status: async () => ({ portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true }] }),
+    };
+    registerTools(server, { sink, catalog, defaultPortal: "acme", portals: ["acme"] });
+
+    const handler = handlers["bitrix_status"];
+    expect(handler).toBeDefined();
+    const res = await handler({});
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload).toEqual({
+      configured: true,
+      defaultPortal: "acme",
+      portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true }],
+    });
   });
 });

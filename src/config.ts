@@ -79,3 +79,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     allowedOrigins: Object.values(portals).map((p) => p.origin),
   };
 }
+
+export type ConfigState =
+  | { status: "configured"; config: Config }
+  | { status: "unconfigured"; reason: string };
+
+// Non-throwing wrapper for callers that must keep running when config is absent
+// (the stdio MCP client): unconfigured is a normal, guidable state, not an error.
+export function loadConfigState(env: NodeJS.ProcessEnv): ConfigState {
+  try {
+    return { status: "configured", config: loadConfig(env) };
+  } catch (e) {
+    return { status: "unconfigured", reason: e instanceof Error ? e.message : String(e) };
+  }
+}

@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, loadConfigState } from "./config.js";
 import { runtimePaths } from "./paths.js";
 import { Daemon } from "./bridge/daemon.js";
 import { UdsClient } from "./bridge/uds-client.js";
 import { loadCatalog } from "./catalog/catalog.js";
 import { registerTools } from "./tools/register.js";
+import { registerUnconfiguredTools } from "./tools/unconfigured.js";
 
 async function runDaemon() {
   const cfg = loadConfig(process.env);
@@ -19,7 +20,22 @@ async function runDaemon() {
 }
 
 async function runMcpClient() {
-  const cfg = loadConfig(process.env);
+  const state = loadConfigState(process.env);
+  const server = new McpServer({ name: "bitrix24-bridge", version: "0.1.0" });
+
+  if (state.status === "unconfigured") {
+    registerUnconfiguredTools(server, state.reason);
+    await server.connect(new StdioServerTransport());
+    console.error(`[mcp] bitrix24-bridge unconfigured — run \`bitrix24-bridge setup\` (${state.reason})`);
+    const shutdown = () => process.exit(0);
+    process.stdin.on("end", shutdown);
+    process.stdin.on("close", shutdown);
+    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", shutdown);
+    return;
+  }
+
+  const cfg = state.config;
   const sockPath = runtimePaths(process.env).sock;
 
   const client = new UdsClient({
@@ -34,7 +50,6 @@ async function runMcpClient() {
   await client.connect();
 
   const catalog = loadCatalog(cfg.catalogPath);
-  const server = new McpServer({ name: "bitrix24-bridge", version: "0.1.0" });
   registerTools(server, { sink: client, catalog, defaultPortal: cfg.defaultPortal, portals: Object.keys(cfg.portals) });
   await server.connect(new StdioServerTransport());
   console.error("[mcp] bitrix24-bridge client running on stdio");

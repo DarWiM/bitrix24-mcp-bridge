@@ -32,6 +32,24 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
   );
 
   server.registerTool(
+    "bitrix_status",
+    {
+      description:
+        "Диагностика моста (read-only): какие порталы сконфигурированы и какие сейчас подключены " +
+        "(открыта залогиненная вкладка с расширением). Помогает понять, почему вызов не проходит.",
+      inputSchema: {},
+    },
+    async () => {
+      try {
+        const { portals } = await deps.sink.status();
+        return ok({ configured: true, defaultPortal: deps.defaultPortal, portals });
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
+
+  server.registerTool(
     "bitrix_call",
     {
       description:

@@ -3,7 +3,7 @@ import { isAbsolute } from "node:path";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "./config.js";
+import { loadConfig, loadConfigState } from "./config.js";
 
 describe("loadConfig", () => {
   it("builds a single-portal config from env (dev)", () => {
@@ -74,5 +74,27 @@ describe("loadConfig", () => {
       },
     }));
     expect(() => loadConfig({ BITRIX24_MCP_BRIDGE_HOME: home })).toThrow(/origin/i);
+  });
+});
+
+describe("loadConfigState", () => {
+  it("returns configured state when a token + portal are present", () => {
+    const state = loadConfigState({
+      BITRIX_MCP_TOKEN: "secret",
+      BITRIX_ORIGIN: "https://portal.bitrix24.ru",
+      BITRIX24_MCP_BRIDGE_HOME: "/tmp/br24-does-not-exist",
+    });
+    expect(state.status).toBe("configured");
+    if (state.status === "configured") {
+      expect(state.config.token).toBe("secret");
+    }
+  });
+
+  it("returns unconfigured state (not a throw) when nothing is configured", () => {
+    const state = loadConfigState({ BITRIX24_MCP_BRIDGE_HOME: "/tmp/br24-does-not-exist" });
+    expect(state.status).toBe("unconfigured");
+    if (state.status === "unconfigured") {
+      expect(state.reason).toMatch(/token|portal|origin/i);
+    }
   });
 });
