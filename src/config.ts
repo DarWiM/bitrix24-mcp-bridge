@@ -19,7 +19,7 @@ export interface Config {
 }
 
 // src/config.ts → ".." is the repo root; independent of process.cwd().
-const PROJECT_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+export const PROJECT_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 
 const stripSlash = (o: string) => o.replace(/\/+$/, "");
 
