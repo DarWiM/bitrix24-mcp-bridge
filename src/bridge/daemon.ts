@@ -154,6 +154,9 @@ export class Daemon {
     // Only unlink the socket if we won the singleton race and created it. A daemon that
     // lost at bridge.start() must never delete the winner's live socket.
     try { if (this.ownsSocket && existsSync(this.opts.sockPath)) unlinkSync(this.opts.sockPath); } catch {}
-    await this.bridge.stop();
+    // stop() must never reject: it is called both awaited AND floating (the idle timer and the
+    // shutdown-ack write callback do `void this.stop()`). A rejection from bridge teardown would
+    // otherwise surface as an unhandled promise rejection.
+    try { await this.bridge.stop(); } catch {}
   }
 }
