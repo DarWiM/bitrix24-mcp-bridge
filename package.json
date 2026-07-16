@@ -1,14 +1,17 @@
 {
   "type": "module",
   "name": "bitrix24-mcp-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP bridge server for Bitrix24 — exposes REST API access, tasks, projects and chat to MCP clients like Claude Code.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/DarWiM/bitrix24-mcp-bridge.git"
   },
-  "bin": { "bitrix24-bridge": "dist/cli.js" },
+  "bin": {
+    "bitrix24-bridge": "dist/cli.js",
+    "bitrix24-mcp-bridge": "dist/cli.js"
+  },
   "files": ["dist", "extension/dist", "docs/api-notes.md", "actions.example.json"],
   "scripts": {
     "test": "bun test",
