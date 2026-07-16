@@ -50,6 +50,57 @@ describe("read/write server config", () => {
   });
 });
 
+import { mkdtempSync as _mkdtempSync, writeFileSync as _writeFileSync, mkdirSync as _mkdirSync, readFileSync as _readFileSync } from "node:fs";
+import { buildManifest, materializeExtension } from "./config-core.js";
+
+describe("buildManifest", () => {
+  it("lists exactly the configured origins for one portal", () => {
+    const cfg = createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" });
+    const m = buildManifest(cfg);
+    expect(m.manifest_version).toBe(3);
+    expect(m.host_permissions).toEqual(["https://acme.bitrix24.ru/*"]);
+    expect(m.content_scripts[0]).toEqual({ matches: ["https://acme.bitrix24.ru/*"], js: ["connector.js"], world: "ISOLATED", run_at: "document_idle" });
+    expect(m.content_scripts[1]).toEqual({ matches: ["https://acme.bitrix24.ru/*"], js: ["sessid-shim.js"], world: "MAIN", run_at: "document_idle" });
+    expect(m.web_accessible_resources).toEqual([{ resources: ["config.json"], matches: ["https://acme.bitrix24.ru/*"], use_dynamic_url: true }]);
+  });
+
+  it("lists both origins for two portals across matches/host_permissions/WAR", () => {
+    const two = addPortal(createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" }), { alias: "beta", origin: "https://beta.bitrix24.ru" });
+    const m = buildManifest(two);
+    const expected = ["https://acme.bitrix24.ru/*", "https://beta.bitrix24.ru/*"];
+    expect(m.host_permissions).toEqual(expected);
+    expect(m.content_scripts[0].matches).toEqual(expected);
+    expect(m.content_scripts[1].matches).toEqual(expected);
+    expect(m.web_accessible_resources[0].matches).toEqual(expected);
+  });
+});
+
+describe("materializeExtension", () => {
+  it("copies static bundles, writes extension config.json + manifest.json", () => {
+    const staticExtDir = _mkdtempSync(join(tmpdir(), "cc-static-"));
+    for (const name of ["connector.js", "sessid-shim.js", "connector.js.map", "sessid-shim.js.map"]) {
+      _writeFileSync(join(staticExtDir, name), `// ${name}\n`);
+    }
+    const home = _mkdtempSync(join(tmpdir(), "cc-home-"));
+    const cfg = createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" });
+    const dest = materializeExtension({ home, config: cfg, staticExtDir });
+
+    expect(dest).toBe(join(home, "extension"));
+    expect(_readFileSync(join(dest, "connector.js"), "utf8")).toBe("// connector.js\n");
+    expect(_readFileSync(join(dest, "sessid-shim.js.map"), "utf8")).toBe("// sessid-shim.js.map\n");
+    expect(JSON.parse(_readFileSync(join(dest, "config.json"), "utf8"))).toEqual({ token: cfg.token, port: cfg.port });
+    const manifest = JSON.parse(_readFileSync(join(dest, "manifest.json"), "utf8"));
+    expect(manifest.content_scripts[0].matches).toEqual(["https://acme.bitrix24.ru/*"]);
+  });
+
+  it("throws a helpful error when a static bundle is missing", () => {
+    const staticExtDir = _mkdtempSync(join(tmpdir(), "cc-empty-"));
+    const home = _mkdtempSync(join(tmpdir(), "cc-home2-"));
+    const cfg = createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" });
+    expect(() => materializeExtension({ home, config: cfg, staticExtDir })).toThrow(/bundle missing/i);
+  });
+});
+
 describe("mutators (immutable)", () => {
   const base = () => createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" });
 
