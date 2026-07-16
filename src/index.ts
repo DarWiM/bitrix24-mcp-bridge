@@ -8,6 +8,7 @@ import { UdsClient } from "./bridge/uds-client.js";
 import { loadCatalog } from "./catalog/catalog.js";
 import { registerTools } from "./tools/register.js";
 import { registerUnconfiguredTools } from "./tools/unconfigured.js";
+import { runSetup } from "./setup/setup.js";
 
 async function runDaemon() {
   const cfg = loadConfig(process.env);
@@ -61,5 +62,9 @@ async function runMcpClient() {
   process.on("SIGINT", shutdown);
 }
 
-const main = process.argv.includes("--daemon") ? runDaemon : runMcpClient;
+const main = process.argv.includes("setup")
+  ? () => runSetup(process.env)
+  : process.argv.includes("--daemon")
+    ? runDaemon
+    : runMcpClient;
 main().catch((e) => { console.error(e); process.exit(1); });

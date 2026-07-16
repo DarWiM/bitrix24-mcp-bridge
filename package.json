@@ -4,7 +4,7 @@
   "name": "bitrix24-mcp-bridge",
   "version": "0.1.0",
   "bin": { "bitrix24-bridge": "dist/cli.js" },
-  "files": ["dist", "docs/api-notes.md", "actions.example.json"],
+  "files": ["dist", "extension/dist", "docs/api-notes.md", "actions.example.json"],
   "scripts": {
     "test": "bun test",
     "dev": "bun run src/index.ts",
@@ -12,7 +12,8 @@
     "build:dist": "node scripts/build-dist.mjs",
     "build:ext": "bun run scripts/build-extension.ts",
     "build:ext:capture": "BITRIX_CAPTURE=1 bun run scripts/build-extension.ts",
-    "prepare": "node scripts/build-dist.mjs",
+    "build:ext:static": "node scripts/build-ext-static.mjs",
+    "prepare": "node scripts/build-dist.mjs && node scripts/build-ext-static.mjs",
     "capture": "bun run src/capture-server.ts",
     "catalog:draft": "bun run src/catalog/build-catalog.ts captured.har > actions.draft.json",
     "catalog": "bun run src/catalog/build-catalog.ts"
