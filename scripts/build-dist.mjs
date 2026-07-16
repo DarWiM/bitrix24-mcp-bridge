@@ -16,7 +16,12 @@ await build({
   format: "esm",
   target: "node18",
   outfile,
-  banner: { js: "#!/usr/bin/env node" },
+  banner: {
+    // esbuild's ESM output leaves bundled CJS deps' internal `require(...)` calls
+    // (e.g. ws requiring node builtins) as runtime calls to a global `require` that
+    // doesn't exist in Node ESM — polyfill it via createRequire (standard esbuild workaround).
+    js: "#!/usr/bin/env node\nimport { createRequire as __createRequire } from \"node:module\";\nconst require = __createRequire(import.meta.url);",
+  },
   define: {
     __API_NOTES__: JSON.stringify(apiNotes),
     __BITRIX_CAPTURE__: "false",
