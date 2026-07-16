@@ -8,7 +8,7 @@ describe("applySetupCommand", () => {
   it("add-portal → config gains the portal; reload-extension effect", () => {
     const r = applySetupCommand(base(), { kind: "add-portal", alias: "beta", origin: "https://beta.bitrix24.ru" });
     expect(r.config.portals.beta.origin).toBe("https://beta.bitrix24.ru");
-    expect(r.effects).toEqual(["write-config", "materialize-extension", "reload-extension"]);
+    expect(r.effects).toEqual(["write-config", "materialize-extension", "reload-extension", "restart-daemon"]);
     expect(r.message).toMatch(/beta/);
   });
 
@@ -17,27 +17,27 @@ describe("applySetupCommand", () => {
     const r = applySetupCommand(two, { kind: "remove-portal", alias: "acme" });
     expect(Object.keys(r.config.portals)).toEqual(["beta"]);
     expect(r.config.defaultPortal).toBe("beta");
-    expect(r.effects).toEqual(["write-config", "materialize-extension", "reload-extension"]);
+    expect(r.effects).toEqual(["write-config", "materialize-extension", "reload-extension", "restart-daemon"]);
   });
 
   it("set-port → reopen-tab (not reload) effect", () => {
     const r = applySetupCommand(base(), { kind: "set-port", port: 40000 });
     expect(r.config.port).toBe(40000);
-    expect(r.effects).toEqual(["write-config", "materialize-extension", "reopen-tab"]);
+    expect(r.effects).toEqual(["write-config", "materialize-extension", "reopen-tab", "restart-daemon"]);
   });
 
   it("rotate-token → new token, reopen-tab effect", () => {
     const before = base();
     const r = applySetupCommand(before, { kind: "rotate-token" });
     expect(r.config.token).not.toBe(before.token);
-    expect(r.effects).toEqual(["write-config", "materialize-extension", "reopen-tab"]);
+    expect(r.effects).toEqual(["write-config", "materialize-extension", "reopen-tab", "restart-daemon"]);
   });
 
   it("set-default → write-config only", () => {
     const two = addPortal(base(), { alias: "beta", origin: "https://beta.bitrix24.ru" });
     const r = applySetupCommand(two, { kind: "set-default", alias: "beta" });
     expect(r.config.defaultPortal).toBe("beta");
-    expect(r.effects).toEqual(["write-config"]);
+    expect(r.effects).toEqual(["write-config", "restart-daemon"]);
   });
 
   it("update-extension → materialize + reload, config unchanged", () => {
@@ -55,7 +55,7 @@ describe("applySetupCommand", () => {
     const r = applySetupCommand(base(), { kind: "edit-portal", alias: "acme", origin: "https://acme2.bitrix24.ru" });
     expect(r.config.portals.acme.origin).toBe("https://acme2.bitrix24.ru");
     expect(r.config.defaultPortal).toBe("acme");
-    expect(r.effects).toEqual(["write-config", "materialize-extension", "reload-extension"]);
+    expect(r.effects).toEqual(["write-config", "materialize-extension", "reload-extension", "restart-daemon"]);
     expect(r.message).toMatch(/acme/);
   });
 
