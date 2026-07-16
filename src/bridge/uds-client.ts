@@ -12,12 +12,15 @@ interface UdsClientOptions {
   sockPath: string;
   spawnDaemon?: () => void;
   connectTimeoutMs?: number;
+  requestTimeoutMs?: number;
 }
+
+const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
 
 export class UdsClient implements CallSink {
   private sock?: Socket;
   private dec = new FrameDecoder();
-  private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private seq = 0;
 
   constructor(private opts: UdsClientOptions) {}
@@ -40,11 +43,16 @@ export class UdsClient implements CallSink {
         const p = this.pending.get(msg.id);
         if (!p) continue;
         this.pending.delete(msg.id);
+        clearTimeout(p.timer);
         if (msg.ok) p.resolve(msg.data);
         else p.reject(new Error(msg.error ?? "call failed"));
       }
     });
-    this.sock.on("close", () => { for (const p of this.pending.values()) p.reject(new Error("daemon connection closed")); this.pending.clear(); });
+    this.sock.on("close", () => {
+      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error("daemon connection closed")); }
+      this.pending.clear();
+      this.sock = undefined;
+    });
   }
 
   private tryConnect(): Promise<Socket> {
@@ -55,23 +63,27 @@ export class UdsClient implements CallSink {
     });
   }
 
-  call(portal: string | undefined, target: CallTarget): Promise<unknown> {
-    if (!this.sock) return Promise.reject(new Error("client not connected"));
+  private request<T>(kind: "call" | "status", frame: Record<string, unknown>): Promise<T> {
+    const sock = this.sock;
+    if (!sock || sock.destroyed || !sock.writable) return Promise.reject(new Error("client not connected"));
     const id = String(++this.seq);
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.sock!.write(encodeFrame({ type: "call", id, portal, ...target }));
+    const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`daemon did not respond to ${kind} in ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      sock.write(encodeFrame({ id, ...frame }));
     });
   }
 
+  call(portal: string | undefined, target: CallTarget): Promise<unknown> {
+    return this.request("call", { type: "call", portal, ...target });
+  }
+
   status(): Promise<{ portals: PortalConnection[] }> {
-    if (!this.sock) return Promise.reject(new Error("client not connected"));
-    const id = String(++this.seq);
-    return new Promise((resolve, reject) => {
-      // reuse the same pending map; daemon replies with a normal result envelope
-      this.pending.set(id, { resolve: (v) => resolve(v as { portals: PortalConnection[] }), reject });
-      this.sock!.write(encodeFrame({ type: "status", id }));
-    });
+    return this.request<{ portals: PortalConnection[] }>("status", { type: "status" });
   }
 
   close(): void { this.sock?.destroy(); }
