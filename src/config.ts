@@ -66,8 +66,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     (file.defaultPortal && portals[file.defaultPortal] ? file.defaultPortal : undefined) ??
     (portals.default ? "default" : aliases[0]);
 
-  const rawCatalog = env.BITRIX_CATALOG?.trim() || file.catalog || "actions.json";
-  const catalogPath = isAbsolute(rawCatalog) ? rawCatalog : resolve(PROJECT_ROOT, rawCatalog);
+  const rawCatalog = env.BITRIX_CATALOG?.trim() || file.catalog;
+  const catalogPath = rawCatalog
+    ? (isAbsolute(rawCatalog) ? rawCatalog : resolve(PROJECT_ROOT, rawCatalog))
+    : runtimePaths(env).actionsJson;
 
   return {
     token,
