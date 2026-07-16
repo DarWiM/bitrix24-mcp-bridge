@@ -53,6 +53,9 @@ export class UdsClient implements CallSink {
       this.pending.clear();
       this.sock = undefined;
     });
+    // 'close' follows and rejects pending (above); swallow the error here to avoid
+    // an uncaught exception when the daemon dies abruptly (e.g. ECONNRESET).
+    this.sock.on("error", () => {});
   }
 
   private tryConnect(): Promise<Socket> {
@@ -87,4 +90,19 @@ export class UdsClient implements CallSink {
   }
 
   close(): void { this.sock?.destroy(); }
+}
+
+export function requestDaemonShutdown(sockPath: string, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const s = connect(sockPath);
+    let done = false;
+    const finish = (v: boolean) => { if (!done) { done = true; try { s.destroy(); } catch {} resolve(v); } };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    timer.unref?.();
+    const dec = new FrameDecoder();
+    s.once("connect", () => s.write(encodeFrame({ type: "shutdown", id: "shutdown" })));
+    s.on("data", (c) => { for (const _ of dec.push(c)) { clearTimeout(timer); finish(true); } });
+    s.on("close", () => { clearTimeout(timer); finish(true); });   // daemon stopped after acking
+    s.on("error", () => { clearTimeout(timer); finish(false); });  // ENOENT/ECONNREFUSED → no daemon
+  });
 }
