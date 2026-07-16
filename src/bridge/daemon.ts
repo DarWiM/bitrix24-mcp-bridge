@@ -84,8 +84,11 @@ export class Daemon {
       try {
         for (const msg of dec.push(chunk) as any[]) {
           if (msg?.type === "shutdown") {
-            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { stopping: true } }));
-            setImmediate(() => this.stop());   // let the reply flush before tearing sockets down
+            // setImmediate alone is not a flush barrier — sequence stop() on the WRITE
+            // CALLBACK so sock.destroy() can never race the buffered ack.
+            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { stopping: true } }), () => {
+              setImmediate(() => void this.stop());
+            });
             continue;
           }
           if (msg?.type === "status") {
