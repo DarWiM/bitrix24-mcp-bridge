@@ -53,3 +53,24 @@ describe("bitrix_call", () => {
     expect(call).not.toHaveBeenCalled();
   });
 });
+
+describe("bitrix_status tool", () => {
+  it("reports the default portal and each portal's connection state", async () => {
+    const { server, handlers } = fakeServer();
+    const sink = {
+      call: mock(),
+      status: async () => ({ portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true }] }),
+    };
+    registerTools(server, { sink, catalog, defaultPortal: "acme", portals: ["acme"] });
+
+    const handler = handlers["bitrix_status"];
+    expect(handler).toBeDefined();
+    const res = await handler({});
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload).toEqual({
+      configured: true,
+      defaultPortal: "acme",
+      portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true }],
+    });
+  });
+});
