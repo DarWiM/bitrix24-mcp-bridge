@@ -3,12 +3,16 @@
   "private": true,
   "name": "bitrix24-mcp-bridge",
   "version": "0.1.0",
+  "bin": { "bitrix24-bridge": "dist/cli.js" },
+  "files": ["dist", "docs/api-notes.md", "actions.example.json"],
   "scripts": {
     "test": "bun test",
     "dev": "bun run src/index.ts",
     "typecheck": "bunx tsc --noEmit && bunx tsc -p extension/tsconfig.json",
+    "build:dist": "node scripts/build-dist.mjs",
     "build:ext": "bun run scripts/build-extension.ts",
     "build:ext:capture": "BITRIX_CAPTURE=1 bun run scripts/build-extension.ts",
+    "prepare": "node scripts/build-dist.mjs",
     "capture": "bun run src/capture-server.ts",
     "catalog:draft": "bun run src/catalog/build-catalog.ts captured.har > actions.draft.json",
     "catalog": "bun run src/catalog/build-catalog.ts"
