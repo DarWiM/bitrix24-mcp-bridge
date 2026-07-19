@@ -111,6 +111,7 @@ describe("capture forwarding protocol", () => {
     action: "someAction",
     method: "POST",
     transport: "ajax",
+    bodyType: "form",
     sampleParams: { a: "1" },
   };
 

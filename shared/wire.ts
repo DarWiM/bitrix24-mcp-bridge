@@ -30,7 +30,8 @@ export interface CapturedEntry {
   action: string | null;
   method: "GET" | "POST";
   transport: "ajax" | "rest" | "other";
-  sampleParams: Record<string, string>;
+  bodyType: "json" | "form";
+  sampleParams: Record<string, unknown>;
 }
 
 export interface CaptureMessage {
