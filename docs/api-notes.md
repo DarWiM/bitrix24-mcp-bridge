@@ -20,7 +20,8 @@
   (`actions.json`). Тот же `params`-механизм.
 - **`bitrix_help`** — этот же гайд, отдаётся через MCP (инструмент + resource `bitrix://api-notes`),
   чтобы любой агент разобрался без доступа к репозиторию. Источник — **этот файл** (`docs/api-notes.md`).
-- Всё **read-only**: мутирующие вызовы (`…add/update/delete/set/complete/…`) отвергаются при загрузке каталога.
+- Каталог может включать мутирующие вызовы (`…add/update/delete/set/complete/…`); allowlist
+  (`actions.json`) — единственная граница, не режим чтения.
 
 ---
 
@@ -123,7 +124,7 @@ bitrix_chat_messages { "chatId": 485, "limit": 50, "beforeId": 1936695 }
 
 1. Сними реальные вызовы (`docs/reconnaissance.md` — авто-запись `bun run capture` или HAR).
 2. Определи транспорт и форму параметров по разделу 3 (сверься с `sampleParams` из черновика).
-3. Добавь запись в `actions.json` (только read-only). Проверь через `bitrix_call { name, params }`.
+3. Добавь запись в `actions.json` (может быть мутирующей — каталог это допускает). Проверь через `bitrix_call { name, params }`.
 4. Если удобно — оберни в типизированный инструмент в `src/tools/register.ts` (с дефолтным `select`).
 
 > `actions.json` — данные конкретного портала (gitignored). Этот файл (`api-notes.md`) — переносимые
