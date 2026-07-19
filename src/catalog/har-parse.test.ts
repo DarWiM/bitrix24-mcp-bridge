@@ -8,14 +8,19 @@ const har = JSON.parse(
 );
 
 describe("parseHar", () => {
-  it("captures JSON/session API calls, classifies transport, drops static", () => {
+  it("captures calls, classifies transport, reads JSON text bodies, drops static", () => {
     const calls = parseHar(har);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
 
-    const ajax = calls.find((c) => c.transport === "ajax")!;
-    expect(ajax.action).toBe("tasks.task.list");
+    const ajax = calls.find((c) => c.action === "tasks.task.list")!;
+    expect(ajax.transport).toBe("ajax");
     expect(ajax.endpoint).toBe("/bitrix/services/main/ajax.php");
     expect(ajax.params).toEqual({ "params[ORDER][ID]": "desc" }); // sessid stripped
+    expect(ajax.bodyType).toBe("form");
+
+    const json = calls.find((c) => c.action === "ui.entityselector.doSearch")!;
+    expect(json.bodyType).toBe("json");
+    expect(json.params).toEqual({ dialog: { id: "x" }, searchQuery: { query: "hi" } });
 
     const rest = calls.find((c) => c.transport === "rest")!;
     expect(rest.endpoint).toBe("/rest/im.recent.list");
@@ -53,6 +58,7 @@ describe("missingTriadDomains", () => {
         method: "POST",
         params: {},
         transport: "ajax",
+        bodyType: "form",
       },
     ];
     const missing = missingTriadDomains(calls);
@@ -68,6 +74,7 @@ describe("missingTriadDomains", () => {
         method: "POST",
         params: {},
         transport: "ajax",
+        bodyType: "form",
       },
       {
         endpoint: "/bitrix/services/main/ajax.php",
@@ -75,6 +82,7 @@ describe("missingTriadDomains", () => {
         method: "POST",
         params: {},
         transport: "ajax",
+        bodyType: "form",
       },
       {
         endpoint: "/rest/im.recent.list",
@@ -82,6 +90,7 @@ describe("missingTriadDomains", () => {
         method: "POST",
         params: {},
         transport: "rest",
+        bodyType: "form",
       },
     ];
     expect(missingTriadDomains(calls)).toEqual([]);
