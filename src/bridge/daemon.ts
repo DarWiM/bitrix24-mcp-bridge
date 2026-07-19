@@ -106,7 +106,7 @@ export class Daemon {
             reply({ type: "result", id: msg.id, ok: false, error: `unknown portal "${msg.portal}"` });
             continue;
           }
-          this.bridge.call(origin, { endpoint: msg.endpoint, action: msg.action, method: msg.method, params: msg.params })
+          this.bridge.call(origin, { endpoint: msg.endpoint, action: msg.action, method: msg.method, params: msg.params, bodyType: msg.bodyType })
             .then((data) => reply({ type: "result", id: msg.id, ok: true, data }))
             .catch((e) => reply({ type: "result", id: msg.id, ok: false, error: e instanceof Error ? e.message : String(e) }));
         }

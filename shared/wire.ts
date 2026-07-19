@@ -7,6 +7,7 @@ export interface CallTarget {
   action: string | null;
   method: "GET" | "POST";
   params: Record<string, unknown>;
+  bodyType?: "json" | "form";
 }
 
 export interface AuthMessage {

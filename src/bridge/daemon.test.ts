@@ -203,6 +203,31 @@ describe("Daemon", () => {
     await probe.stop();
   });
 
+  it("forwards bodyType from the UDS call frame to the extension", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+    });
+    await d.start();
+    // fake extension that echoes the received bodyType back in the result
+    const ws = new WebSocket(`ws://127.0.0.1:${d.port}`, { headers: { origin: "https://acme.bitrix24.ru" } });
+    await new Promise((r) => ws.on("open", r));
+    ws.send(JSON.stringify({ type: "auth", token: "t" }));
+    ws.on("message", (raw) => {
+      const m = JSON.parse(raw.toString());
+      if (m.type === "call") ws.send(JSON.stringify({ type: "result", id: m.id, ok: true, data: { bodyType: m.bodyType } }));
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const res = await udsCall(sock, {
+      type: "call", id: "1", portal: "acme",
+      endpoint: "/x", action: null, method: "POST", params: {}, bodyType: "json",
+    });
+    expect(res.data).toEqual({ bodyType: "json" });
+    await d.stop();
+  });
+
   it("replies to {type:'status'} with each configured portal and its connected flag", async () => {
     const sock = sockIn();
     const d = new Daemon({
