@@ -60,11 +60,12 @@ function freshSessid(): Promise<string> {
 async function handleCall(req: CallRequest): Promise<InterpretResult> {
   const sessid = await freshSessid();
   if (!sessid) return { ok: false, error: "session context not ready — open a normal Bitrix24 portal tab" }; // G5
-  const { url, body } = buildRequest(ORIGIN, req, sessid);
+  const { url, body, contentType } = buildRequest(ORIGIN, req, sessid);
   const init: RequestInit = {
     method: req.method,
     credentials: "include",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    // sessid rides the CSRF header for all ajax (v2 form + json); form bodies also carry it inline.
+    headers: { "Content-Type": contentType, "X-Bitrix-Csrf-Token": sessid },
   };
   let finalUrl = url;
   if (req.method === "POST") init.body = body;
