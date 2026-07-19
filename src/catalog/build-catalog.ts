@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { parseHar, missingTriadDomains } from "./har-parse.js";
+import { newAccumulator, addSample, toObject } from "./draft.js";
 
 const path = process.argv[2];
 if (!path) {
@@ -8,22 +9,11 @@ if (!path) {
 }
 const calls = parseHar(JSON.parse(readFileSync(path, "utf8")));
 
-// Coverage warnings — did we exercise each triad domain? (G1: no silent misses)
+// Coverage warnings — did we exercise each triad domain? (no silent misses)
 for (const domain of missingTriadDomains(calls)) {
-  console.error(
-    `⚠ nothing captured for "${domain}" — exercise it in the browser and re-capture`
-  );
+  console.error(`⚠ nothing captured for "${domain}" — exercise it in the browser and re-capture`);
 }
 
-const draft: Record<string, unknown> = {};
-for (const c of calls) {
-  const key = c.action ?? c.endpoint;
-  draft[key] = {
-    endpoint: c.endpoint,
-    action: c.action,
-    method: c.method,
-    transport: c.transport,
-    sampleParams: c.params,
-  };
-}
-process.stdout.write(JSON.stringify(draft, null, 2) + "\n");
+const acc = newAccumulator();
+for (const c of calls) addSample(acc, c, c.params);
+process.stdout.write(JSON.stringify(toObject(acc), null, 2) + "\n");

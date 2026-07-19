@@ -16,8 +16,20 @@ describe("toCaptured", () => {
       action: "tasks.task.list",
       method: "POST",
       transport: "ajax",
+      bodyType: "form",
       sampleParams: { "filter[ID]": "5" },
     });
+  });
+
+  it("captures a JSON body as nested params with bodyType json", () => {
+    const c = toCaptured(
+      "https://example.bitrix24.ru/bitrix/services/main/ajax.php?action=ui.entityselector.doSearch",
+      "POST",
+      JSON.stringify({ dialog: { id: "x" }, searchQuery: { query: "hi" } }),
+      BASE,
+    );
+    expect(c?.bodyType).toBe("json");
+    expect(c?.sampleParams).toEqual({ dialog: { id: "x" }, searchQuery: { query: "hi" } });
   });
 
   it("captures a /rest/*.json endpoint as transport rest with null action", () => {
@@ -25,6 +37,7 @@ describe("toCaptured", () => {
     expect(c?.transport).toBe("rest");
     expect(c?.action).toBeNull();
     expect(c?.endpoint).toBe("/rest/im.recent.list.json");
+    expect(c?.bodyType).toBe("form");
     expect(c?.sampleParams).toEqual({ LIMIT: "50" });
   });
 

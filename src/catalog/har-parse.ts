@@ -1,9 +1,12 @@
+import { parseBody } from "../../shared/body-params.js";
+
 export interface CapturedCall {
   endpoint: string;
   action: string | null;
   method: "GET" | "POST";
-  params: Record<string, string>;
+  params: Record<string, unknown>;
   transport: "ajax" | "rest" | "other";
+  bodyType: "json" | "form";
 }
 
 interface HarPostParam {
@@ -15,7 +18,7 @@ interface HarEntry {
   request: {
     method: string;
     url: string;
-    postData?: { params?: HarPostParam[] };
+    postData?: { params?: HarPostParam[]; text?: string };
   };
   response?: { content?: { mimeType?: string } };
 }
@@ -65,18 +68,26 @@ export function parseHar(har: {
   const calls: CapturedCall[] = [];
   for (const entry of har.log?.entries ?? []) {
     const url = new URL(entry.request.url);
-    const params: Record<string, string> = {};
+    let params: Record<string, unknown> = {};
+    let bodyType: "json" | "form" = "form";
     let hasSessid = false;
-    for (const p of entry.request.postData?.params ?? []) {
-      if (p.name === "sessid") {
-        hasSessid = true;
-        continue;
-      }
-      params[p.name] = p.value;
+    const pd = entry.request.postData;
+    const flat: Record<string, string> = {};
+    for (const p of pd?.params ?? []) {
+      if (p.name === "sessid") { hasSessid = true; continue; }
+      flat[p.name] = p.value;
+    }
+    params = flat;
+    // JSON bodies (e.g. ui.entityselector.*) arrive as postData.text with no .params —
+    // parse them so the payload isn't silently dropped.
+    if (Object.keys(params).length === 0 && pd?.text) {
+      const parsed = parseBody(pd.text);
+      params = parsed.params;
+      bodyType = parsed.bodyType;
+      if ("sessid" in params) { hasSessid = true; delete params.sessid; }
     }
     const mime = entry.response?.content?.mimeType ?? "";
-    const looksApi =
-      url.pathname.includes("ajax.php") || url.pathname.includes("/rest/");
+    const looksApi = url.pathname.includes("ajax.php") || url.pathname.includes("/rest/");
     const isJson = mime.includes("application/json");
     if (!hasSessid && !looksApi && !isJson) continue; // static / non-API — drop
     calls.push({
@@ -85,6 +96,7 @@ export function parseHar(har: {
       method: entry.request.method === "GET" ? "GET" : "POST",
       params,
       transport: classify(url.pathname),
+      bodyType,
     });
   }
   return calls;

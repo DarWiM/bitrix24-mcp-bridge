@@ -7,6 +7,7 @@ export interface CallTarget {
   action: string | null;
   method: "GET" | "POST";
   params: Record<string, unknown>;
+  bodyType?: "json" | "form";
 }
 
 export interface AuthMessage {
@@ -30,7 +31,8 @@ export interface CapturedEntry {
   action: string | null;
   method: "GET" | "POST";
   transport: "ajax" | "rest" | "other";
-  sampleParams: Record<string, string>;
+  bodyType: "json" | "form";
+  sampleParams: Record<string, unknown>;
 }
 
 export interface CaptureMessage {

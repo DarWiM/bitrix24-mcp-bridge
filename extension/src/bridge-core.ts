@@ -28,11 +28,16 @@ export function buildRequest(
   origin: string,
   req: CallRequest,
   sessid: string,
-): { url: string; body: string } {
+): { url: string; body: string; contentType: string } {
   const q = req.action ? `?action=${encodeURIComponent(req.action)}` : "";
   const url = `${origin}${req.endpoint}${q}`;
+  // JSON actions (ui.entityselector.*, tasks.v2.*) send a JSON body; sessid rides the
+  // X-Bitrix-Csrf-Token header (added by the caller), never the body.
+  if (req.bodyType === "json") {
+    return { url, body: JSON.stringify(req.params), contentType: "application/json" };
+  }
   const body = encodeForm({ ...req.params, sessid });
-  return { url, body };
+  return { url, body, contentType: "application/x-www-form-urlencoded" };
 }
 
 // Bitrix wraps errors in HTTP 200: { status:"error", errors:[{code}] } or { error, error_description }.

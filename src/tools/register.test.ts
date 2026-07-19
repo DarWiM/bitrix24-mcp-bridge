@@ -11,7 +11,7 @@ function fakeServer() {
 const catalog: Catalog = {
   resolve: (name) => {
     if (name === "tasks.list")
-      return { endpoint: "/bitrix/services/main/ajax.php", action: "tasks.task.list", method: "POST", params: { FILTER: {} } };
+      return { endpoint: "/bitrix/services/main/ajax.php", action: "tasks.task.list", method: "POST", params: { FILTER: {} }, bodyType: "form" };
     throw new Error(`call "${name}" is not allowed`);
   },
   names: () => ["tasks.list"],
@@ -30,6 +30,7 @@ describe("bitrix_call", () => {
       action: "tasks.task.list",
       method: "POST",
       params: { FILTER: {}, PAGE: 1 },
+      bodyType: "form",
     });
     expect(res.content[0].text).toContain("tasks");
   });

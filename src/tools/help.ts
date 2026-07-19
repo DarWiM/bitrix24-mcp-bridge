@@ -13,7 +13,7 @@ function load(): string {
   try {
     return readFileSync(API_NOTES, "utf8");
   } catch {
-    return "Bitrix24 MCP — read-only tasks/projects/chats. See docs/api-notes.md (not found at runtime).";
+    return "Bitrix24 MCP — tasks/projects/chats over your live session; bitrix_call runs curated catalog calls incl. mutating. See docs/api-notes.md (not found at runtime).";
   }
 }
 

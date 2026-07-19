@@ -10,15 +10,28 @@ describe("encodeForm", () => {
 });
 
 describe("buildRequest", () => {
-  it("targets ajax.php with action and injects a fresh sessid", () => {
-    const { url, body } = buildRequest(
+  it("targets ajax.php with action, form body, sessid inline, urlencoded contentType", () => {
+    const { url, body, contentType } = buildRequest(
       "https://portal.bitrix24.ru",
       { type: "call", id: "1", endpoint: "/bitrix/services/main/ajax.php", action: "tasks.task.list", method: "POST", params: { PAGE: 2 } },
       "fresh-sessid",
     );
     expect(url).toBe("https://portal.bitrix24.ru/bitrix/services/main/ajax.php?action=tasks.task.list");
+    expect(contentType).toBe("application/x-www-form-urlencoded");
     expect(new URLSearchParams(body).get("sessid")).toBe("fresh-sessid");
     expect(new URLSearchParams(body).get("PAGE")).toBe("2");
+  });
+
+  it("sends a JSON body for bodyType json, sessid NOT in the body, json contentType", () => {
+    const { url, body, contentType } = buildRequest(
+      "https://portal.bitrix24.ru",
+      { type: "call", id: "9", endpoint: "/bitrix/services/main/ajax.php", action: "ui.entityselector.load", method: "POST", params: { dialog: { id: "x" } }, bodyType: "json" },
+      "fresh-sessid",
+    );
+    expect(url).toBe("https://portal.bitrix24.ru/bitrix/services/main/ajax.php?action=ui.entityselector.load");
+    expect(contentType).toBe("application/json");
+    expect(JSON.parse(body)).toEqual({ dialog: { id: "x" } });
+    expect(body).not.toContain("fresh-sessid");
   });
 
   it("reproduces a rest endpoint without an action query", () => {

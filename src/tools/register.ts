@@ -53,8 +53,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     "bitrix_call",
     {
       description:
-        "Вызвать разрешённый Bitrix24-вызов по имени из каталога (read-only). " +
-        "Данные актуальны на момент запроса. Имена: " + deps.catalog.names().join(", "),
+        "Вызвать разрешённый Bitrix24-вызов по имени из каталога (включая мутирующие — каталог " +
+        "является allowlist). Данные актуальны на момент запроса. Имена: " + deps.catalog.names().join(", "),
       inputSchema: { name: z.string(), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
     },
     async ({ name, params, portal }: { name: string; params?: Record<string, unknown>; portal?: string }) => {

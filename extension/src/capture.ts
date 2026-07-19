@@ -3,6 +3,7 @@
 // bridge as { type: "capture", call }. The recorder (src/capture-server.ts) writes the draft.
 
 import type { CapturedEntry } from "./bridge-core.ts";
+import { parseBody } from "../../shared/body-params.ts";
 
 const STATIC_EXT = /\.(js|css|png|svg|jpe?g|gif|woff2?|ico|map)$/i;
 
@@ -12,18 +13,19 @@ function classify(pathname: string): CapturedEntry["transport"] {
   return "other";
 }
 
-function bodyToParams(body: unknown): Record<string, string> {
-  const out: Record<string, string> = {};
-  let pairs: Iterable<[string, unknown]> | null = null;
-  if (typeof body === "string") pairs = new URLSearchParams(body) as unknown as Iterable<[string, unknown]>;
-  else if (body instanceof URLSearchParams) pairs = body as unknown as Iterable<[string, unknown]>;
-  else if (typeof FormData !== "undefined" && body instanceof FormData) pairs = body as unknown as Iterable<[string, unknown]>;
-  if (!pairs) return out;
-  for (const [k, v] of pairs) {
-    if (k === "sessid") continue; // never record the rotating CSRF token
-    out[k] = String(v);
+function bodyToParams(body: unknown): { params: Record<string, unknown>; bodyType: "json" | "form" } {
+  if (typeof body === "string") {
+    const { params, bodyType } = parseBody(body);
+    delete params.sessid; // never record the rotating CSRF token
+    return { params, bodyType };
   }
-  return out;
+  const params: Record<string, string> = {};
+  if (body instanceof URLSearchParams) {
+    for (const [k, v] of body) { if (k !== "sessid") params[k] = v; }
+  } else if (typeof FormData !== "undefined" && body instanceof FormData) {
+    for (const [k, v] of body) { if (k !== "sessid") params[k] = String(v); }
+  }
+  return { params, bodyType: "form" };
 }
 
 /**
@@ -46,12 +48,14 @@ export function toCaptured(
   if (STATIC_EXT.test(url.pathname)) return null; // drop assets
   const looksApi = url.pathname.includes("ajax.php") || url.pathname.includes("/rest/");
   if (!looksApi) return null;
+  const { params, bodyType } = bodyToParams(body);
   return {
     endpoint: url.pathname,
     action: url.searchParams.get("action"),
     method: method.toUpperCase() === "GET" ? "GET" : "POST",
     transport: classify(url.pathname),
-    sampleParams: bodyToParams(body),
+    bodyType,
+    sampleParams: params,
   };
 }
 
