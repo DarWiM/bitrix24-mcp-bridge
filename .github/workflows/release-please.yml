@@ -1,0 +1,48 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  # Maintains a release PR from conventional commits; on merge it tags + creates
+  # the GitHub Release and sets release_created=true.
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # Runs only when a release was just created; builds, tests and publishes to npm.
+  publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC: npm Trusted Publisher auth + provenance (no NPM_TOKEN needed)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun test
+      # OIDC trusted publishing needs npm >= 11.5.1 (node 20 ships npm 10.x).
+      - run: npm install -g npm@latest
+      # `npm publish` auto-runs `prepare` (build-dist + build-ext-static) before packing.
+      # Auth is via OIDC (Trusted Publisher); provenance is attached automatically.
+      - run: npm publish --provenance --access public
