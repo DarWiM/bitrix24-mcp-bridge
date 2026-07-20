@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.2.0...bitrix24-mcp-bridge-v0.2.1) (2026-07-20)
+
+
+### Miscellaneous Chores
+
+* release 0.2.1 ([4c53f91](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/4c53f91238f3721bc69197d0929b98c6b04b8c57))
+
 ## [0.2.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.1.1...bitrix24-mcp-bridge-v0.2.0) (2026-07-20)
 
 
