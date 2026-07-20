@@ -112,6 +112,12 @@ export function setDefaultPortal(config: ServerConfig, alias: string): ServerCon
 
 // --- extension materialization ---
 
+// Injected by build:dist (esbuild define) from package.json — single source of truth for
+// the extension version. Falls back for non-bundled dev/test runs (maintainers rebuild via
+// build:ext for a real load anyway).
+declare const __EXT_VERSION__: string | undefined;
+const EXT_VERSION = typeof __EXT_VERSION__ === "string" ? __EXT_VERSION__ : "0.0.0-dev";
+
 export interface ExtensionManifest {
   manifest_version: 3;
   name: string;
@@ -136,7 +142,7 @@ export function buildManifest(config: ServerConfig): ExtensionManifest {
   return {
     manifest_version: 3,
     name: "Bitrix24 MCP Bridge",
-    version: "0.1.0",
+    version: EXT_VERSION,
     description: "Отдаёт текущую сессию Bitrix24 локальному MCP-серверу (чтение и выполнение вызовов из каталога).",
     host_permissions: matches,
     content_scripts: [

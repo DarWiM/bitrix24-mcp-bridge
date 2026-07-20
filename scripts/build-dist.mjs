@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const apiNotes = readFileSync(join(ROOT, "docs/api-notes.md"), "utf8");
+const version = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
 const outfile = join(ROOT, "dist/cli.js");
 
 await build({
@@ -24,6 +25,7 @@ await build({
   },
   define: {
     __API_NOTES__: JSON.stringify(apiNotes),
+    __EXT_VERSION__: JSON.stringify(version),
     __BITRIX_CAPTURE__: "false",
   },
   logLevel: "info",
