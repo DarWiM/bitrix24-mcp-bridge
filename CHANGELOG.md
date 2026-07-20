@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.2.1...bitrix24-mcp-bridge-v0.3.0) (2026-07-20)
+
+
+### Features
+
+* **tools:** add bitrix_entity_chat — resolve a linked object's chat by entity ([07f843e](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/07f843ec0be7d9335dd6e565dea5bdbe17d6fd98))
+* **tools:** sharpen agent guidance for chats, task filtering, task-chat resolver ([c4a5079](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/c4a5079585376347f26f0bc7a03076ecaa1b2151))
+
+
+### Bug Fixes
+
+* **build:ext:** resolve token/origin/port via shared config, no dev token ([0752625](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/0752625b427becd6cf3414193647c804c1cd0b92))
+* **extension:** sync manifest version with package.json ([7ab6310](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/7ab6310c13d62cf7f3f026a4bf8e47cdd27cc9be))
+
 ## [0.2.1](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.2.0...bitrix24-mcp-bridge-v0.2.1) (2026-07-20)
 
 
