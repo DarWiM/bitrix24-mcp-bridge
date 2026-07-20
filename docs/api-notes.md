@@ -81,7 +81,7 @@ JSON-тела несут sessid **только** в заголовке. Отве
 | `socialnetwork.api.workgroup.get` | form | **обёрнуто**: `params[groupId]`, `params[select][]` | — |
 | `/rest/im.recent.list.json` | form (rest) | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY`, … | `LIMIT` |
 | `im.v2.Chat.load` | form | плоско: `dialogId`\|`chatId`, `messageLimit` | — |
-| `im.v2.Chat.Message.list` | form | плоско: `chatId`, `limit`, `filter[lastId]` | `filter[lastId]` + `limit` |
+| `im.v2.Chat.Message.list` | form | плоско: `chatId`, `limit` | только последняя страница — назад **не листает**, используй `.tail` |
 | `im.v2.Chat.Message.tail` | form | плоско: `chatId`, `limit`, `filter[lastId]`, `order[id]` | **см. раздел 6** |
 | `im.v2.Chat.Message.read` | form | плоско: `chatId`, `ids[]`, `actionUuid` | — (мутирующий) |
 | `ui.entityselector.load` | **json** | `{"dialog": {entities,preselectedItems,…}}` | — |
@@ -102,7 +102,7 @@ JSON-тела несут sessid **только** в заголовке. Отве
 | `projects.get` | `socialnetwork.api.workgroup.get` | form | `params[groupId]`, `params[select][]` |
 | `chats.recent` | `/rest/im.recent.list.json` | form | `LIMIT`, `UNREAD_ONLY`, `SKIP_OPENLINES` |
 | `chat.load` | `im.v2.Chat.load` | form | `dialogId`\|`chatId`, `messageLimit` |
-| `chat.messages` | `im.v2.Chat.Message.list` | form | `chatId`, `limit`, `filter[lastId]` |
+| `chat.messages` | `im.v2.Chat.Message.list` | form | `chatId`, `limit` (последние; вглубь — `chat.messages.tail`) |
 | `chat.messages.tail` | `im.v2.Chat.Message.tail` | form | `chatId`, `filter[lastId]`, `order[id]`, `limit` |
 | `chat.message.read` | `im.v2.Chat.Message.read` | form | `chatId`, `ids[0]`, `actionUuid` |
 | `entityselector.load` | `ui.entityselector.load` | json | `dialog` (объект) |
@@ -222,6 +222,22 @@ bitrix_entity_selector { "dialog": { "id": "im-chat-search", "context": "IM_CHAT
 // резолв пользователей
 bitrix_entity_selector { "dialog": { "entities": [ { "id": "user" } ] } }
 ```
+
+### 6.4. Обсуждение (комментарии) конкретной задачи — пока НЕ отреверсено
+
+Лента комментариев задачи — это **не** im-чат из `bitrix_chats_recent` (его там нет) и **не** `tasks.task.*`.
+В этом портале её обслуживает провайдер **im.v2 «comments»** (браузер грузит бандл
+`/bitrix/js/im/v2/provider/service/comments/…`). Конкретный ajax-вызов в текущем `captured.har`
+**отсутствует** — при съёмке комментарии не открывали, поэтому имя action неизвестно (не выдумывай).
+
+Чтобы добавить доступ:
+1. `bun run capture`, открой задачу в браузере и **пролистай её комментарии** (это дёрнет провайдер).
+2. `bun run catalog:draft` → в `actions.draft.json` появится реальный `action` (ожидаемо `im.v2.*`
+   для комментариев); перенеси его в `actions.json` с нужным `bodyType`.
+3. По желанию оберни в `bitrix_task_comments` и опиши здесь.
+
+> `task.commentitem.getlist` (legacy REST) в allowlist **не входит** и не проверен — не полагайся на
+> него без реверса.
 
 ---
 
