@@ -97,6 +97,7 @@ daemon после любой правки, затрагивающей конфи
 | *Люди / поиск* | |
 | `bitrix_user_get` | карточка пользователя |
 | `bitrix_entity_selector` / `bitrix_entity_search` | загрузка селектора / текстовый поиск сущностей |
+| `bitrix_entity_chat` | chatId чата связанного объекта (задача/группа/CRM) через `im.chat.get` |
 
 `bitrix_help` — единственный источник конвенций params (select/filter/order/пагинация,
 имена полей). Он отдаёт `docs/api-notes.md`, так что любому агенту не нужен доступ к репозиторию.

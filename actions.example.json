@@ -23,6 +23,7 @@
   "chat.dialogId": { "action": "im.v2.Chat.getDialogId", "method": "POST" },
   "chat.read.all": { "action": "im.v2.Chat.readAll", "method": "POST" },
   "im.user.get": { "endpoint": "/rest/im.user.get.json", "method": "POST" },
+  "im.chat.get": { "endpoint": "/rest/im.chat.get.json", "method": "POST" },
 
   "task.subtasks": { "action": "tasks.v2.Task.Relation.Child.list", "method": "POST", "bodyType": "json" },
   "task.related": { "action": "tasks.v2.Task.Relation.Related.list", "method": "POST", "bodyType": "json" }
