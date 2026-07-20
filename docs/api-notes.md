@@ -263,18 +263,44 @@ bitrix_recent_load  { "section": "tasksTask" }
 bitrix_user_get     { "userId": 11 }           // резолв authorId → имя
 ```
 
-### 6.4. Легаси-комментарии задачи
+### 6.4. Легаси-комментарии задачи (HTML-поддомен — пока НЕ в мосте)
 
-В этом портале обсуждение задачи — это im.v2-чат (см. §6.2), и его достаточно, чтобы прочитать
-переписку. Отдельного «легаси» ajax-метода комментариев (`task.commentitem.*` / forum) в текущем
-захвате (`actions.draft.json`) **НЕТ** — значит либо он не сработал при съёмке, либо комментарии
-задачи в этом портале целиком отданы im.v2-чату. Если понадобится именно legacy-лента:
+У задач два независимых фида обсуждения:
+- **im.v2-чат** — структурный JSON, читается уже сейчас (§6.2); обычно этого достаточно.
+- **Форумные легаси-комментарии** — рендерятся как **HTML** в side-slider'е. Это отдельный
+  «HTML-поддомен» внутреннего API, который **текущий мост не поддерживает** (блокеры ниже).
 
-1. `bun run capture`, открой задачу и **пролистай её комментарии**.
-2. Проверь `actions.draft.json` — если появится новый `action` (напр. `task.commentitem.getlist`),
-   перенеси его в `actions.json` с нужным `bodyType` и опиши здесь.
+**Как грузятся (реверс).** Первая страница — GET HTML-страницы iframe (сервер тут же минтит подпись):
 
-> `task.commentitem.getlist` (legacy REST) в allowlist пока **не входит** и захватом не подтверждён.
+```
+GET /task/comments/<taskId>/?IFRAME=Y&IFRAME_TYPE=SIDE_SLIDER   → HTML (комментарии + signedParameters)
+```
+
+Листание — POST компонентного ajax (форма, отдаёт HTML-фрагмент):
+
+```
+POST /bitrix/services/main/ajax.php?mode=class&c=bitrix:forum.comments&action=navigateComment
+form: AJAX_POST=Y, ENTITY_XML_ID=TASK_<taskId>, taskId=<taskId>, MODE=LIST,
+      FILTER[<ID]=<курсор: id, ДО которого грузить старые>, PAGEN_1=1,
+      signedParameters=<подписанный blob>, IFRAME=Y, IFRAME_TYPE=SIDE_SLIDER
+headers: bx-ajax: true, x-bitrix-site-id: s1 (плюс обычный X-Bitrix-Csrf-Token)
+```
+
+`signedParameters` — base64 PHP-массива + HMAC-подпись сервера; кодирует
+`FORUM_ID, ENTITY_TYPE=TK, ENTITY_ID=<taskId>, ENTITY_XML_ID=TASK_<taskId>, …`. **Подделать нельзя** —
+берётся из HTML первой страницы.
+
+**Почему пока не в каталоге (3 блокера):**
+1. Мост парсит ответ только как JSON (`extension/src/connector.ts` → `resp.json()`) — HTML бросит исключение.
+2. Path-параметр в URL (`/task/comments/<taskId>/`) — записи каталога статичны, шаблонов пути нет.
+3. `signedParameters` + заголовки `bx-ajax`/`x-bitrix-site-id` — нужен предварительный GET HTML-страницы.
+
+**Чтобы подключить** (будущая работа): научить мост возвращать text/HTML при не-JSON ответе и
+поддержать path-шаблон эндпоинта; затем обёртка `bitrix_task_comments { taskId }` (GET первой
+страницы), а листание — через `navigateComment` с выпарсенным `signedParameters`.
+
+> Тот же HTML-поддомен: **детали звонка** — `GET /call/detail/<callId>?IFRAME=Y&IFRAME_TYPE=SIDE_SLIDER`
+> (отдаёт HTML). Ограничения идентичны.
 
 ---
 
