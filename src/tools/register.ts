@@ -152,7 +152,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       catalogName: "task.v2.get",
       description: "Карточка задачи через v2-подсистему scrum-борда (JSON API). taskId — id задачи.",
       inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
-      toParams: (a) => ({ task: a.taskId }),
+      // v2 wraps the id: { task: { id } } — verified by capture (not the flat { task } older notes claimed)
+      toParams: (a) => ({ task: { id: a.taskId } }),
     },
     {
       tool: "bitrix_task_scrum_info",
@@ -173,7 +174,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       catalogName: "task.views.count",
       description: "Сколько пользователей просмотрели задачу (JSON API).",
       inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
-      toParams: (a) => ({ task: a.taskId }),
+      toParams: (a) => ({ task: { id: a.taskId } }),
     },
     {
       tool: "bitrix_chat_load",
@@ -241,6 +242,111 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         'Найти ПОЛЬЗОВАТЕЛЯ: entities:[{id:"user"}]. Свободный текстовый запрос сверь реверсом.',
       inputSchema: { dialog: z.record(z.unknown()), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: (a) => ({ dialog: a.dialog }),
+    },
+    {
+      tool: "bitrix_recent_load",
+      catalogName: "recent.load",
+      description:
+        "Недавние чаты по СЕКЦИИ (im.v2). section: \"tasksTask\" — ЧАТЫ ЗАДАЧ (обсуждения задач; в " +
+        "bitrix_chats_recent их нет), \"collab\"/\"collabDefault\" — коллабы, иначе обычные диалоги. " +
+        "Отдаёт chatId/dialogId — дальше открывай bitrix_chat_load. Листать глубже — bitrix_recent_tail.",
+      inputSchema: {
+        section: z.string().optional(),
+        limit: z.number().optional(),
+        unread: z.boolean().optional(),
+        parentId: z.union([z.number(), z.string()]).optional(),
+        params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
+      },
+      toParams: (a) => ({
+        limit: a.limit ?? 50,
+        ...(a.section !== undefined ? { "filter[recentSection]": a.section } : {}),
+        ...(a.parentId !== undefined ? { "filter[parentId]": a.parentId } : {}),
+        "filter[unread]": a.unread ? "Y" : "N",
+      }),
+    },
+    {
+      tool: "bitrix_recent_tail",
+      catalogName: "recent.tail",
+      description:
+        "Листать недавние ВГЛУБЬ (im.v2). lastMessageDate — ISO-дата последнего элемента текущей " +
+        "страницы (курсор); section — как в bitrix_recent_load. Повторяй, сдвигая lastMessageDate.",
+      inputSchema: {
+        lastMessageDate: z.string(),
+        section: z.string().optional(),
+        limit: z.number().optional(),
+        unread: z.boolean().optional(),
+        params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
+      },
+      toParams: (a) => ({
+        limit: a.limit ?? 50,
+        "filter[lastMessageDate]": a.lastMessageDate,
+        ...(a.section !== undefined ? { "filter[recentSection]": a.section } : {}),
+        "filter[unread]": a.unread ? "Y" : "N",
+      }),
+    },
+    {
+      tool: "bitrix_entity_search",
+      catalogName: "entityselector.search",
+      description:
+        "ТЕКСТОВЫЙ поиск сущностей через entityselector (JSON API). query — строка поиска. По умолчанию " +
+        "ищет чаты/диалоги (context IM_CHAT_SEARCH); section: \"tasksTask\" — среди чатов задач, " +
+        "\"default\" — среди всех. Для иных сущностей передай свой dialog целиком.",
+      inputSchema: {
+        query: z.string(),
+        section: z.string().optional(),
+        dialog: z.record(z.unknown()).optional(),
+        params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
+      },
+      toParams: (a) => ({
+        dialog: a.dialog ?? {
+          id: "im-chat-search",
+          context: "IM_CHAT_SEARCH",
+          entities: [{ id: "im-recent-v2", dynamicLoad: true, dynamicSearch: true, options: { searchRecentSection: a.section ?? "default", parentId: 0 } }],
+          preselectedItems: [],
+          clearUnavailableItems: false,
+        },
+        searchQuery: { query: a.query, queryWords: [a.query] },
+      }),
+    },
+    {
+      tool: "bitrix_chat_get_dialog_id",
+      catalogName: "chat.dialogId",
+      description:
+        "Резолв dialogId чата по externalId (im.v2). Напр. externalId \"sg\"+<groupId> → dialogId " +
+        "чата соцгруппы/проекта. Затем открывай через bitrix_chat_load.",
+      inputSchema: { externalId: z.string(), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ externalId: a.externalId }),
+    },
+    {
+      tool: "bitrix_chat_read_all",
+      catalogName: "chat.read.all",
+      description: "⚠ МУТИРУЮЩИЙ. Пометить ВСЕ чаты прочитанными (im.v2). Параметров нет.",
+      inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: () => ({}),
+    },
+    {
+      tool: "bitrix_task_subtasks",
+      catalogName: "task.subtasks",
+      description: "Подзадачи задачи (v2 relations, JSON API). taskId — id родителя. navigation.size управляет страницей.",
+      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ taskId: a.taskId, withIds: true, withCompleted: true, withSubTasks: true, navigation: { size: 10 } }),
+    },
+    {
+      tool: "bitrix_task_related",
+      catalogName: "task.related",
+      description: "Связанные задачи (v2 relations, JSON API). taskId — id задачи.",
+      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ taskId: a.taskId, withIds: true, withCompleted: true, withSubTasks: true, navigation: { size: 10 } }),
+    },
+    {
+      tool: "bitrix_user_get",
+      catalogName: "im.user.get",
+      description: "Карточка пользователя мессенджера по id (имя, аватар, статус). userId — id пользователя.",
+      inputSchema: { userId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ ID: a.userId }),
     },
   ];
 

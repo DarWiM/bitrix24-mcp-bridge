@@ -15,5 +15,15 @@
   "chat.messages.tail": { "action": "im.v2.Chat.Message.tail", "method": "POST", "params": { "order[id]": "DESC", "limit": 25 } },
   "chat.message.read": { "action": "im.v2.Chat.Message.read", "method": "POST" },
 
-  "entityselector.load": { "action": "ui.entityselector.load", "method": "POST", "bodyType": "json" }
+  "entityselector.load": { "action": "ui.entityselector.load", "method": "POST", "bodyType": "json" },
+  "entityselector.search": { "action": "ui.entityselector.doSearch", "method": "POST", "bodyType": "json" },
+
+  "recent.load": { "action": "im.v2.Recent.load", "method": "POST" },
+  "recent.tail": { "action": "im.v2.Recent.tail", "method": "POST" },
+  "chat.dialogId": { "action": "im.v2.Chat.getDialogId", "method": "POST" },
+  "chat.read.all": { "action": "im.v2.Chat.readAll", "method": "POST" },
+  "im.user.get": { "endpoint": "/rest/im.user.get.json", "method": "POST" },
+
+  "task.subtasks": { "action": "tasks.v2.Task.Relation.Child.list", "method": "POST", "bodyType": "json" },
+  "task.related": { "action": "tasks.v2.Task.Relation.Related.list", "method": "POST", "bodyType": "json" }
 }

@@ -19,12 +19,16 @@
   опциональный `params`, он мержится **последним** и перекрывает дефолты. Регистрируются только те,
   чьё имя есть в каталоге (`actions.json`); иначе инструмент пропускается. Текущий набор:
   - Задачи: `bitrix_tasks_list`, `bitrix_task_get`, `bitrix_task_get_v2` (v2/JSON),
-    `bitrix_task_scrum_info`, `bitrix_task_files`, `bitrix_task_views_count`.
+    `bitrix_task_scrum_info`, `bitrix_task_files`, `bitrix_task_views_count`,
+    `bitrix_task_subtasks` (подзадачи), `bitrix_task_related` (связанные).
   - Проекты: `bitrix_projects_list`, `bitrix_project_get`.
-  - Чаты: `bitrix_chats_recent`, `bitrix_chat_load` (открыть по `dialogId`/`chatId`),
-    `bitrix_chat_messages`, `bitrix_chat_history` (листать вглубь по `beforeId`),
-    `bitrix_chat_mark_read` (⚠ мутирующий).
-  - Поиск сущностей: `bitrix_entity_selector` (users/projects/чаты через `ui.entityselector`).
+  - Чаты: `bitrix_chats_recent`, `bitrix_recent_load` (недавние по секции — в т.ч. `tasksTask` =
+    чаты задач), `bitrix_recent_tail` (листать недавние вглубь), `bitrix_chat_load` (открыть по
+    `dialogId`/`chatId`), `bitrix_chat_messages`, `bitrix_chat_history` (листать вглубь по `beforeId`),
+    `bitrix_chat_get_dialog_id` (dialogId по externalId), `bitrix_chat_mark_read` (⚠ мутирующий),
+    `bitrix_chat_read_all` (⚠ мутирующий).
+  - Люди/поиск: `bitrix_user_get` (карточка юзера), `bitrix_entity_selector` (загрузка селектора),
+    `bitrix_entity_search` (текстовый поиск чатов/сущностей через `ui.entityselector.doSearch`).
 
   Любое имя каталога всегда доступно и напрямую через `bitrix_call { name, params }`.
 - **`bitrix_help`** — этот же гайд, отдаётся через MCP (инструмент + resource `bitrix://api-notes`).
@@ -58,7 +62,7 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
   PHP-стилем (`filter[STATUS]=2`, `select[0]=ID`). Объект в `params` рекурсивно разворачивается в такие
   ключи. Классические `tasks.task.*`, мессенджер `im.v2.*`, REST — всё это форма.
 - **`bodyType: "json"`** — тело уходит как `JSON.stringify(params)` с `Content-Type: application/json`.
-  Так работают **`tasks.v2.*`** (напр. `tasks.v2.Task.get` ждёт `{"task":N}`) и `ui.entityselector.*`.
+  Так работают **`tasks.v2.*`** (напр. `tasks.v2.Task.get` ждёт `{"task":{"id":N}}`) и `ui.entityselector.*`.
   `params` при этом сохраняет вложенную структуру как есть (не разворачивается в bracket-ключи).
 
 > Историческая заметка: раньше мост умел только форму, и `tasks.v2.*` были непригодны. Теперь
@@ -73,18 +77,26 @@ JSON-тела несут sessid **только** в заголовке. Отве
 |---|---|---|---|
 | `tasks.task.list` | form | **верхний уровень**: `select[]`, `filter{}`, `order{}` | `start` (сдвиг, шаг 50) |
 | `tasks.task.get` | form | верхний уровень: `taskId`, `select[]` | — |
-| `tasks.v2.Task.get` | **json** | `{"task": N}` | — |
+| `tasks.v2.Task.get` | **json** | `{"task": {"id": N}}` | — |
 | `tasks.v2.Scrum.getTaskInfo` | **json** | `{"taskId": N}` | — |
 | `tasks.v2.File.listObjects` | **json** | `{"ids": [N,…]}` | — |
-| `tasks.v2.Task.View.User.count` | **json** | `{"task": N}` | — |
+| `tasks.v2.Task.View.User.count` | **json** | `{"task": {"id": N}}` | — |
+| `tasks.v2.Task.Relation.Child.list` | **json** | `{"taskId": N, "withIds":true, "navigation":{"size":N}}` | `navigation` |
+| `tasks.v2.Task.Relation.Related.list` | **json** | `{"taskId": N, …}` (как Child) | `navigation` |
 | `socialnetwork.api.workgroup.list` | form | **верхний уровень**: `select[]`, `order{}`, `filter{}` | (nav — не проверено) |
 | `socialnetwork.api.workgroup.get` | form | **обёрнуто**: `params[groupId]`, `params[select][]` | — |
 | `/rest/im.recent.list.json` | form (rest) | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY`, … | `LIMIT` |
+| `/rest/im.user.get.json` | form (rest) | плоско: `ID` | — |
+| `im.v2.Recent.load` | form | плоско: `limit`, `filter[recentSection]`, `filter[unread]`, `filter[parentId]` | `im.v2.Recent.tail` |
+| `im.v2.Recent.tail` | form | плоско: `limit`, `filter[lastMessageDate]` (курсор), `filter[recentSection]` | `filter[lastMessageDate]` |
 | `im.v2.Chat.load` | form | плоско: `dialogId`\|`chatId`, `messageLimit` | — |
+| `im.v2.Chat.getDialogId` | form | плоско: `externalId` | — |
 | `im.v2.Chat.Message.list` | form | плоско: `chatId`, `limit` | только последняя страница — назад **не листает**, используй `.tail` |
 | `im.v2.Chat.Message.tail` | form | плоско: `chatId`, `limit`, `filter[lastId]`, `order[id]` | **см. раздел 6** |
 | `im.v2.Chat.Message.read` | form | плоско: `chatId`, `ids[]`, `actionUuid` | — (мутирующий) |
+| `im.v2.Chat.readAll` | form | без параметров | — (мутирующий) |
 | `ui.entityselector.load` | **json** | `{"dialog": {entities,preselectedItems,…}}` | — |
+| `ui.entityselector.doSearch` | **json** | `{"dialog": {…}, "searchQuery": {"query": "...", "queryWords": ["..."]}}` | — |
 
 ---
 
@@ -94,18 +106,26 @@ JSON-тела несут sessid **только** в заголовке. Отве
 |---|---|---|---|
 | `tasks.list` | `tasks.task.list` | form | `filter{RESPONSIBLE_ID,REAL_STATUS,GROUP_ID,…}`, `select[]`, `order{}`, `start` |
 | `task.get` | `tasks.task.get` | form | `taskId`, `select[]` |
-| `task.v2.get` | `tasks.v2.Task.get` | json | `task` (id задачи) |
+| `task.v2.get` | `tasks.v2.Task.get` | json | `task.id` (id задачи) |
 | `task.scrum.info` | `tasks.v2.Scrum.getTaskInfo` | json | `taskId` |
 | `task.files` | `tasks.v2.File.listObjects` | json | `ids` (массив id) |
-| `task.views.count` | `tasks.v2.Task.View.User.count` | json | `task` (id задачи) |
+| `task.views.count` | `tasks.v2.Task.View.User.count` | json | `task.id` (id задачи) |
+| `task.subtasks` | `tasks.v2.Task.Relation.Child.list` | json | `taskId`, `navigation{size}` |
+| `task.related` | `tasks.v2.Task.Relation.Related.list` | json | `taskId`, `navigation{size}` |
 | `projects.list` | `socialnetwork.api.workgroup.list` | form | `select[]`, `order{}`, `filter{}` |
 | `projects.get` | `socialnetwork.api.workgroup.get` | form | `params[groupId]`, `params[select][]` |
 | `chats.recent` | `/rest/im.recent.list.json` | form | `LIMIT`, `UNREAD_ONLY`, `SKIP_OPENLINES` |
+| `recent.load` | `im.v2.Recent.load` | form | `filter[recentSection]` (`tasksTask`/`collab`/…), `limit`, `filter[unread]` |
+| `recent.tail` | `im.v2.Recent.tail` | form | `filter[lastMessageDate]`, `filter[recentSection]`, `limit` |
 | `chat.load` | `im.v2.Chat.load` | form | `dialogId`\|`chatId`, `messageLimit` |
+| `chat.dialogId` | `im.v2.Chat.getDialogId` | form | `externalId` (напр. `"sg"+groupId`) |
 | `chat.messages` | `im.v2.Chat.Message.list` | form | `chatId`, `limit` (последние; вглубь — `chat.messages.tail`) |
 | `chat.messages.tail` | `im.v2.Chat.Message.tail` | form | `chatId`, `filter[lastId]`, `order[id]`, `limit` |
 | `chat.message.read` | `im.v2.Chat.Message.read` | form | `chatId`, `ids[0]`, `actionUuid` |
+| `chat.read.all` | `im.v2.Chat.readAll` | form | — (⚠ мутирующий) |
+| `im.user.get` | `/rest/im.user.get.json` | form | `ID` |
 | `entityselector.load` | `ui.entityselector.load` | json | `dialog` (объект) |
+| `entityselector.search` | `ui.entityselector.doSearch` | json | `dialog`, `searchQuery{query,queryWords}` |
 
 ---
 
@@ -118,9 +138,9 @@ JSON-тела несут sessid **только** в заголовке. Отве
 Статусы задачи (`STATUS`): `1` Новая · `2` Ждёт выполнения · `3` Выполняется · `4` Ждёт контроля ·
 `5` Завершена · `6` Отложена · `7` Отклонена.
 
-**Задача v2** (`tasks.v2.*`): id задачи передаётся как `task` (или `taskId` у Scrum). Это отдельная
-подсистема scrum-борда; структуру ответа (карточка, файлы, счётчик просмотров) сверь реверсом ответа —
-в захвате видны только параметры запроса.
+**Задача v2** (`tasks.v2.*`): id задачи передаётся вложенно — **`{"task": {"id": N}}`** (у `Task.get` и
+`Task.View.User.count`), а у `Scrum.getTaskInfo` и `Relation.*` — плоско `{"taskId": N}`. Это отдельная
+подсистема scrum-борда; структуру ответа сверь реверсом — в захвате видны только параметры запроса.
 
 **Группа/проект — список** (`workgroup.list`, camelCase в ответе): `ID`, `NAME`, `DESCRIPTION`,
 `NUMBER_OF_MEMBERS`, `OWNER_ID`, `DATE_CREATE`, `PROJECT` (Y/N), `TYPE`.
@@ -129,6 +149,11 @@ JSON-тела несут sessid **только** в заголовке. Отве
 
 **Недавний чат** (`im.recent.list`): `chat_id`, `title`, `type`, `message{id,text,date,author_id}`,
 `last_id`, `unread`, `pinned`, `user{…}`, `chat{…}`.
+**Недавние по секции** (`im.v2.Recent.load`): фильтр `filter[recentSection]` — `default` (обычные
+диалоги), **`tasksTask` (чаты задач)**, `collab`/`collabDefault` (коллабы). Листание вглубь —
+`im.v2.Recent.tail` с курсором `filter[lastMessageDate]` (ISO-дата последнего элемента страницы).
+**Карточка юзера** (`im.user.get`): `id`, `name`, `first_name`, `last_name`, `avatar`, `work_position`,
+`gender`, `status`, `online` — резолв автора сообщения (`authorId`) в имя.
 **Сообщение** (`im.v2.Chat.Message.*`): `id`, `chatId`, `authorId`, `date`, `text`, `params`, `viewed`.
 Ответ также несёт `users[]` (участники), `additionalMessages[]`, `hasPrevPage`/`hasNextPage`.
 `chatId` берётся из `im.recent.list` (`chat_id`) или из `workgroup.get` (`CHAT_ID`/`DIALOG_ID`).
@@ -153,12 +178,15 @@ bitrix_tasks_list { "params": { "filter": {"RESPONSIBLE_ID":55,"REAL_STATUS":2},
 // карточка задачи с расширенным набором полей
 bitrix_task_get { "taskId": 4229, "params": { "select": ["ID","TITLE","DESCRIPTION","TAGS","TIME_ESTIMATE"] } }
 
-// карточка задачи через v2-подсистему (JSON-тело)
-bitrix_call { "name": "task.v2.get", "params": { "task": 4229 } }
+// карточка задачи через v2-подсистему (JSON-тело; id вложен в task)
+bitrix_task_get_v2 { "taskId": 4229 }                       // → { "task": { "id": 4229 } }
+bitrix_call { "name": "task.v2.get", "params": { "task": { "id": 4229 } } }
 
-// файлы задачи и счётчик просмотров (v2, JSON-тело)
+// файлы задачи и счётчик просмотров (v2, JSON-тело); подзадачи/связанные
 bitrix_call { "name": "task.files", "params": { "ids": [4229] } }
-bitrix_call { "name": "task.views.count", "params": { "task": 4229 } }
+bitrix_call { "name": "task.views.count", "params": { "task": { "id": 4229 } } }
+bitrix_task_subtasks { "taskId": 4229 }
+bitrix_task_related  { "taskId": 4229 }
 
 // проекты по дате создания; полная карточка группы
 bitrix_projects_list { "params": { "order": {"DATE_CREATE":"desc"} } }
@@ -187,57 +215,66 @@ bitrix_chat_load { "dialogId": 11 }
 bitrix_chat_history { "chatId": 485, "beforeId": 1861279 }
 ```
 
-### 6.2. Сценарий: чат по конкретной задаче
+### 6.2. Сценарий: обсуждение (чат) конкретной задачи
 
-У задачи есть проект (`GROUP_ID`); обсуждение идёт в чате этой группы. Путь: задача → группа → её чат.
+У каждой задачи есть свой im-чат-обсуждение. Два пути найти его `chatId`:
+
+**А. Через список чатов задач (прямой).** `im.v2.Recent.load` с секцией `tasksTask` отдаёт чаты задач
+(в `bitrix_chats_recent` / `/rest/im.recent.list` их НЕТ). Листать вглубь — `bitrix_recent_tail`.
 
 ```jsonc
-// 1) узнать группу задачи
-bitrix_task_get { "taskId": 4229, "params": { "select": ["ID","GROUP_ID"] } }
-// 2) карточка группы отдаёт CHAT_ID / DIALOG_ID
-bitrix_project_get { "groupId": 15 }
-// 3) открыть групповой чат (dialogId вида "chat"+CHAT_ID или прямой chatId)
-bitrix_chat_load { "dialogId": "chat7111" }   // либо { "chatId": 7111 }
+bitrix_recent_load { "section": "tasksTask" }           // → чаты задач с chatId/dialogId
+bitrix_recent_tail { "section": "tasksTask", "lastMessageDate": "2026-06-29T17:25:38+03:00" }
+// открыть найденный чат и листать историю
+bitrix_chat_load    { "dialogId": "chat38849" }         // или { "chatId": 38849 }
+bitrix_chat_history { "chatId": 38849, "beforeId": 1722353 }
 ```
 
-> Собственный чат-лента комментариев самой задачи (без группы) в захвате не зафиксирован — если он
-> понадобится, сними метод реверсом (§7) и добавь в каталог.
+**Б. Поиском по названию задачи** — `bitrix_entity_search` с секцией `tasksTask`:
+
+```jsonc
+bitrix_entity_search { "query": "трекер", "section": "tasksTask" }
+```
+
+**Чат ПРОЕКТА задачи** (обсуждение группы, не самой задачи) — через `GROUP_ID`:
+
+```jsonc
+bitrix_task_get    { "taskId": 4229, "params": { "select": ["ID","GROUP_ID"] } }
+bitrix_project_get { "groupId": 15 }                    // отдаёт CHAT_ID / DIALOG_ID
+bitrix_chat_load   { "dialogId": "chat7111" }
+bitrix_chat_get_dialog_id { "externalId": "sg15" }      // либо резолв dialogId соцгруппы напрямую
+```
 
 ### 6.3. Сценарий: поиск чата / пользователя
 
-Надёжный, полностью захваченный путь — недавние чаты с фильтрацией по названию на стороне агента:
+Текстовый поиск — `bitrix_entity_search` (обёртка над `ui.entityselector.doSearch`): сам собирает
+диалог `IM_CHAT_SEARCH` и `searchQuery` из строки:
 
 ```jsonc
-bitrix_chats_recent { }   // затем сопоставь по полю title / user
+bitrix_entity_search { "query": "дмитрий" }                        // среди всех чатов/диалогов
+bitrix_entity_search { "query": "трекер", "section": "tasksTask" } // среди чатов задач
 ```
 
-Богатый поиск — через entityselector (JSON-тело). Захвачены контексты `IM_CHAT_SEARCH`
-(сущность `im-recent-v2` — недавние диалоги) и резолв сущностей `user` / `task-template`.
-Свободный текстовый запрос в захвате не виден — форму строки поиска сверь реверсом (§7).
+Быстрый путь без поиска — недавние чаты и фильтрация на стороне агента; карточка автора по id:
 
 ```jsonc
-// поиск среди диалогов/чатов
-bitrix_entity_selector { "dialog": { "id": "im-chat-search", "context": "IM_CHAT_SEARCH",
-                                     "entities": [ { "id": "im-recent-v2", "dynamicLoad": true, "dynamicSearch": true } ] } }
-// резолв пользователей
-bitrix_entity_selector { "dialog": { "entities": [ { "id": "user" } ] } }
+bitrix_chats_recent { }                        // сопоставь по title / user
+bitrix_recent_load  { "section": "tasksTask" }
+bitrix_user_get     { "userId": 11 }           // резолв authorId → имя
 ```
 
-### 6.4. Обсуждение (комментарии) конкретной задачи — пока НЕ отреверсено
+### 6.4. Легаси-комментарии задачи
 
-Лента комментариев задачи — это **не** im-чат из `bitrix_chats_recent` (его там нет) и **не** `tasks.task.*`.
-В этом портале её обслуживает провайдер **im.v2 «comments»** (браузер грузит бандл
-`/bitrix/js/im/v2/provider/service/comments/…`). Конкретный ajax-вызов в текущем `captured.har`
-**отсутствует** — при съёмке комментарии не открывали, поэтому имя action неизвестно (не выдумывай).
+В этом портале обсуждение задачи — это im.v2-чат (см. §6.2), и его достаточно, чтобы прочитать
+переписку. Отдельного «легаси» ajax-метода комментариев (`task.commentitem.*` / forum) в текущем
+захвате (`actions.draft.json`) **НЕТ** — значит либо он не сработал при съёмке, либо комментарии
+задачи в этом портале целиком отданы im.v2-чату. Если понадобится именно legacy-лента:
 
-Чтобы добавить доступ:
-1. `bun run capture`, открой задачу в браузере и **пролистай её комментарии** (это дёрнет провайдер).
-2. `bun run catalog:draft` → в `actions.draft.json` появится реальный `action` (ожидаемо `im.v2.*`
-   для комментариев); перенеси его в `actions.json` с нужным `bodyType`.
-3. По желанию оберни в `bitrix_task_comments` и опиши здесь.
+1. `bun run capture`, открой задачу и **пролистай её комментарии**.
+2. Проверь `actions.draft.json` — если появится новый `action` (напр. `task.commentitem.getlist`),
+   перенеси его в `actions.json` с нужным `bodyType` и опиши здесь.
 
-> `task.commentitem.getlist` (legacy REST) в allowlist **не входит** и не проверен — не полагайся на
-> него без реверса.
+> `task.commentitem.getlist` (legacy REST) в allowlist пока **не входит** и захватом не подтверждён.
 
 ---
 

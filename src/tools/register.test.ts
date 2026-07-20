@@ -76,19 +76,25 @@ describe("bitrix_status tool", () => {
   });
 });
 
+const AJAX = "/bitrix/services/main/ajax.php";
+const richEntries: Record<string, { endpoint: string; action: string | null; bodyType: "json" | "form"; params?: Record<string, unknown> }> = {
+  "task.v2.get": { endpoint: AJAX, action: "tasks.v2.Task.get", bodyType: "json" },
+  "chat.load": { endpoint: AJAX, action: "im.v2.Chat.load", bodyType: "form", params: { messageLimit: 25 } },
+  "chat.messages.tail": { endpoint: AJAX, action: "im.v2.Chat.Message.tail", bodyType: "form", params: { "order[id]": "DESC", limit: 25 } },
+  "chat.message.read": { endpoint: AJAX, action: "im.v2.Chat.Message.read", bodyType: "form" },
+  "recent.load": { endpoint: AJAX, action: "im.v2.Recent.load", bodyType: "form" },
+  "entityselector.search": { endpoint: AJAX, action: "ui.entityselector.doSearch", bodyType: "json" },
+  "chat.read.all": { endpoint: AJAX, action: "im.v2.Chat.readAll", bodyType: "form" },
+  "task.subtasks": { endpoint: AJAX, action: "tasks.v2.Task.Relation.Child.list", bodyType: "json" },
+  "im.user.get": { endpoint: "/rest/im.user.get.json", action: null, bodyType: "form" },
+};
 const richCatalog: Catalog = {
   resolve: (name) => {
-    if (name === "task.v2.get")
-      return { endpoint: "/bitrix/services/main/ajax.php", action: "tasks.v2.Task.get", method: "POST", params: {}, bodyType: "json" };
-    if (name === "chat.load")
-      return { endpoint: "/bitrix/services/main/ajax.php", action: "im.v2.Chat.load", method: "POST", params: { messageLimit: 25 }, bodyType: "form" };
-    if (name === "chat.messages.tail")
-      return { endpoint: "/bitrix/services/main/ajax.php", action: "im.v2.Chat.Message.tail", method: "POST", params: { "order[id]": "DESC", limit: 25 }, bodyType: "form" };
-    if (name === "chat.message.read")
-      return { endpoint: "/bitrix/services/main/ajax.php", action: "im.v2.Chat.Message.read", method: "POST", params: {}, bodyType: "form" };
-    throw new Error(`call "${name}" is not allowed`);
+    const e = richEntries[name];
+    if (!e) throw new Error(`call "${name}" is not allowed`);
+    return { endpoint: e.endpoint, action: e.action, method: "POST", params: e.params ?? {}, bodyType: e.bodyType };
   },
-  names: () => ["task.v2.get", "chat.load", "chat.messages.tail", "chat.message.read"],
+  names: () => Object.keys(richEntries),
 };
 
 describe("typed tools — json / pagination / write", () => {
@@ -102,8 +108,55 @@ describe("typed tools — json / pagination / write", () => {
     expect(call).toHaveBeenCalledWith("d", expect.objectContaining({
       action: "tasks.v2.Task.get",
       bodyType: "json",
-      params: expect.objectContaining({ task: 4229 }),
+      params: expect.objectContaining({ task: { id: 4229 } }), // v2 wraps the id
     }));
+  });
+
+  it("bitrix_recent_load maps section -> filter[recentSection] with unread=N default", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_recent_load"]({ section: "tasksTask" });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params).toMatchObject({ limit: 50, "filter[recentSection]": "tasksTask", "filter[unread]": "N" });
+  });
+
+  it("bitrix_entity_search builds an IM_CHAT_SEARCH dialog + searchQuery from query", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_entity_search"]({ query: "дмитрий", section: "tasksTask" });
+
+    const target = call.mock.calls[0][1];
+    expect(target.bodyType).toBe("json");
+    expect(target.params.searchQuery).toEqual({ query: "дмитрий", queryWords: ["дмитрий"] });
+    expect((target.params.dialog as any).context).toBe("IM_CHAT_SEARCH");
+    expect((target.params.dialog as any).entities[0].options.searchRecentSection).toBe("tasksTask");
+  });
+
+  it("bitrix_chat_read_all sends an empty body (mutating, no params)", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_read_all"]({});
+
+    expect(call.mock.calls[0][1].params).toEqual({});
+  });
+
+  it("bitrix_user_get maps userId -> ID for the im.user.get REST call", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_user_get"]({ userId: 11 });
+
+    const target = call.mock.calls[0][1];
+    expect(target.endpoint).toBe("/rest/im.user.get.json");
+    expect(target.params).toMatchObject({ ID: 11 });
   });
 
   it("bitrix_chat_load addresses a private chat by dialogId (user id)", async () => {
