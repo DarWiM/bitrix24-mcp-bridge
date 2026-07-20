@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bitrix24 MCP Bridge__NAME_SUFFIX__",
-  "version": "0.1.0",
+  "version": "__VERSION__",
   "description": "Отдаёт текущую сессию Bitrix24 локальному MCP-серверу (чтение и выполнение вызовов из каталога).",
   "host_permissions": ["__ORIGIN__/*"],
   "content_scripts": [

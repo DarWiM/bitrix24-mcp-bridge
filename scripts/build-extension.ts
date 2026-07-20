@@ -26,6 +26,8 @@ const token = required("BITRIX_MCP_TOKEN");
 const origin = required("BITRIX_ORIGIN").replace(/\/+$/, "");
 const port = Number(process.env.BITRIX_MCP_PORT ?? 39917);
 const capture = !!process.env.BITRIX_CAPTURE; // capture (recording) build
+// Extension version tracks the package version (bumped by release-please) — single source.
+const version = JSON.parse(readFileSync("package.json", "utf8")).version as string;
 
 mkdirSync(DIST, { recursive: true });
 
@@ -53,7 +55,8 @@ writeFileSync(`${DIST}/config.json`, JSON.stringify({ token, port }, null, 2) + 
 const template = readFileSync(`${SRC}/manifest.template.json`, "utf8");
 const manifest = template
   .replaceAll("__ORIGIN__", origin)
-  .replaceAll("__NAME_SUFFIX__", capture ? " [CAPTURE]" : "");
+  .replaceAll("__NAME_SUFFIX__", capture ? " [CAPTURE]" : "")
+  .replaceAll("__VERSION__", version);
 writeFileSync(`${DIST}/manifest.json`, manifest);
 
 console.error(`[build:ext] built extension/dist for ${origin} → ws://127.0.0.1:${port}${capture ? " [CAPTURE mode]" : ""}`);
