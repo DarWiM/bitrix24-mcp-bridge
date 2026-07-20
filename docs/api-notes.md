@@ -1,8 +1,18 @@
 # Bitrix24 API notes (reverse-engineered)
 
-Справочник по внутреннему API Bitrix24, добытый **живым реверсом** (у внутренних ajax-контроллеров
-нет публичной документации). Предназначен для любого ИИ-агента или разработчика, который вызывает
-эти методы через мост (`bitrix_call` / типизированные инструменты) или расширяет каталог.
+Справочник по API Bitrix24, добытый **живым реверсом**. Часть вызовов моста совпадает с
+**публичным REST** (`tasks.task.*`, `im.recent.list`, `im.user.get`, `socialnetwork.api.workgroup.*`) —
+по ним есть официальная документация; часть — **сугубо внутренние ajax-контроллеры**
+(`im.v2.*`, `tasks.v2.*`, `ui.entityselector.*`), публичных доков по которым нет, только реверс.
+Предназначен для любого ИИ-агента или разработчика, который вызывает эти методы через мост
+(`bitrix_call` / типизированные инструменты) или расширяет каталог.
+
+> **Официальные REST-доки** — [`apidocs.bitrix24.com`](https://apidocs.bitrix24.com) (исходники:
+> [`github.com/bitrix24/b24restdocs`](https://github.com/bitrix24/b24restdocs); агенту с MCP context7 —
+> библиотека `/bitrix24/b24restdocs`). Для публично-документированных методов доки применимы напрямую;
+> для внутренних `im.v2.*`/`tasks.v2.*` — как **справочный аналог** (конверт/регистр полей могут
+> отличаться, сверяй реверсом). Дальше по тексту такие отсылки помечены **📖**; иди по ним, если нужна
+> деталь, которой здесь нет.
 
 Наблюдения сняты на портале `example.bitrix24.ru` (облако, мессенджер **im.v2**, задачи в режиме
 **scrum-борда**). Имена полей и конвенции стандартны для облачного Bitrix24, но при переносе на другой
@@ -83,7 +93,7 @@ JSON-тела несут sessid **только** в заголовке. Отве
 | `tasks.v2.Task.View.User.count` | **json** | `{"task": {"id": N}}` | — |
 | `tasks.v2.Task.Relation.Child.list` | **json** | `{"taskId": N, "withIds":true, "navigation":{"size":N}}` | `navigation` |
 | `tasks.v2.Task.Relation.Related.list` | **json** | `{"taskId": N, …}` (как Child) | `navigation` |
-| `socialnetwork.api.workgroup.list` | form | **верхний уровень**: `select[]`, `order{}`, `filter{}` | (nav — не проверено) |
+| `socialnetwork.api.workgroup.list` | form | **верхний уровень**: `select[]`, `order{}`, `filter{}` | `start` (шаг 50; `start=(N-1)*50`, `-1` — ответ без `total`) 📖 |
 | `socialnetwork.api.workgroup.get` | form | **обёрнуто**: `params[groupId]`, `params[select][]` | — |
 | `/rest/im.recent.list.json` | form (rest) | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY`, … | `LIMIT` |
 | `/rest/im.user.get.json` | form (rest) | плоско: `ID` | — |
@@ -131,12 +141,44 @@ JSON-тела несут sessid **только** в заголовке. Отве
 
 ## 5. Справочник полей
 
-**Задача** (`tasks.task.*`): `ID`, `TITLE`, `DESCRIPTION`, `STATUS`, `REAL_STATUS`, `RESPONSIBLE_ID`,
-`CREATED_BY`, `CREATED_DATE`, `CHANGED_DATE`, `DEADLINE`, `CLOSED_DATE`, `PRIORITY`, `GROUP_ID`,
-`TAGS`, `TIME_ESTIMATE`, `UF_*`. Ответ также подкладывает объекты `group`, `responsible`, `creator`, `action`.
+**Задача** (`tasks.task.*`) — поля для `select`/`filter` в UPPER_CASE: `ID`, `TITLE`, `DESCRIPTION`,
+`STATUS`, `REAL_STATUS`, `RESPONSIBLE_ID`, `CREATED_BY`, `CREATED_DATE`, `CHANGED_DATE`, `DEADLINE`,
+`CLOSED_DATE`, `PRIORITY`, `GROUP_ID`, `TAGS`, `TIME_ESTIMATE`, **`CHAT_ID`** (id im-чата обсуждения
+задачи — прямой резолвер `taskId → chatId`, см. §6.3), `UF_*`. Ответ ajax также подкладывает объекты
+`group`, `responsible`, `creator`, `action`.
 
-Статусы задачи (`STATUS`): `1` Новая · `2` Ждёт выполнения · `3` Выполняется · `4` Ждёт контроля ·
-`5` Завершена · `6` Отложена · `7` Отклонена.
+📖 офиц. (`tasks.task.get` / `tasks.task.list`) — полный набор полей задачи, среди прочего: `parentId`,
+`stageId`, `sprintId`, `backlogId`, `commentsCount`, `serviceCommentsCount`, `timeEstimate`,
+`timeSpentInLogs`, `favorite`, `flowId`, `mark`, `accomplices[]`, `auditors[]`, `checklist{}`,
+`subStatus`. В официальном REST-ответе поля приходят **camelCase** (`groupId`, `responsibleId`), тогда
+как в `select`/`filter` они всегда **UPPER_CASE**; наш ajax-вариант может отдавать иначе — сверяй
+реверсом. Доп. вычисления включаются флагом `params{WITH_TIMER_INFO, WITH_RESULT_INFO, WITH_PARSED_DESCRIPTION}`.
+
+Статусы (`REAL_STATUS` — «настоящее» числовое состояние): `1` Новая · `2` Ждёт выполнения ·
+`3` Выполняется · `4` Ждёт контроля · `5` Завершена · `6` Отложена · `7` Отклонена. Поле `STATUS`
+поверх этого несёт **мета-состояния** отображения (почти просрочена / не просмотрена / просрочена),
+поэтому «работает ли задача сейчас» фильтруй по **`REAL_STATUS`** (напр. `{"REAL_STATUS":3}`), а не
+по `STATUS` (📖 `tasks.task.list`).
+
+**Фильтр `tasks.task.list`.** Перед именем поля ставится оператор: `!` (не равно / исключить),
+`<`, `<=`, `>`, `>=`, `%` (LIKE-подстрока). Напр. `{"!REAL_STATUS":5}` — все **незакрытые**,
+`{">=DEADLINE":"2026-07-01"}` — дедлайн не раньше даты, `{"%TITLE":"карта"}` — по подстроке названия.
+Фильтруемые поля: `ID`, `PARENT_ID`, `GROUP_ID`, `CREATED_BY`, `RESPONSIBLE_ID`, `ACCOMPLICE`,
+`AUDITOR`, `REAL_STATUS`, `STATUS`, `PRIORITY`, `TAG`, `STAGE_ID`, `SPRINT_ID`, `BACKLOG_ID`,
+`DEADLINE`, `*_DATE`, `UF_CRM_TASK`.
+
+> **«Мои задачи» ≠ только `RESPONSIBLE_ID`.** Роли участника раздельны: ответственный
+> (`RESPONSIBLE_ID`), соисполнитель (`ACCOMPLICE`), наблюдатель (`AUDITOR`), постановщик
+> (`CREATED_BY`). Единого «любая роль» поля в `list` нет — чтобы собрать **все** свои задачи,
+> объедини результаты нескольких вызовов (минимум `RESPONSIBLE_ID` + `ACCOMPLICE`). Тонкость:
+> в **`filter`** роли в **единственном** числе (`ACCOMPLICE`/`AUDITOR`), а в **`select`** — во
+> **множественном** (`ACCOMPLICES`/`AUDITORS`). Не путай.
+
+> **Scrum-задачи (спринты).** Поле `SPRINT_ID` на задаче и жёсткий фильтр `filter[SPRINT_ID]`
+> могут расходиться: задача числится за спринтом по своему полю, но не попадает в выборку по фильтру
+> (вероятно, возвращена в бэклог или в иной stage). Если по фильтру «маловато» — перепроверь без него
+> и отфильтруй по `SPRINT_ID`/`STAGE_ID` на стороне агента. Точного API колонок scrum-доски
+> (`STAGE_ID` → имя колонки) в текущем каталоге нет — это кандидат на реверс.
 
 **Задача v2** (`tasks.v2.*`): id задачи передаётся вложенно — **`{"task": {"id": N}}`** (у `Task.get` и
 `Task.View.User.count`), а у `Scrum.getTaskInfo` и `Relation.*` — плоско `{"taskId": N}`. Это отдельная
@@ -144,11 +186,19 @@ JSON-тела несут sessid **только** в заголовке. Отве
 
 **Группа/проект — список** (`workgroup.list`, camelCase в ответе): `ID`, `NAME`, `DESCRIPTION`,
 `NUMBER_OF_MEMBERS`, `OWNER_ID`, `DATE_CREATE`, `PROJECT` (Y/N), `TYPE`.
+📖 офиц. (`socialnetwork.api.workgroup.list`) — фильтруемые поля: `ID`, `NAME`, `OWNER_ID`, `ACTIVE`,
+`VISIBLE`, `OPENED`, `CLOSED`, `PROJECT` (Y=проект/N=группа), `SUBJECT_ID`, `SITE_ID`, `DATE_CREATE`,
+`DATE_UPDATE`, `DATE_ACTIVITY`; операторы фильтра `>= > <= < % =% %= !% != !`; без `select` вернётся
+только `ID`. Старый публичный аналог — `sonet_group.get` (те же поля/пагинация, ключи `FILTER`/`ORDER`
+капсом).
 **Группа — карточка** (`workgroup.get`): плюс `OWNER_DATA`, `SUBJECT_DATA`, `MEMBERS[]`,
 `MODERATOR_MEMBERS[]`, `CHAT_ID`, `DIALOG_ID`, `IMAGE_ID`, UF-поля.
 
-**Недавний чат** (`im.recent.list`): `chat_id`, `title`, `type`, `message{id,text,date,author_id}`,
-`last_id`, `unread`, `pinned`, `user{…}`, `chat{…}`.
+**Недавний чат** (`im.recent.list`): `id` (это dialogId: число = юзер, `"chat"+N` = чат), `chat_id`,
+`type` (`user`/`chat`), `title`, `message{id,text,file,author_id,date,status,uuid}`, `counter` (число
+непрочитанных), `unread` (bool), `last_id`, `pinned`, `date_update`, `date_last_activity`, `user{…}`,
+`chat{… entity_type, entity_id, owner, …}`. Есть ли ещё страницы — флаги `hasMore`/`hasMorePages`
+(📖 `im.recent.list`).
 **Недавние по секции** (`im.v2.Recent.load`): фильтр `filter[recentSection]` — `default` (обычные
 диалоги), **`tasksTask` (чаты задач)**, `collab`/`collabDefault` (коллабы). Листание вглубь —
 `im.v2.Recent.tail` с курсором `filter[lastMessageDate]` (ISO-дата последнего элемента страницы).
@@ -162,6 +212,11 @@ JSON-тела несут sessid **только** в заголовке. Отве
 - `dialogId` = **ID пользователя** (число, напр. `11`) → **личный чат 1-на-1** с этим пользователем.
 - `dialogId` = **`"chat"+CHAT_ID`** (напр. `"chat7111"`) → **групповой чат** (проекта/задачи/канала).
 - `chatId` = числовой `CHAT_ID` — то же, что групповой `dialogId`, но без префикса.
+
+📖 офиц. формат `DIALOG_ID` (`im.dialog.get`): `XXX` — личный (userId), `chatXXX` — чат, **`sgXXX`** —
+чат соцгруппы/проекта напрямую (напр. `sg15`). В публичном REST это единый параметр; наш внутренний
+`im.v2.Chat.load` надёжно принимает `dialogId`/`chatId`, а форму `sgXXX` для него сверь реверсом —
+гарантированный путь к чату группы это `bitrix_chat_get_dialog_id { externalId:"sg<groupId>" }`.
 
 Ответ `chat.load` возвращает числовой `chatId` — используй его дальше для `chat.messages` /
 `chat.messages.tail` (листание вглубь) и `chat.message.read` (эти три работают по `chatId`, не по `dialogId`).
@@ -203,10 +258,49 @@ bitrix_chat_history { "chatId": 485, "beforeId": 1861279 }
 bitrix_chat_mark_read { "chatId": 40271, "ids": [1884131] }
 ```
 
-### 6.1. Сценарий: чат с конкретным пользователем
+### 6.1. Мессенджер (IM): модель адресации и как получить `chatId`
+
+**IM** (`im.v2`) — встроенный мессенджер Bitrix24. Всё общение — это **чаты**: личные
+1-на-1, групповые (проектов, каналов) и **чаты-обсуждения задач**. У каждого чата есть числовой
+**`chatId`** — это ключ ко всем операциям с сообщениями (`bitrix_chat_messages`,
+`bitrix_chat_history`, `bitrix_chat_mark_read`). Прежде чем читать сообщения, нужно **получить
+`chatId`** — почти любая ошибка агента здесь именно в этом шаге.
+
+**Три идентификатора одного чата** (не путай — годятся для разных операций):
+
+| Идентификатор | Что это | Пример | Куда передавать |
+|---|---|---|---|
+| `chatId` | числовой id чата | `485` | сообщения / история / отметка прочитанным |
+| `dialogId` | адрес для ОТКРЫТИЯ: `userId` (личный 1-на-1) **или** `"chat"+chatId` (групповой) | `11`, `"chat485"` | `bitrix_chat_load` |
+| `externalId` | внешний ключ сущности → резолвится в `dialogId` | `"sg15"` (соцгруппа 15) | `bitrix_chat_get_dialog_id` |
+
+Ключевое: **личный чат с человеком = его `userId` в роли `dialogId`** (отдельного «id чата» у
+1-на-1 знать не нужно). `bitrix_chat_load` принимает `dialogId` **или** `chatId` и всегда
+**возвращает числовой `chatId`** — дальше оперируешь им.
+
+**Как получить `chatId` — по цели (дерево решений):**
+
+| Хочу открыть чат… | Шаги |
+|---|---|
+| **с пользователем по ИМЕНИ** | `bitrix_entity_search { query:"дмитрий" }` → вернёт диалог с `dialogId` = его userId → `bitrix_chat_load { dialogId }` |
+| **с пользователем, id известен** | `bitrix_chat_load { dialogId: <userId> }` (userId — из задачи `RESPONSIBLE_ID`/`CREATED_BY`, из `bitrix_chats_recent`, из `bitrix_user_get`) |
+| **обсуждение ЗАДАЧИ** | `bitrix_recent_load { section:"tasksTask" }` **или** `bitrix_entity_search { query:"<название>", section:"tasksTask" }` → `chatId`/`dialogId` → `bitrix_chat_load` (§6.3) |
+| **ПРОЕКТА/группы** | `bitrix_task_get`→`GROUP_ID`→`bitrix_project_get`→`CHAT_ID`; либо `bitrix_chat_get_dialog_id { externalId:"sg<groupId>" }` |
+| **не знаю точно, какой** | `bitrix_chats_recent` (недавние, сопоставь по `title`/`user`) или `bitrix_entity_search { query }` (поиск по названию) |
+
+> Почему не «просто список чатов»: `bitrix_chats_recent` (`im.recent.list`) отдаёт лишь недавние и
+> **без чатов задач**. Для поиска конкретного чата — `bitrix_entity_search`; для чатов задач —
+> `bitrix_recent_load { section:"tasksTask" }`.
+
+📖 Публичные аналоги чтения сообщений (если нужно глубже разобраться в модели): `im.dialog.messages.get`
+— по умолчанию отдаёт последние (дефолт 20, макс 50), листание `LAST_ID` (старее) / `FIRST_ID` (новее);
+`imbot.v2 chat.getMessageContext` — ответ `messages[]` (oldest→newest) + `users[]` +
+`hasPrevPage`/`hasNextPage`, что **совпадает по форме** с нашими внутренними `im.v2.Chat.Message.*`.
+
+### 6.2. Сценарий: чат с конкретным пользователем
 
 Личный чат 1-на-1 адресуется `dialogId` = **ID пользователя**. Id берётся из задачи
-(`RESPONSIBLE_ID`/`CREATED_BY`), из `bitrix_chats_recent`, либо резолвится поиском (§6.3).
+(`RESPONSIBLE_ID`/`CREATED_BY`), из `bitrix_chats_recent`, либо резолвится поиском по имени (§6.4).
 
 ```jsonc
 // 1) открыть личный чат с пользователем 11 → в ответе будет числовой chatId
@@ -215,11 +309,28 @@ bitrix_chat_load { "dialogId": 11 }
 bitrix_chat_history { "chatId": 485, "beforeId": 1861279 }
 ```
 
-### 6.2. Сценарий: обсуждение (чат) конкретной задачи
+### 6.3. Сценарий: обсуждение (чат) конкретной задачи
 
-У каждой задачи есть свой im-чат-обсуждение. Два пути найти его `chatId`:
+У каждой задачи есть свой im-чат-обсуждение. Самый надёжный путь — прямой резолв из карточки задачи;
+поиск по названию — запасной.
 
-**А. Через список чатов задач (прямой).** `im.v2.Recent.load` с секцией `tasksTask` отдаёт чаты задач
+**А. Прямой — `CHAT_ID` из карточки задачи (предпочтительно).** `bitrix_task_get` возвращает `CHAT_ID`
+чата-обсуждения (он входит в дефолтный `select`). Это прямой `taskId → chatId` **без** поиска по
+названию и без риска промаха по тёзкам-заголовкам:
+
+```jsonc
+bitrix_task_get     { "taskId": 28373 }                 // в ответе CHAT_ID = id чата обсуждения
+bitrix_chat_load    { "chatId": <CHAT_ID> }
+bitrix_chat_history { "chatId": <CHAT_ID>, "beforeId": <мин id страницы> }
+```
+
+📖 офиц.: в `tasks.task.get` поле `CHAT_ID` отдаётся по умолчанию (tasks-new.md). Общий
+резолвер-альтернатива (документирован, пока **НЕ в каталоге** — кандидат добавить): `im.chat.get` по
+паре `ENTITY_TYPE`/`ENTITY_ID` отдаёт chatId связанного объекта — для задачи
+`ENTITY_TYPE="TASKS_TASK"`, `ENTITY_ID=<taskId>`; так же адресуются чаты `CRM`, `SONET_GROUP`,
+`CALENDAR`, `MAIL` и др.
+
+**Б. Через список чатов задач.** `im.v2.Recent.load` с секцией `tasksTask` отдаёт чаты задач
 (в `bitrix_chats_recent` / `/rest/im.recent.list` их НЕТ). Листать вглубь — `bitrix_recent_tail`.
 
 ```jsonc
@@ -230,7 +341,7 @@ bitrix_chat_load    { "dialogId": "chat38849" }         // или { "chatId": 38
 bitrix_chat_history { "chatId": 38849, "beforeId": 1722353 }
 ```
 
-**Б. Поиском по названию задачи** — `bitrix_entity_search` с секцией `tasksTask`:
+**В. Поиском по названию задачи** — `bitrix_entity_search` с секцией `tasksTask` (запасной, матч по тексту):
 
 ```jsonc
 bitrix_entity_search { "query": "трекер", "section": "tasksTask" }
@@ -245,10 +356,12 @@ bitrix_chat_load   { "dialogId": "chat7111" }
 bitrix_chat_get_dialog_id { "externalId": "sg15" }      // либо резолв dialogId соцгруппы напрямую
 ```
 
-### 6.3. Сценарий: поиск чата / пользователя
+### 6.4. Сценарий: поиск чата / пользователя
 
 Текстовый поиск — `bitrix_entity_search` (обёртка над `ui.entityselector.doSearch`): сам собирает
-диалог `IM_CHAT_SEARCH` и `searchQuery` из строки:
+диалог `IM_CHAT_SEARCH` и `searchQuery` из строки. `ui.entityselector.*` — **внутренний UI-метод, в
+публичных доках его нет** (форма запроса/ответа — только реверс); публичные аналоги для поиска людей —
+`user.get`/`user.search`, для чатов — `im.recent.list` + фильтрация на стороне агента.
 
 ```jsonc
 bitrix_entity_search { "query": "дмитрий" }                        // среди всех чатов/диалогов
@@ -263,10 +376,10 @@ bitrix_recent_load  { "section": "tasksTask" }
 bitrix_user_get     { "userId": 11 }           // резолв authorId → имя
 ```
 
-### 6.4. Легаси-комментарии задачи (HTML-поддомен — пока НЕ в мосте)
+### 6.5. Легаси-комментарии задачи (HTML-поддомен — пока НЕ в мосте)
 
 У задач два независимых фида обсуждения:
-- **im.v2-чат** — структурный JSON, читается уже сейчас (§6.2); обычно этого достаточно.
+- **im.v2-чат** — структурный JSON, читается уже сейчас (§6.3); обычно этого достаточно.
 - **Форумные легаси-комментарии** — рендерятся как **HTML** в side-slider'е. Это отдельный
   «HTML-поддомен» внутреннего API, который **текущий мост не поддерживает** (блокеры ниже).
 
@@ -305,6 +418,11 @@ headers: bx-ajax: true, x-bitrix-site-id: s1 (плюс обычный X-Bitrix-C
 ---
 
 ## 7. Как расширить (новый домен: календарь, диск, CRM, …)
+
+> Совет: сперва проверь, задокументирован ли метод в 📖 [`apidocs.bitrix24.com`](https://apidocs.bitrix24.com)
+> (context7: `/bitrix24/b24restdocs`). Для публичных `*.list`/`*.get` там готовые поля, фильтры и
+> пагинация — реверс тогда нужен лишь чтобы подтвердить транспорт (form/json) и конверт ответа. Для
+> внутренних `im.v2.*`/`tasks.v2.*`/UI-методов доков нет — только реверс (`docs/reconnaissance.md`).
 
 1. Сними реальные вызовы (`docs/reconnaissance.md` — авто-запись `bun run capture` или HAR →
    `bun run catalog:draft`). Черновик `actions.draft.json` накапливает **все уникальные комбинации

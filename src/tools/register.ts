@@ -71,7 +71,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 
   // Default field selections. Overridable per call via the tool's `params`.
   const TASK_LIST_SELECT = ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "DEADLINE", "GROUP_ID", "PRIORITY"];
-  const TASK_GET_SELECT = ["ID", "TITLE", "DESCRIPTION", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "CREATED_DATE", "DEADLINE", "PRIORITY", "GROUP_ID", "CLOSED_DATE"];
+  const TASK_GET_SELECT = ["ID", "TITLE", "DESCRIPTION", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "CREATED_DATE", "DEADLINE", "PRIORITY", "GROUP_ID", "CLOSED_DATE", "CHAT_ID"];
   const GROUP_LIST_SELECT = ["ID", "NAME", "DESCRIPTION", "NUMBER_OF_MEMBERS", "OWNER_ID", "DATE_CREATE", "PROJECT"];
   const GROUP_GET_SELECT = ["ID", "NAME", "DESCRIPTION", "OWNER_DATA", "SUBJECT_DATA", "NUMBER_OF_MEMBERS", "DATE_CREATE"];
 
@@ -89,15 +89,22 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       tool: "bitrix_tasks_list",
       catalogName: "tasks.list",
       description:
-        "Список задач пользователя (read-only). Точная выборка через params: " +
-        'filter (напр. {"RESPONSIBLE_ID":55,"REAL_STATUS":2}), select, order (напр. {"ID":"desc"}), start (сдвиг, шаг 50).',
+        "Список задач (read-only). params.filter — поля можно с операторами: \"!\" (исключить), " +
+        '"<"/">"/"<="/">=", "%" (подстрока). Напр. {"!REAL_STATUS":5} — незакрытые, ' +
+        '{">=DEADLINE":"2026-07-01"}. Роли участника РАЗДЕЛЬНЫ и в фильтре в ЕД. числе: ' +
+        "RESPONSIBLE_ID (ответственный), ACCOMPLICE (соисполнитель), AUDITOR (наблюдатель), " +
+        'CREATED_BY (постановщик). «Все мои задачи» = объединить вызовы по RESPONSIBLE_ID и ' +
+        'ACCOMPLICE (одного поля «любая роль» нет). Ещё params: select, order (напр. {"ID":"desc"}), start (шаг 50).',
       inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: () => ({ select: TASK_LIST_SELECT, order: { ID: "desc" } }),
     },
     {
       tool: "bitrix_task_get",
       catalogName: "task.get",
-      description: "Карточка задачи по id (read-only). Поля по умолчанию; изменить через params.select (напр. добавить UF_*, TAGS, TIME_ESTIMATE).",
+      description:
+        "Карточка задачи по id (read-only). В дефолтном select есть CHAT_ID — это id ЧАТА-ОБСУЖДЕНИЯ " +
+        "задачи: прямой путь к нему = bitrix_chat_load { chatId: <CHAT_ID> } (не путать с чатом проекта " +
+        "через GROUP_ID). Другие поля — через params.select (напр. UF_*, TAGS, TIME_ESTIMATE).",
       inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: (a) => ({ taskId: a.taskId, select: TASK_GET_SELECT }),
     },
@@ -121,7 +128,10 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       tool: "bitrix_chats_recent",
       catalogName: "chats.recent",
-      description: 'Недавние чаты/диалоги (read-only). params — доп. фильтры (напр. {"UNREAD_ONLY":"Y"}).',
+      description:
+        "НЕДАВНИЕ чаты/диалоги (read-only) — только последние и БЕЗ чатов задач. Чтобы НАЙТИ " +
+        "конкретный чат по названию/имени — bitrix_entity_search; чаты задач — bitrix_recent_load " +
+        '{ section:"tasksTask" }. params — доп. фильтры (напр. {"UNREAD_ONLY":"Y"}).',
       inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: () => ({}),
     },
@@ -181,10 +191,12 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       catalogName: "chat.load",
       description:
         "Открыть чат и получить первые сообщения. Адресация: dialogId = ID пользователя → " +
-        'ЛИЧНЫЙ чат 1-на-1; dialogId = "chat"+CHAT_ID (или chatId = CHAT_ID) → ГРУППОВОЙ. ' +
-        "Чат по ЗАДАЧЕ: bitrix_task_get → GROUP_ID → bitrix_project_get → CHAT_ID. Не знаешь id — " +
-        "найди через bitrix_chats_recent или bitrix_entity_selector. Ответ вернёт числовой chatId — " +
-        "передавай его в bitrix_chat_history / bitrix_chat_mark_read. messageLimit по умолчанию 25.",
+        'ЛИЧНЫЙ чат 1-на-1 с ним; dialogId = "chat"+CHAT_ID (или chatId = CHAT_ID) → ГРУППОВОЙ. ' +
+        "Чат С ЧЕЛОВЕКОМ по имени: сперва bitrix_entity_search { query } → вернёт dialogId (=userId). " +
+        "Чат ЗАДАЧИ: bitrix_recent_load { section:\"tasksTask\" } либо bitrix_entity_search. " +
+        "Чат ПРОЕКТА: bitrix_task_get → GROUP_ID → bitrix_project_get → CHAT_ID. " +
+        "Ответ вернёт числовой chatId — передавай его в bitrix_chat_history / bitrix_chat_mark_read. " +
+        "messageLimit по умолчанию 25.",
       inputSchema: {
         chatId: z.union([z.number(), z.string()]).optional(),
         dialogId: z.union([z.number(), z.string()]).optional(),
@@ -290,9 +302,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       tool: "bitrix_entity_search",
       catalogName: "entityselector.search",
       description:
-        "ТЕКСТОВЫЙ поиск сущностей через entityselector (JSON API). query — строка поиска. По умолчанию " +
-        "ищет чаты/диалоги (context IM_CHAT_SEARCH); section: \"tasksTask\" — среди чатов задач, " +
-        "\"default\" — среди всех. Для иных сущностей передай свой dialog целиком.",
+        "ТЕКСТОВЫЙ поиск чатов/диалогов по строке (entityselector, JSON API) — ГЛАВНЫЙ способ найти " +
+        "чат по названию или человека по ИМЕНИ. query — строка поиска. Поиск по имени человека вернёт " +
+        "ЛИЧНЫЙ диалог с ним — его dialogId (= userId); открывай bitrix_chat_load { dialogId }. " +
+        "section: \"tasksTask\" — среди чатов задач, \"default\" (умолч.) — среди всех диалогов. " +
+        "Для иных сущностей передай свой dialog целиком.",
       inputSchema: {
         query: z.string(),
         section: z.string().optional(),
