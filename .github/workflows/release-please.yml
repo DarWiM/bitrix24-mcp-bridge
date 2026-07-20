@@ -3,6 +3,7 @@ name: release-please
 on:
   push:
     branches: [main]
+  workflow_dispatch: # manual re-publish (e.g. to recover a failed release)
 
 permissions:
   contents: write
@@ -24,7 +25,7 @@ jobs:
   # Runs only when a release was just created; builds, tests and publishes to npm.
   publish:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    if: ${{ needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -36,13 +37,13 @@ jobs:
           bun-version: latest
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
-      # OIDC trusted publishing needs npm >= 11.5.1 (node 20 ships npm 10.x).
-      - run: npm install -g npm@latest
+      # OIDC trusted publishing needs npm >= 11.5.1; pin 11.x (compatible with node 24).
+      - run: npm install -g npm@11
       # `npm publish` auto-runs `prepare` (build-dist + build-ext-static) before packing.
       # Auth is via OIDC (Trusted Publisher); provenance is attached automatically.
       - run: npm publish --provenance --access public
