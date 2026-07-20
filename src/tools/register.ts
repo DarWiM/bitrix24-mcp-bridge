@@ -128,19 +128,23 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     {
       tool: "bitrix_chat_messages",
       catalogName: "chat.messages",
-      description: "История сообщений чата по chatId (по умолчанию 20 последних; beforeId — листать вглубь). chatId из bitrix_chats_recent (im.v2).",
+      description:
+        "ПОСЛЕДНИЕ N сообщений чата по chatId (по умолчанию 20; im.v2). chatId — из bitrix_chats_recent " +
+        "или из ответа bitrix_chat_load. Чтобы листать СТАРЫЕ сообщения вглубь — используй " +
+        "bitrix_chat_history: этот метод (im.v2.Chat.Message.list) отдаёт только последнюю страницу и " +
+        "назад по курсору НЕ листает.",
       inputSchema: {
         chatId: z.union([z.number(), z.string()]),
         limit: z.number().optional(),
-        beforeId: z.union([z.number(), z.string()]).optional(),
         params: z.record(z.unknown()).optional(),
         portal: z.string().optional(),
       },
-      // im.v2 param names (this portal's messenger): chatId / limit / filter[lastId]
+      // im.v2.Chat.Message.list returns the latest page only; backward paging lives in
+      // ...Message.tail (bitrix_chat_history). filter[lastId] is not honored here — d22adca7
+      // hit this: beforeId on .list kept returning the same tail. So we don't expose it.
       toParams: (a) => ({
         chatId: a.chatId,
         limit: a.limit ?? 20, // G8: sane default guards against huge histories
-        ...(a.beforeId !== undefined ? { "filter[lastId]": a.beforeId } : {}),
       }),
     },
     {
