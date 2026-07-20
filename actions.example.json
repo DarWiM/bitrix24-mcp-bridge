@@ -1,33 +1,29 @@
 {
-  "tasks.list": {
-    "action": "tasks.task.list",
-    "method": "POST"
-  },
-  "task.get": {
-    "action": "tasks.task.get",
-    "method": "POST"
-  },
-  "projects.list": {
-    "action": "socialnetwork.api.workgroup.list",
-    "method": "POST"
-  },
-  "projects.get": {
-    "action": "socialnetwork.api.workgroup.get",
-    "method": "POST"
-  },
-  "chats.recent": {
-    "endpoint": "/rest/im.recent.list.json",
-    "method": "POST",
-    "params": {
-      "LIMIT": 50,
-      "SKIP_OPENLINES": "Y",
-      "GET_ORIGINAL_TEXT": "Y",
-      "PARSE_TEXT": "Y",
-      "WITH_COUNTERS": "N"
-    }
-  },
-  "chat.messages": {
-    "action": "im.v2.Chat.Message.list",
-    "method": "POST"
-  }
+  "tasks.list": { "action": "tasks.task.list", "method": "POST" },
+  "task.get": { "action": "tasks.task.get", "method": "POST" },
+  "task.v2.get": { "action": "tasks.v2.Task.get", "method": "POST", "bodyType": "json" },
+  "task.scrum.info": { "action": "tasks.v2.Scrum.getTaskInfo", "method": "POST", "bodyType": "json" },
+  "task.files": { "action": "tasks.v2.File.listObjects", "method": "POST", "bodyType": "json" },
+  "task.views.count": { "action": "tasks.v2.Task.View.User.count", "method": "POST", "bodyType": "json" },
+
+  "projects.list": { "action": "socialnetwork.api.workgroup.list", "method": "POST" },
+  "projects.get": { "action": "socialnetwork.api.workgroup.get", "method": "POST" },
+
+  "chats.recent": { "endpoint": "/rest/im.recent.list.json", "method": "POST", "params": { "LIMIT": 50, "SKIP_OPENLINES": "Y", "GET_ORIGINAL_TEXT": "Y", "PARSE_TEXT": "Y", "WITH_COUNTERS": "N" } },
+  "chat.load": { "action": "im.v2.Chat.load", "method": "POST", "params": { "messageLimit": 25 } },
+  "chat.messages": { "action": "im.v2.Chat.Message.list", "method": "POST" },
+  "chat.messages.tail": { "action": "im.v2.Chat.Message.tail", "method": "POST", "params": { "order[id]": "DESC", "limit": 25 } },
+  "chat.message.read": { "action": "im.v2.Chat.Message.read", "method": "POST" },
+
+  "entityselector.load": { "action": "ui.entityselector.load", "method": "POST", "bodyType": "json" },
+  "entityselector.search": { "action": "ui.entityselector.doSearch", "method": "POST", "bodyType": "json" },
+
+  "recent.load": { "action": "im.v2.Recent.load", "method": "POST" },
+  "recent.tail": { "action": "im.v2.Recent.tail", "method": "POST" },
+  "chat.dialogId": { "action": "im.v2.Chat.getDialogId", "method": "POST" },
+  "chat.read.all": { "action": "im.v2.Chat.readAll", "method": "POST" },
+  "im.user.get": { "endpoint": "/rest/im.user.get.json", "method": "POST" },
+
+  "task.subtasks": { "action": "tasks.v2.Task.Relation.Child.list", "method": "POST", "bodyType": "json" },
+  "task.related": { "action": "tasks.v2.Task.Relation.Related.list", "method": "POST", "bodyType": "json" }
 }

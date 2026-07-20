@@ -50,15 +50,17 @@ describe("typed tools", () => {
     expect(call).toHaveBeenCalledWith("other", expect.objectContaining({ action: "tasks.task.list" }));
   });
 
-  it("applies default limit=20 and maps beforeId to filter[lastId] (im.v2) for chat messages", async () => {
+  it("applies default limit=20 for chat messages and does NOT page backward (.list)", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({ messages: [] });
     registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog, defaultPortal: "default", portals: ["default"] });
 
+    // im.v2.Chat.Message.list returns only the latest page — beforeId is unsupported here
+    // (deep paging lives in bitrix_chat_history). So no filter[lastId] leaks through.
     await handlers["bitrix_chat_messages"]({ chatId: "485", beforeId: 84869 });
-    expect(call).toHaveBeenCalledWith("default", expect.objectContaining({
-      params: { chatId: "485", limit: 20, "filter[lastId]": 84869 },
-    }));
+    const target = call.mock.calls[0][1];
+    expect(target.params).toEqual({ chatId: "485", limit: 20 });
+    expect(target.params["filter[lastId]"]).toBeUndefined();
   });
 
   it("skips a typed tool whose catalog name is absent", () => {

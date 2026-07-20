@@ -48,7 +48,12 @@ await build({
 writeFileSync(`${DIST}/config.json`, JSON.stringify({ token, port }, null, 2) + "\n");
 
 // 3) generate manifest.json from the template with the portal origin.
+//    Capture builds get a " [CAPTURE]" name suffix so a recording extension is impossible
+//    to confuse with the normal one in chrome://extensions.
 const template = readFileSync(`${SRC}/manifest.template.json`, "utf8");
-writeFileSync(`${DIST}/manifest.json`, template.replaceAll("__ORIGIN__", origin));
+const manifest = template
+  .replaceAll("__ORIGIN__", origin)
+  .replaceAll("__NAME_SUFFIX__", capture ? " [CAPTURE]" : "");
+writeFileSync(`${DIST}/manifest.json`, manifest);
 
 console.error(`[build:ext] built extension/dist for ${origin} → ws://127.0.0.1:${port}${capture ? " [CAPTURE mode]" : ""}`);

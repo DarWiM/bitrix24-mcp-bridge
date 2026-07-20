@@ -75,3 +75,124 @@ describe("bitrix_status tool", () => {
     });
   });
 });
+
+const AJAX = "/bitrix/services/main/ajax.php";
+const richEntries: Record<string, { endpoint: string; action: string | null; bodyType: "json" | "form"; params?: Record<string, unknown> }> = {
+  "task.v2.get": { endpoint: AJAX, action: "tasks.v2.Task.get", bodyType: "json" },
+  "chat.load": { endpoint: AJAX, action: "im.v2.Chat.load", bodyType: "form", params: { messageLimit: 25 } },
+  "chat.messages.tail": { endpoint: AJAX, action: "im.v2.Chat.Message.tail", bodyType: "form", params: { "order[id]": "DESC", limit: 25 } },
+  "chat.message.read": { endpoint: AJAX, action: "im.v2.Chat.Message.read", bodyType: "form" },
+  "recent.load": { endpoint: AJAX, action: "im.v2.Recent.load", bodyType: "form" },
+  "entityselector.search": { endpoint: AJAX, action: "ui.entityselector.doSearch", bodyType: "json" },
+  "chat.read.all": { endpoint: AJAX, action: "im.v2.Chat.readAll", bodyType: "form" },
+  "task.subtasks": { endpoint: AJAX, action: "tasks.v2.Task.Relation.Child.list", bodyType: "json" },
+  "im.user.get": { endpoint: "/rest/im.user.get.json", action: null, bodyType: "form" },
+};
+const richCatalog: Catalog = {
+  resolve: (name) => {
+    const e = richEntries[name];
+    if (!e) throw new Error(`call "${name}" is not allowed`);
+    return { endpoint: e.endpoint, action: e.action, method: "POST", params: e.params ?? {}, bodyType: e.bodyType };
+  },
+  names: () => Object.keys(richEntries),
+};
+
+describe("typed tools — json / pagination / write", () => {
+  it("bitrix_task_get_v2 forwards json bodyType with { task }", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_task_get_v2"]({ taskId: 4229 });
+
+    expect(call).toHaveBeenCalledWith("d", expect.objectContaining({
+      action: "tasks.v2.Task.get",
+      bodyType: "json",
+      params: expect.objectContaining({ task: { id: 4229 } }), // v2 wraps the id
+    }));
+  });
+
+  it("bitrix_recent_load maps section -> filter[recentSection] with unread=N default", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_recent_load"]({ section: "tasksTask" });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params).toMatchObject({ limit: 50, "filter[recentSection]": "tasksTask", "filter[unread]": "N" });
+  });
+
+  it("bitrix_entity_search builds an IM_CHAT_SEARCH dialog + searchQuery from query", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_entity_search"]({ query: "дмитрий", section: "tasksTask" });
+
+    const target = call.mock.calls[0][1];
+    expect(target.bodyType).toBe("json");
+    expect(target.params.searchQuery).toEqual({ query: "дмитрий", queryWords: ["дмитрий"] });
+    expect((target.params.dialog as any).context).toBe("IM_CHAT_SEARCH");
+    expect((target.params.dialog as any).entities[0].options.searchRecentSection).toBe("tasksTask");
+  });
+
+  it("bitrix_chat_read_all sends an empty body (mutating, no params)", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_read_all"]({});
+
+    expect(call.mock.calls[0][1].params).toEqual({});
+  });
+
+  it("bitrix_user_get maps userId -> ID for the im.user.get REST call", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_user_get"]({ userId: 11 });
+
+    const target = call.mock.calls[0][1];
+    expect(target.endpoint).toBe("/rest/im.user.get.json");
+    expect(target.params).toMatchObject({ ID: 11 });
+  });
+
+  it("bitrix_chat_load addresses a private chat by dialogId (user id)", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_load"]({ dialogId: 11 });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params).toMatchObject({ dialogId: 11, messageLimit: 25 });
+    expect(target.params.chatId).toBeUndefined();
+  });
+
+  it("bitrix_chat_history maps beforeId -> filter[lastId] and keeps the DESC default", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_history"]({ chatId: 485, beforeId: 1861279 });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params).toMatchObject({ chatId: 485, "filter[lastId]": 1861279, "order[id]": "DESC", limit: 25 });
+  });
+
+  it("bitrix_chat_mark_read auto-generates actionUuid when omitted", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_mark_read"]({ chatId: 40271, ids: [1884131] });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params.chatId).toBe(40271);
+    expect(target.params.ids).toEqual([1884131]);
+    expect(typeof target.params.actionUuid).toBe("string");
+    expect(target.params.actionUuid.length).toBeGreaterThan(10);
+  });
+});
