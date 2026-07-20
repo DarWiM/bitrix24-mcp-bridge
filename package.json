@@ -29,7 +29,8 @@
     "prepare": "node scripts/build-dist.mjs && node scripts/build-ext-static.mjs",
     "capture": "bun run src/capture-server.ts",
     "catalog:draft": "bun run src/catalog/build-catalog.ts captured.har > actions.draft.json",
-    "catalog": "bun run src/catalog/build-catalog.ts"
+    "catalog": "bun run src/catalog/build-catalog.ts",
+    "sync:runtime": "bun run scripts/sync-runtime.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
