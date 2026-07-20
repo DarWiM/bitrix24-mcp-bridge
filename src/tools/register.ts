@@ -362,6 +362,23 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       inputSchema: { userId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: (a) => ({ ID: a.userId }),
     },
+    {
+      tool: "bitrix_entity_chat",
+      catalogName: "im.chat.get",
+      description:
+        "Резолв chatId чата, ПРИВЯЗАННОГО к объекту (im.chat.get). entityType/entityId — тип и id " +
+        'объекта: "TASKS_TASK" (чат-обсуждение задачи), "SONET_GROUP" (чат группы/проекта), "CRM", ' +
+        '"CALENDAR", "MAIL", "VIDEOCONF", "LINES", "CALL". Даёт прямой «объект → chatId» без поиска по ' +
+        "названию. Для задачи проще всё же CHAT_ID из bitrix_task_get; этот инструмент — общий, на любую " +
+        "сущность. Полученный chatId открывай bitrix_chat_load { chatId }.",
+      inputSchema: {
+        entityType: z.string(),
+        entityId: z.union([z.number(), z.string()]),
+        params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
+      },
+      toParams: (a) => ({ ENTITY_TYPE: a.entityType, ENTITY_ID: a.entityId }),
+    },
   ];
 
   const available = new Set(deps.catalog.names());

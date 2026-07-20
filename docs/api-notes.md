@@ -38,7 +38,8 @@
     `bitrix_chat_get_dialog_id` (dialogId по externalId), `bitrix_chat_mark_read` (⚠ мутирующий),
     `bitrix_chat_read_all` (⚠ мутирующий).
   - Люди/поиск: `bitrix_user_get` (карточка юзера), `bitrix_entity_selector` (загрузка селектора),
-    `bitrix_entity_search` (текстовый поиск чатов/сущностей через `ui.entityselector.doSearch`).
+    `bitrix_entity_search` (текстовый поиск чатов/сущностей через `ui.entityselector.doSearch`),
+    `bitrix_entity_chat` (chatId чата связанного объекта: задачи/группы/CRM — через `im.chat.get`).
 
   Любое имя каталога всегда доступно и напрямую через `bitrix_call { name, params }`.
 - **`bitrix_help`** — этот же гайд, отдаётся через MCP (инструмент + resource `bitrix://api-notes`).
@@ -97,6 +98,7 @@ JSON-тела несут sessid **только** в заголовке. Отве
 | `socialnetwork.api.workgroup.get` | form | **обёрнуто**: `params[groupId]`, `params[select][]` | — |
 | `/rest/im.recent.list.json` | form (rest) | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY`, … | `LIMIT` |
 | `/rest/im.user.get.json` | form (rest) | плоско: `ID` | — |
+| `/rest/im.chat.get.json` | form (rest) | плоско: `ENTITY_TYPE`, `ENTITY_ID` | — |
 | `im.v2.Recent.load` | form | плоско: `limit`, `filter[recentSection]`, `filter[unread]`, `filter[parentId]` | `im.v2.Recent.tail` |
 | `im.v2.Recent.tail` | form | плоско: `limit`, `filter[lastMessageDate]` (курсор), `filter[recentSection]` | `filter[lastMessageDate]` |
 | `im.v2.Chat.load` | form | плоско: `dialogId`\|`chatId`, `messageLimit` | — |
@@ -134,6 +136,7 @@ JSON-тела несут sessid **только** в заголовке. Отве
 | `chat.message.read` | `im.v2.Chat.Message.read` | form | `chatId`, `ids[0]`, `actionUuid` |
 | `chat.read.all` | `im.v2.Chat.readAll` | form | — (⚠ мутирующий) |
 | `im.user.get` | `/rest/im.user.get.json` | form | `ID` |
+| `im.chat.get` | `/rest/im.chat.get.json` | form | `ENTITY_TYPE`, `ENTITY_ID` (напр. `TASKS_TASK`+taskId) |
 | `entityselector.load` | `ui.entityselector.load` | json | `dialog` (объект) |
 | `entityselector.search` | `ui.entityselector.doSearch` | json | `dialog`, `searchQuery{query,queryWords}` |
 
@@ -325,10 +328,15 @@ bitrix_chat_history { "chatId": <CHAT_ID>, "beforeId": <мин id страниц
 ```
 
 📖 офиц.: в `tasks.task.get` поле `CHAT_ID` отдаётся по умолчанию (tasks-new.md). Общий
-резолвер-альтернатива (документирован, пока **НЕ в каталоге** — кандидат добавить): `im.chat.get` по
-паре `ENTITY_TYPE`/`ENTITY_ID` отдаёт chatId связанного объекта — для задачи
-`ENTITY_TYPE="TASKS_TASK"`, `ENTITY_ID=<taskId>`; так же адресуются чаты `CRM`, `SONET_GROUP`,
-`CALENDAR`, `MAIL` и др.
+резолвер-альтернатива — **`bitrix_entity_chat`** (обёртка над `im.chat.get`): по паре
+`entityType`/`entityId` отдаёт chatId связанного объекта — для задачи `entityType="TASKS_TASK"`,
+`entityId=<taskId>`; так же адресуются чаты `SONET_GROUP` (группа/проект), `CRM`, `CALENDAR`, `MAIL`,
+`VIDEOCONF`, `CALL`:
+
+```jsonc
+bitrix_entity_chat { "entityType": "TASKS_TASK", "entityId": 28373 }   // → chatId
+bitrix_chat_load   { "chatId": <chatId> }
+```
 
 **Б. Через список чатов задач.** `im.v2.Recent.load` с секцией `tasksTask` отдаёт чаты задач
 (в `bitrix_chats_recent` / `/rest/im.recent.list` их НЕТ). Листать вглубь — `bitrix_recent_tail`.

@@ -87,6 +87,7 @@ const richEntries: Record<string, { endpoint: string; action: string | null; bod
   "chat.read.all": { endpoint: AJAX, action: "im.v2.Chat.readAll", bodyType: "form" },
   "task.subtasks": { endpoint: AJAX, action: "tasks.v2.Task.Relation.Child.list", bodyType: "json" },
   "im.user.get": { endpoint: "/rest/im.user.get.json", action: null, bodyType: "form" },
+  "im.chat.get": { endpoint: "/rest/im.chat.get.json", action: null, bodyType: "form" },
 };
 const richCatalog: Catalog = {
   resolve: (name) => {
@@ -157,6 +158,18 @@ describe("typed tools — json / pagination / write", () => {
     const target = call.mock.calls[0][1];
     expect(target.endpoint).toBe("/rest/im.user.get.json");
     expect(target.params).toMatchObject({ ID: 11 });
+  });
+
+  it("bitrix_entity_chat maps entityType/entityId -> ENTITY_TYPE/ENTITY_ID for im.chat.get", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_entity_chat"]({ entityType: "TASKS_TASK", entityId: 28373 });
+
+    const target = call.mock.calls[0][1];
+    expect(target.endpoint).toBe("/rest/im.chat.get.json");
+    expect(target.params).toMatchObject({ ENTITY_TYPE: "TASKS_TASK", ENTITY_ID: 28373 });
   });
 
   it("bitrix_chat_load addresses a private chat by dialogId (user id)", async () => {
