@@ -181,12 +181,22 @@ bun run src/index.ts --daemon   # daemon вручную
 bun run src/index.ts setup      # интерактивная настройка
 bun test                        # юнит-тесты (bun:test)
 bun run typecheck               # tsc --noEmit (сервер + extension)
-bun run build:ext               # dev-сборка пер-пользовательского расширения
+bun run build:dist              # бандл сервера → dist/cli.js
+bun run build:ext               # dev-сборка расширения → extension/dist/ (загружаемое)
+bun run sync:runtime            # применить репо-изменения к живому daemon (см. ниже)
 ```
 
-`.env` — **только dev-оверрайд** (gitignored): `BITRIX_MCP_TOKEN`, `BITRIX_ORIGIN`,
-`BITRIX_MCP_PORT`, опционально `BITRIX_CATALOG`. В проде конфиг живёт в
+`.env` — **только dev-оверрайды** (gitignored). Токен / origin / порт берутся из общего
+`~/.bitrix24-mcp-bridge/config.json` (через `loadConfig`) — дублировать их в `.env` не нужно, иначе
+dev-токен разойдётся с daemon. Осмысленно держать там лишь `BITRIX_CATALOG` (указывает
+dev-сборку/daemon на репозиторный `actions.json`). В проде весь конфиг — в
 `~/.bitrix24-mcp-bridge/config.json`, который пишет `setup`.
+
+**Репо ≠ живой daemon.** Daemon, к которому ходят агенты, читает **runtime-папку**
+(`~/.bitrix24-mcp-bridge/actions.json` + запущенный `dist/cli.js`), а не файлы репозитория. После
+правки каталога или кода сервера выполни **`bun run sync:runtime`**: она пересоберёт бандл, скопирует
+репо-`actions.json` в runtime-папку и погасит daemon (следующий вызов агента поднимет свежий). Без
+этого новые инструменты/методы агенту не видны.
 
 Дистрибуция: `bin` `bitrix24-bridge` → `dist/cli.js`; npm-хук `prepare` при установке
 собирает и `dist/cli.js`, и статичные бандлы расширения (`extension/dist/`), которые
