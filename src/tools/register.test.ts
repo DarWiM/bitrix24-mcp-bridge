@@ -75,3 +75,71 @@ describe("bitrix_status tool", () => {
     });
   });
 });
+
+const richCatalog: Catalog = {
+  resolve: (name) => {
+    if (name === "task.v2.get")
+      return { endpoint: "/bitrix/services/main/ajax.php", action: "tasks.v2.Task.get", method: "POST", params: {}, bodyType: "json" };
+    if (name === "chat.load")
+      return { endpoint: "/bitrix/services/main/ajax.php", action: "im.v2.Chat.load", method: "POST", params: { messageLimit: 25 }, bodyType: "form" };
+    if (name === "chat.messages.tail")
+      return { endpoint: "/bitrix/services/main/ajax.php", action: "im.v2.Chat.Message.tail", method: "POST", params: { "order[id]": "DESC", limit: 25 }, bodyType: "form" };
+    if (name === "chat.message.read")
+      return { endpoint: "/bitrix/services/main/ajax.php", action: "im.v2.Chat.Message.read", method: "POST", params: {}, bodyType: "form" };
+    throw new Error(`call "${name}" is not allowed`);
+  },
+  names: () => ["task.v2.get", "chat.load", "chat.messages.tail", "chat.message.read"],
+};
+
+describe("typed tools — json / pagination / write", () => {
+  it("bitrix_task_get_v2 forwards json bodyType with { task }", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_task_get_v2"]({ taskId: 4229 });
+
+    expect(call).toHaveBeenCalledWith("d", expect.objectContaining({
+      action: "tasks.v2.Task.get",
+      bodyType: "json",
+      params: expect.objectContaining({ task: 4229 }),
+    }));
+  });
+
+  it("bitrix_chat_load addresses a private chat by dialogId (user id)", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_load"]({ dialogId: 11 });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params).toMatchObject({ dialogId: 11, messageLimit: 25 });
+    expect(target.params.chatId).toBeUndefined();
+  });
+
+  it("bitrix_chat_history maps beforeId -> filter[lastId] and keeps the DESC default", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_history"]({ chatId: 485, beforeId: 1861279 });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params).toMatchObject({ chatId: 485, "filter[lastId]": 1861279, "order[id]": "DESC", limit: 25 });
+  });
+
+  it("bitrix_chat_mark_read auto-generates actionUuid when omitted", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_chat_mark_read"]({ chatId: 40271, ids: [1884131] });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params.chatId).toBe(40271);
+    expect(target.params.ids).toEqual([1884131]);
+    expect(typeof target.params.actionUuid).toBe("string");
+    expect(target.params.actionUuid.length).toBeGreaterThan(10);
+  });
+});

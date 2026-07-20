@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { CallSink } from "../bridge/uds-client.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { HELP } from "./help.js";
+import { randomUUID } from "node:crypto";
 
 export interface ToolDeps { sink: CallSink; catalog: Catalog; defaultPortal: string; portals: string[]; }
 
@@ -141,6 +142,101 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         limit: a.limit ?? 20, // G8: sane default guards against huge histories
         ...(a.beforeId !== undefined ? { "filter[lastId]": a.beforeId } : {}),
       }),
+    },
+    {
+      tool: "bitrix_task_get_v2",
+      catalogName: "task.v2.get",
+      description: "Карточка задачи через v2-подсистему scrum-борда (JSON API). taskId — id задачи.",
+      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ task: a.taskId }),
+    },
+    {
+      tool: "bitrix_task_scrum_info",
+      catalogName: "task.scrum.info",
+      description: "Scrum-информация по задаче (спринт, эпик, story points и т.п.; JSON API).",
+      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ taskId: a.taskId }),
+    },
+    {
+      tool: "bitrix_task_files",
+      catalogName: "task.files",
+      description: "Файлы, прикреплённые к задаче(ам) (JSON API). ids — массив id задач.",
+      inputSchema: { ids: z.array(z.union([z.number(), z.string()])).min(1), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ ids: a.ids }),
+    },
+    {
+      tool: "bitrix_task_views_count",
+      catalogName: "task.views.count",
+      description: "Сколько пользователей просмотрели задачу (JSON API).",
+      inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ task: a.taskId }),
+    },
+    {
+      tool: "bitrix_chat_load",
+      catalogName: "chat.load",
+      description:
+        "Открыть чат и получить первые сообщения. Адресация: dialogId = ID пользователя → " +
+        'ЛИЧНЫЙ чат 1-на-1; dialogId = "chat"+CHAT_ID (или chatId = CHAT_ID) → ГРУППОВОЙ. ' +
+        "Чат по ЗАДАЧЕ: bitrix_task_get → GROUP_ID → bitrix_project_get → CHAT_ID. Не знаешь id — " +
+        "найди через bitrix_chats_recent или bitrix_entity_selector. Ответ вернёт числовой chatId — " +
+        "передавай его в bitrix_chat_history / bitrix_chat_mark_read. messageLimit по умолчанию 25.",
+      inputSchema: {
+        chatId: z.union([z.number(), z.string()]).optional(),
+        dialogId: z.union([z.number(), z.string()]).optional(),
+        messageLimit: z.number().optional(),
+        params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
+      },
+      toParams: (a) => ({
+        ...(a.chatId !== undefined ? { chatId: a.chatId } : {}),
+        ...(a.dialogId !== undefined ? { dialogId: a.dialogId } : {}),
+        ...(a.messageLimit !== undefined ? { messageLimit: a.messageLimit } : {}),
+      }),
+    },
+    {
+      tool: "bitrix_chat_history",
+      catalogName: "chat.messages.tail",
+      description:
+        "Листать историю чата ВГЛУБЬ (старые сообщения). beforeId — минимальный id сообщения из текущей " +
+        "страницы; повторяй, уменьшая beforeId, до начала истории. limit по умолчанию 25, порядок — DESC.",
+      inputSchema: {
+        chatId: z.union([z.number(), z.string()]),
+        beforeId: z.union([z.number(), z.string()]).optional(),
+        limit: z.number().optional(),
+        params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
+      },
+      toParams: (a) => ({
+        chatId: a.chatId,
+        ...(a.beforeId !== undefined ? { "filter[lastId]": a.beforeId } : {}),
+        ...(a.limit !== undefined ? { limit: a.limit } : {}),
+      }),
+    },
+    {
+      tool: "bitrix_chat_mark_read",
+      catalogName: "chat.message.read",
+      description:
+        "⚠ МУТИРУЮЩИЙ. Пометить сообщения чата прочитанными. ids — массив id сообщений; " +
+        "actionUuid генерируется автоматически, если не передан.",
+      inputSchema: {
+        chatId: z.union([z.number(), z.string()]),
+        ids: z.array(z.union([z.number(), z.string()])).min(1),
+        actionUuid: z.string().optional(),
+        params: z.record(z.unknown()).optional(),
+        portal: z.string().optional(),
+      },
+      toParams: (a) => ({ chatId: a.chatId, ids: a.ids, actionUuid: a.actionUuid ?? randomUUID() }),
+    },
+    {
+      tool: "bitrix_entity_selector",
+      catalogName: "entityselector.load",
+      description:
+        "Поиск/резолв сущностей (пользователи, проекты, чаты) через entityselector (JSON API). " +
+        'Найти ЧАТ/диалог: dialog={id:"im-chat-search",context:"IM_CHAT_SEARCH",' +
+        'entities:[{id:"im-recent-v2",dynamicLoad:true,dynamicSearch:true}]}. ' +
+        'Найти ПОЛЬЗОВАТЕЛЯ: entities:[{id:"user"}]. Свободный текстовый запрос сверь реверсом.',
+      inputSchema: { dialog: z.record(z.unknown()), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
+      toParams: (a) => ({ dialog: a.dialog }),
     },
   ];
 
