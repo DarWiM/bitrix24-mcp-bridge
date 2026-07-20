@@ -65,18 +65,38 @@ daemon после любой правки, затрагивающей конфи
 
 ## Инструменты
 
-Типизированные инструменты — read-only; `bitrix_call` выполняет любой разрешённый каталогом
-вызов, включая мутирующие. Каждый принимает необязательный параметр `portal` (alias; по
-умолчанию — портал по умолчанию из `config.json`):
+Помимо `bitrix_help` / `bitrix_status` / `bitrix_call`, мост регистрирует типизированные обёртки
+над каталогом (разумные дефолты + схема параметров). Регистрируются только те, чьё имя есть в
+`actions.json`. Точная выборка — через необязательный `params` (мержится последним, перекрывает
+дефолты). Каждый принимает необязательный `portal` (alias; по умолчанию — из `config.json`).
+Обёртки в основном read-only; мутирующие помечены ⚠. `bitrix_call` выполняет любой разрешённый
+каталогом вызов, включая мутирующие.
 
 | Инструмент | Назначение |
 |---|---|
-| `bitrix_help` | справка по API/params (то же, что `docs/api-notes.md`) |
-| `bitrix_status` | какие порталы сконфигурированы и какие сейчас подключены |
-| `bitrix_call` | любой разрешённый вызов из каталога по имени |
-| `bitrix_tasks_list` / `bitrix_task_get` | задачи |
+| `bitrix_help` | справка по API/params (= `docs/api-notes.md`) |
+| `bitrix_status` | какие порталы сконфигурированы и подключены |
+| `bitrix_call` | любой разрешённый вызов из каталога по имени (в т.ч. мутирующий) |
+| *Задачи* | |
+| `bitrix_tasks_list` / `bitrix_task_get` | список задач / карточка |
+| `bitrix_task_get_v2` | карточка через v2-подсистему (JSON) |
+| `bitrix_task_scrum_info` | scrum-инфо (спринт / эпик / story points) |
+| `bitrix_task_files` | файлы задачи |
+| `bitrix_task_views_count` | счётчик просмотров |
+| `bitrix_task_subtasks` / `bitrix_task_related` | подзадачи / связанные задачи |
+| *Проекты* | |
 | `bitrix_projects_list` / `bitrix_project_get` | рабочие группы / проекты |
-| `bitrix_chats_recent` / `bitrix_chat_messages` | чаты и история сообщений |
+| *Чаты* | |
+| `bitrix_chats_recent` | недавние чаты (REST) |
+| `bitrix_recent_load` / `bitrix_recent_tail` | недавние по секции (в т.ч. `tasksTask` — чаты задач) + листание |
+| `bitrix_chat_load` | открыть чат по `dialogId`/`chatId` |
+| `bitrix_chat_messages` | последние сообщения чата |
+| `bitrix_chat_history` | листать историю вглубь |
+| `bitrix_chat_get_dialog_id` | резолв dialogId по externalId |
+| `bitrix_chat_mark_read` ⚠ / `bitrix_chat_read_all` ⚠ | пометить сообщения / все чаты прочитанными |
+| *Люди / поиск* | |
+| `bitrix_user_get` | карточка пользователя |
+| `bitrix_entity_selector` / `bitrix_entity_search` | загрузка селектора / текстовый поиск сущностей |
 
 `bitrix_help` — единственный источник конвенций params (select/filter/order/пагинация,
 имена полей). Он отдаёт `docs/api-notes.md`, так что любому агенту не нужен доступ к репозиторию.
@@ -172,6 +192,15 @@ bun run build:ext               # dev-сборка пер-пользовател
 собирает и `dist/cli.js`, и статичные бандлы расширения (`extension/dist/`), которые
 `setup` затем копирует в runtime-домашнюю папку. Публикуемые файлы перечислены в `files`
 (`dist`, `extension/dist`, `docs/api-notes.md`, `actions.example.json`).
+
+### Релизы
+
+Версионирование и публикация автоматизированы (conventional commits →
+[release-please](.github/workflows/release-please.yml)): бот ведёт release-PR с bump'ом версии и
+`CHANGELOG.md`; при его мерже создаётся GitHub Release/тег и пакет публикуется в npm через **OIDC
+Trusted Publisher** (с provenance, без токенов). CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+гоняет `typecheck` + тесты на push/PR. Ручная до-публикация застрявшего релиза — `workflow_dispatch`
+на `release-please`.
 
 ## Документация
 
