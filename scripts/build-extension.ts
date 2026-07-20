@@ -1,31 +1,26 @@
-// Builds the browser extension from env config (single source of truth: .env).
+// Builds the browser dev extension. Token / origin / port come from the SAME layered config
+// as the daemon (env → .env → ~/.bitrix24-mcp-bridge/config.json, via loadConfig) — the token
+// and portal are the shared global settings, so there is no separate dev secret to drift out
+// of sync with the daemon. Keep in .env only genuine dev overrides (e.g. BITRIX_CATALOG).
 //
 // The content-script JS is STATIC and config-driven: no per-user value is baked into it.
-// Instead we emit a per-user dist/config.json ({ token, port }) that the ISOLATED-world
-// connector fetches at runtime via chrome.runtime.getURL. Only BITRIX_ORIGIN is templated
-// into the manifest (matches / host_permissions / web_accessible_resources).
+// We emit a per-user dist/config.json ({ token, port }) the ISOLATED-world connector fetches at
+// runtime; the portal origin is templated into the manifest.
 //
 // Run via `bun run build:ext` — Bun auto-loads `.env` from the project root.
 import { build } from "esbuild";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { loadConfig } from "../src/config.js";
 
 const SRC = "extension/src";
 const DIST = "extension/dist";
 
-function required(name: string): string {
-  const v = process.env[name]?.trim();
-  if (!v) {
-    console.error(`[build:ext] missing env ${name} — set it in .env (see .env.example)`);
-    process.exit(1);
-  }
-  return v;
-}
-
-const token = required("BITRIX_MCP_TOKEN");
-// A browser Origin header carries no trailing slash; normalize to match the server's check.
-const origin = required("BITRIX_ORIGIN").replace(/\/+$/, "");
-const port = Number(process.env.BITRIX_MCP_PORT ?? 39917);
 const capture = !!process.env.BITRIX_CAPTURE; // capture (recording) build
+// Shared, layered resolution — identical to the daemon's, so the dev extension's token always
+// matches the daemon's. loadConfig already strips the origin's trailing slash.
+const cfg = loadConfig(process.env);
+const { token, port } = cfg;
+const origin = cfg.bitrixOrigin;
 // Extension version tracks the package version (bumped by release-please) — single source.
 const version = JSON.parse(readFileSync("package.json", "utf8")).version as string;
 
