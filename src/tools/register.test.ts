@@ -81,11 +81,39 @@ describe("bitrix_status tool", () => {
     expect(handler).toBeDefined();
     const res = await handler({});
     const payload = JSON.parse(res.content[0].text);
-    expect(payload).toEqual({
+    expect(payload).toMatchObject({
       configured: true,
       defaultPortal: "acme",
       portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true }],
     });
+  });
+
+  it("warns when the connected extension is older than the bridge", async () => {
+    const { server, handlers } = fakeServer();
+    const sink = {
+      call: mock(),
+      status: async () => ({ portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true, extensionVersion: "0.2.1" }] }),
+    };
+    registerTools(server, { sink, catalog, defaultPortal: "acme", portals: ["acme"] });
+
+    const payload = JSON.parse((await handlers["bitrix_status"]({})).content[0].text);
+
+    expect(payload.warning).toMatch(/устарело/);
+    expect(payload.warning).toContain("0.2.1");
+    expect(payload.warning).toContain("chrome://extensions");
+  });
+
+  it("does not warn about a portal that is not connected", async () => {
+    const { server, handlers } = fakeServer();
+    const sink = {
+      call: mock(),
+      status: async () => ({ portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: false, extensionVersion: null }] }),
+    };
+    registerTools(server, { sink, catalog, defaultPortal: "acme", portals: ["acme"] });
+
+    const payload = JSON.parse((await handlers["bitrix_status"]({})).content[0].text);
+
+    expect(payload.warning).toBeUndefined();
   });
 });
 

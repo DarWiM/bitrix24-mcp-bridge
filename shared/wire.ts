@@ -17,6 +17,9 @@ export interface CallTarget {
 export interface AuthMessage {
   type: "auth";
   token: string;
+  // Manifest version of the extension actually running in the browser. Absent from builds made
+  // before this field existed — which is itself the signal that the copy is out of date.
+  version?: string;
 }
 
 export type CallRequest = CallTarget & { type: "call"; id: string; portal?: string };

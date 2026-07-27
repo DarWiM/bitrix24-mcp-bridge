@@ -72,7 +72,7 @@ describe("UdsClient", () => {
     await client.connect();
     try {
       const res = await client.status();
-      expect(res.portals).toEqual([{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: false }]);
+      expect(res.portals).toEqual([{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: false, extensionVersion: null }]);
     } finally {
       client.close();
       await d.stop();

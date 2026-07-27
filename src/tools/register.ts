@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail.js";
 import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
 import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 export interface ToolDeps {
   sink: CallSink;
@@ -80,7 +81,24 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     async () => {
       try {
         const { portals } = await deps.sink.status();
-        return ok({ configured: true, defaultPortal: deps.defaultPortal, portals });
+        // The bundles on disk are refreshed automatically on upgrade, but Chrome keeps running
+        // the copy it loaded until someone hits "Обновить" — so a stale extension is reported
+        // rather than left to fail later with a confusing error.
+        const stale = portals.filter((p) => p.connected && p.extensionVersion !== PACKAGE_VERSION);
+        return ok({
+          configured: true,
+          defaultPortal: deps.defaultPortal,
+          packageVersion: PACKAGE_VERSION,
+          portals,
+          ...(stale.length > 0
+            ? {
+                warning:
+                  `расширение устарело (${stale.map((p) => `${p.alias}: ${p.extensionVersion ?? "до 0.3.0"}`).join(", ")}), ` +
+                  `мост версии ${PACKAGE_VERSION}. Файлы уже обновлены — нажми «Обновить» на расширении в chrome://extensions ` +
+                  "и перезагрузи вкладку портала, иначе новые методы работать не будут.",
+              }
+            : {}),
+        });
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));
       }

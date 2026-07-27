@@ -5,7 +5,13 @@ import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult } from "./protocol.js";
 
-export interface PortalConnection { alias: string; origin: string; connected: boolean }
+export interface PortalConnection {
+  alias: string;
+  origin: string;
+  connected: boolean;
+  /** Version the connected extension reports; null when it is too old to report one. */
+  extensionVersion?: string | null;
+}
 
 export interface DaemonOptions {
   port: number;
@@ -94,7 +100,12 @@ export class Daemon {
           if (msg?.type === "status") {
             const connected = this.bridge.connectedOrigins();
             const portals: PortalConnection[] = Object.entries(this.opts.portals).map(
-              ([alias, p]) => ({ alias, origin: p.origin, connected: connected.includes(p.origin) }),
+              ([alias, p]) => ({
+                alias,
+                origin: p.origin,
+                connected: connected.includes(p.origin),
+                extensionVersion: this.bridge.extensionVersion(p.origin),
+              }),
             );
             sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { portals } }));
             continue;

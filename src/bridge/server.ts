@@ -32,6 +32,7 @@ export class Bridge {
   private pending = new Map<string, Pending>();
   private downloads = new Map<string, Download>();
   private downloadPaths = new Map<string, string>(); // call id → where its body must land
+  private extensionVersions = new Map<WebSocket, string>(); // what each connected copy reports
 
   constructor(private opts: BridgeOptions) {}
 
@@ -71,7 +72,9 @@ export class Bridge {
         if (msg.type === "auth" && msg.token === this.opts.token) {
           authed = true;
           (this.byOrigin.get(key) ?? this.byOrigin.set(key, new Set()).get(key)!).add(ws);
-          console.error(`[bridge] extension authenticated (origin ${key || "<none>"})`);
+          // Absent on extensions built before the field existed — treated as "unknown, likely old".
+          if (msg.version) this.extensionVersions.set(ws, msg.version);
+          console.error(`[bridge] extension authenticated (origin ${key || "<none>"}, version ${msg.version ?? "<unknown>"})`);
         } else {
           console.error("[bridge] auth failed — closing socket");
           ws.close();
@@ -83,7 +86,10 @@ export class Bridge {
       else if (msg.type === "binary-begin") this.beginDownload(msg);
       else if (msg.type === "binary-chunk") this.writeChunk(msg);
     });
-    ws.on("close", () => this.byOrigin.get(key)?.delete(ws));
+    ws.on("close", () => {
+      this.byOrigin.get(key)?.delete(ws);
+      this.extensionVersions.delete(ws);
+    });
   }
 
   private beginDownload(msg: BinaryBeginMessage) {
@@ -139,6 +145,12 @@ export class Bridge {
     return [...this.byOrigin.entries()]
       .filter(([, set]) => [...set].some((ws) => ws.readyState === WebSocket.OPEN))
       .map(([origin]) => origin);
+  }
+
+  /** Version the extension serving this origin reports; null when it predates the field. */
+  extensionVersion(origin: string): string | null {
+    const live = [...(this.byOrigin.get(origin) ?? [])].find((ws) => ws.readyState === WebSocket.OPEN);
+    return live ? this.extensionVersions.get(live) ?? null : null;
   }
 
   call(origin: string, target: CallTarget): Promise<unknown> {

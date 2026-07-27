@@ -34,7 +34,7 @@ import {
 declare const __BITRIX_CAPTURE__: boolean;
 
 // Minimal ambient for the one chrome API we use (no @types/chrome dependency).
-declare const chrome: { runtime: { getURL(path: string): string } };
+declare const chrome: { runtime: { getURL(path: string): string; getManifest(): { version?: string } } };
 
 const ORIGIN = location.origin;
 const SESSID_TIMEOUT_MS = 2000;
@@ -124,7 +124,7 @@ async function handleBinaryCall(req: CallRequest, ws: WebSocket): Promise<Interp
 function connect(config: BridgeConfig): void {
   const ws = new WebSocket(`ws://127.0.0.1:${config.port}`);
   ws.addEventListener("open", () => {
-    ws.send(JSON.stringify({ type: "auth", token: config.token })); // auth first (server closes non-auth)
+    ws.send(JSON.stringify({ type: "auth", token: config.token, version: chrome.runtime.getManifest().version }));
     socket = ws;
   });
   ws.addEventListener("message", async (ev: MessageEvent) => {

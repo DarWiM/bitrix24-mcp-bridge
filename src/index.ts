@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { registerTools } from "./tools/register.js";
 import { registerUnconfiguredTools } from "./tools/unconfigured.js";
 import { runSetup } from "./setup/setup.js";
+import { refreshMaterializedExtension } from "./setup/config-core.js";
 
 async function runDaemon() {
   const cfg = loadConfig(process.env);
@@ -39,7 +40,8 @@ async function runMcpClient() {
   }
 
   const cfg = state.config;
-  const sockPath = runtimePaths(process.env).sock;
+  const paths = runtimePaths(process.env);
+  const sockPath = paths.sock;
 
   const client = new UdsClient({
     sockPath,
@@ -58,9 +60,25 @@ async function runMcpClient() {
   const added = syncCatalogWithPackage({
     catalogPath: cfg.catalogPath,
     examplePath: join(PROJECT_ROOT, "actions.example.json"),
-    statePath: runtimePaths(process.env).catalogStateJson,
+    statePath: paths.catalogStateJson,
   });
   if (added.length > 0) console.error(`[catalog] added ${added.length} new entries from the package: ${added.join(", ")}`);
+
+  // Same idea for the extension bundles: refresh what setup materialized, so an upgrade doesn't
+  // depend on the user remembering `setup` → [u]. They still have to hit "Обновить" in Chrome —
+  // and bitrix_status says so, because the extension reports its own version on connect.
+  try {
+    const refreshed = refreshMaterializedExtension({
+      home: paths.home,
+      config: { token: cfg.token, port: cfg.port, defaultPortal: cfg.defaultPortal, portals: cfg.portals },
+      staticExtDir: join(PROJECT_ROOT, "extension/dist"),
+    });
+    if (refreshed) {
+      console.error(`[extension] refreshed ${paths.extensionDir} to ${refreshed} — reload it at chrome://extensions`);
+    }
+  } catch (e) {
+    console.error(`[extension] could not refresh: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   const catalog = loadCatalog(cfg.catalogPath);
   registerTools(server, {

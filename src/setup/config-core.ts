@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PortalConfig } from "../config.js";
+import { PACKAGE_VERSION, isReleaseBuild } from "../version.js";
 
 export const DEFAULT_PORT = 39917;
 
@@ -112,11 +113,8 @@ export function setDefaultPortal(config: ServerConfig, alias: string): ServerCon
 
 // --- extension materialization ---
 
-// Injected by build:dist (esbuild define) from package.json — single source of truth for
-// the extension version. Falls back for non-bundled dev/test runs (maintainers rebuild via
-// build:ext for a real load anyway).
-declare const __EXT_VERSION__: string | undefined;
-const EXT_VERSION = typeof __EXT_VERSION__ === "string" ? __EXT_VERSION__ : "0.0.0-dev";
+// The extension version tracks the package version (single source: src/version.ts).
+const EXT_VERSION = PACKAGE_VERSION;
 
 export interface ExtensionManifest {
   manifest_version: 3;
@@ -181,4 +179,32 @@ export function materializeExtension(args: { home: string; config: ServerConfig;
     JSON.stringify(buildManifest(args.config), null, 2) + "\n",
   );
   return destDir;
+}
+
+/** Version stamped into the materialized manifest, or null if it isn't there / is unreadable. */
+export function materializedVersion(home: string): string | null {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(home, "extension", "manifest.json"), "utf8"));
+    const version = raw !== null && typeof raw === "object" ? (raw as { version?: unknown }).version : undefined;
+    return typeof version === "string" ? version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refreshes the materialized extension after a package upgrade, so the user doesn't have to run
+ * `setup` → `[u]` by hand. Returns the version written, or null when nothing was done.
+ *
+ * Skipped for non-release builds: a dev run reports the sentinel version and would otherwise
+ * overwrite a real installation with whatever happens to be in the checkout. Copying files does
+ * NOT reload the extension in the browser — Chrome only re-reads them on "Обновить"; the stale
+ * copy still running there is surfaced via the version it reports on connect.
+ */
+export function refreshMaterializedExtension(args: { home: string; config: ServerConfig; staticExtDir: string }): string | null {
+  if (!isReleaseBuild) return null;
+  if (materializedVersion(args.home) === PACKAGE_VERSION) return null;
+  if (!existsSync(join(args.home, "extension"))) return null; // never set up here — leave it to setup
+  materializeExtension(args);
+  return PACKAGE_VERSION;
 }
