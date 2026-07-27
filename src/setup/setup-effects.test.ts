@@ -28,6 +28,7 @@ function makePaths(sock: string): RuntimePaths {
     lock: join(home, "bridge.lock"),
     extensionDir: join(home, "extension"),
     downloadsDir: join(home, "downloads"),
+    catalogStateJson: join(home, "catalog-state.json"),
   };
 }
 

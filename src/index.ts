@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { loadConfig, loadConfigState } from "./config.js";
+import { loadConfig, loadConfigState, PROJECT_ROOT } from "./config.js";
 import { runtimePaths } from "./paths.js";
 import { Daemon } from "./bridge/daemon.js";
 import { UdsClient } from "./bridge/uds-client.js";
 import { loadCatalog } from "./catalog/catalog.js";
+import { syncCatalogWithPackage } from "./catalog/sync.js";
+import { join } from "node:path";
 import { registerTools } from "./tools/register.js";
 import { registerUnconfiguredTools } from "./tools/unconfigured.js";
 import { runSetup } from "./setup/setup.js";
@@ -49,6 +51,16 @@ async function runMcpClient() {
     },
   });
   await client.connect();
+
+  // A package upgrade ships new catalog entries, but the installed catalog is the user's file
+  // (and the allowlist), so it is never overwritten — only extended with entries this install
+  // has not been offered before.
+  const added = syncCatalogWithPackage({
+    catalogPath: cfg.catalogPath,
+    examplePath: join(PROJECT_ROOT, "actions.example.json"),
+    statePath: runtimePaths(process.env).catalogStateJson,
+  });
+  if (added.length > 0) console.error(`[catalog] added ${added.length} new entries from the package: ${added.join(", ")}`);
 
   const catalog = loadCatalog(cfg.catalogPath);
   registerTools(server, {

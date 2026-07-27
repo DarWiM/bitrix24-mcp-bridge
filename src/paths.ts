@@ -9,6 +9,7 @@ export interface RuntimePaths {
   lock: string;
   extensionDir: string;
   downloadsDir: string;
+  catalogStateJson: string;
 }
 
 export function runtimePaths(env: NodeJS.ProcessEnv): RuntimePaths {
@@ -21,5 +22,7 @@ export function runtimePaths(env: NodeJS.ProcessEnv): RuntimePaths {
     lock: join(home, "bridge.lock"),
     extensionDir: join(home, "extension"),
     downloadsDir: join(home, "downloads"),
+    // Which shipped catalog entries this install has already been offered (see catalog/sync.ts).
+    catalogStateJson: join(home, "catalog-state.json"),
   };
 }
