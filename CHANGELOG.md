@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.3.0...bitrix24-mcp-bridge-v0.4.0) (2026-07-27)
+
+
+### Features
+
+* **bridge:** add text and binary response modes ([2fdf00b](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/2fdf00b8fb57378261a08c46d991af4283ef09aa))
+* **catalog:** deliver new package entries into an installed catalog ([82e87e1](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/82e87e1d882a02110558206db06722e414034f87))
+* **setup:** refresh the extension on upgrade and flag a stale one ([f2c89a5](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/f2c89a5c61c0df6bd5bb5f24aaa7f4ab702cc4f4))
+* **tools:** read call analysis and download portal files ([d673f28](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/d673f280f7915f6112dc76d658119a610f5870b6))
+
+
+### Bug Fixes
+
+* **bridge:** decode utf-8 across socket chunk boundaries ([f8a8528](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/f8a85289d84621a0f5e6ffe1caf11ac78aeeb808))
+* **tools:** correct the task list pagination and status hints ([38900e5](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/38900e516c2acd1f616868d324dd88ec43743f08))
+
 ## [0.3.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.2.1...bitrix24-mcp-bridge-v0.3.0) (2026-07-20)
 
 
