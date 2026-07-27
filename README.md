@@ -229,6 +229,6 @@ Trusted Publisher** (с provenance, без токенов). CI ([`.github/workfl
 ## Документация
 
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — установка, настройка, повседневная работа, диагностика
-- [docs/api-notes.md](docs/api-notes.md) — карта API Bitrix24 (единый источник для `bitrix_help`)
-- [docs/reconnaissance.md](docs/reconnaissance.md) — как снять HAR и расширить `actions.json`
+- [docs/api-notes.md](docs/api-notes.md) — карта API Bitrix24 для агента (единый источник для `bitrix_help`)
+- [docs/reconnaissance.md](docs/reconnaissance.md) — capture, транспорт записи каталога, расширение `actions.json`
 - [extension/README.md](extension/README.md) — устройство расширения и модель доверия

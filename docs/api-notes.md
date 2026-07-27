@@ -1,59 +1,34 @@
 # Bitrix24 API notes (reverse-engineered)
 
-Справочник по API Bitrix24, добытый **живым реверсом**. Часть вызовов моста совпадает с
-**публичным REST** (`tasks.task.*`, `im.recent.list`, `im.user.get`, `socialnetwork.api.workgroup.*`) —
-по ним есть официальная документация; часть — **сугубо внутренние ajax-контроллеры**
-(`im.v2.*`, `tasks.v2.*`, `ui.entityselector.*`), публичных доков по которым нет, только реверс.
-Предназначен для любого ИИ-агента или разработчика, который вызывает эти методы через мост
-(`bitrix_call` / типизированные инструменты) или расширяет каталог.
+Как агенту работать с Bitrix24 через этот мост: формат `params`, имена полей, готовые цепочки вызовов.
 
-> **Официальные REST-доки** — [`apidocs.bitrix24.com`](https://apidocs.bitrix24.com) (исходники:
-> [`github.com/bitrix24/b24restdocs`](https://github.com/bitrix24/b24restdocs); агенту с MCP context7 —
-> библиотека `/bitrix24/b24restdocs`). Для публично-документированных методов доки применимы напрямую;
-> для внутренних `im.v2.*`/`tasks.v2.*` — как **справочный аналог** (конверт/регистр полей могут
-> отличаться, сверяй реверсом). Дальше по тексту такие отсылки помечены **📖**; иди по ним, если нужна
-> деталь, которой здесь нет.
-
-Наблюдения сняты на портале `example.bitrix24.ru` (облако, мессенджер **im.v2**, задачи в режиме
-**scrum-борда**). Имена полей и конвенции стандартны для облачного Bitrix24, но при переносе на другой
-портал сверяйся реверсом (`docs/reconnaissance.md`).
+Две поверхности API. **Публичный REST** (`tasks.task.*`, `im.recent.list`, `im.user.get`, `im.chat.get`,
+`socialnetwork.api.workgroup.*`) — есть официальные доки, ссылки на них помечены **📖**
+([`apidocs.bitrix24.com`](https://apidocs.bitrix24.com); агенту с MCP context7 — библиотека
+`/bitrix24/b24restdocs`). **Внутренние ajax-контроллеры** (`im.v2.*`, `tasks.v2.*`, `ui.entityselector.*`)
+публичных доков не имеют — всё ниже добыто живым реверсом; конверт и регистр полей у них могут
+отличаться от 📖-аналогов. Имена полей стандартны для облачного Bitrix24; на другом портале сверяйся
+реверсом (`docs/reconnaissance.md`).
 
 ---
 
 ## 1. Как вызывать
 
-- **`bitrix_call { name, params }`** — универсальный вызов любого разрешённого имени из каталога
-  (`actions.json`). `params` — нативный формат Bitrix (см. раздел 3). Каталог может включать
-  мутирующие вызовы; allowlist (`actions.json`) — единственная граница, не режим чтения.
-- **Типизированные инструменты** — обёртки с разумными дефолтами над каталогом. Точная выборка — через
-  опциональный `params`, он мержится **последним** и перекрывает дефолты. Регистрируются только те,
-  чьё имя есть в каталоге (`actions.json`); иначе инструмент пропускается. Текущий набор:
-  - Задачи: `bitrix_tasks_list`, `bitrix_task_get`, `bitrix_task_get_v2` (v2/JSON),
-    `bitrix_task_scrum_info`, `bitrix_task_files`, `bitrix_task_views_count`,
-    `bitrix_task_subtasks` (подзадачи), `bitrix_task_related` (связанные).
-  - Проекты: `bitrix_projects_list`, `bitrix_project_get`.
-  - Чаты: `bitrix_chats_recent`, `bitrix_recent_load` (недавние по секции — в т.ч. `tasksTask` =
-    чаты задач), `bitrix_recent_tail` (листать недавние вглубь), `bitrix_chat_load` (открыть по
-    `dialogId`/`chatId`), `bitrix_chat_messages`, `bitrix_chat_history` (листать вглубь по `beforeId`),
-    `bitrix_chat_get_dialog_id` (dialogId по externalId), `bitrix_chat_mark_read` (⚠ мутирующий),
-    `bitrix_chat_read_all` (⚠ мутирующий).
-  - Люди/поиск: `bitrix_user_get` (карточка юзера), `bitrix_entity_selector` (загрузка селектора),
-    `bitrix_entity_search` (текстовый поиск чатов/сущностей через `ui.entityselector.doSearch`),
-    `bitrix_entity_chat` (chatId чата связанного объекта: задачи/группы/CRM — через `im.chat.get`).
-  - Звонки/созвоны: `bitrix_chat_calls` (найти звонки в чате → `callId`), `bitrix_call_detail`
-    (всё по звонку: резюме, решения, задачи, участники, расшифровка, запись). См. §6.6.
-  - Файлы: `bitrix_file_download` (скачать вложение чата/задачи по ссылке на диск),
-    `bitrix_call_recording` (аудиозапись созвона по `callId`). См. §6.7.
-
-  Любое имя каталога всегда доступно и напрямую через `bitrix_call { name, params }`.
-- **`bitrix_help`** — этот же гайд, отдаётся через MCP (инструмент + resource `bitrix://api-notes`).
-  Источник — **этот файл** (`docs/api-notes.md`).
-
-Полный список имён каталога отдаёт `bitrix_call` в своём описании (`deps.catalog.names()`).
+- **Типизированные инструменты** (`bitrix_tasks_list`, `bitrix_task_get`, `bitrix_chat_load`, …) —
+  обёртки с разумными дефолтами; их полный список и описания видны среди MCP-инструментов. Точная
+  выборка — опциональным `params`: он мержится **последним** и перекрывает дефолты.
+- **`bitrix_call { name, params }`** — любое имя из каталога (`actions.json`), `params` в нативном
+  формате Bitrix (§3). Полный список имён отдаёт сам `bitrix_call` в своём описании.
+- Каталог может содержать **мутирующие** вызовы: наличие записи = разрешение вызвать. Это не режим
+  «только чтение».
+- У обёрток есть дефолты (напр. `bitrix_tasks_list` сортирует `{"ID":"desc"}`), у `bitrix_call` их нет —
+  один и тот же фильтр даст разные страницы. Сравниваешь выдачи — задавай `order` явно.
+- Ответ `invalid_csrf` / `invalid_authentication` = сессия портала протухла → перелогинься в браузере
+  на вкладке портала.
 
 ---
 
-## 2. Формат ответа (важно!)
+## 2. Формат ответа
 
 Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают HTTP 200 с конвертом:
 
@@ -63,236 +38,135 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
   "errors": [] }          // ПУСТОЙ массив при успехе! (в JS [] — truthy)
 ```
 
-- Успех определяется `status:"success"` и/или **пустым** `errors`. Непустой `errors` / `status:"error"` /
-  top-level `error` — реальная ошибка (мост маппит это в `ok:false`).
-- REST-эндпоинты (`/rest/*.json`) отвечают иначе: `{ "result": …, "next", "total", "time" }` — без `errors`.
+Успех = `status:"success"` и/или **пустой** `errors`. Непустой `errors` / `status:"error"` / top-level
+`error` — реальная ошибка (мост маппит её в `ok:false`). REST-эндпоинты (`/rest/*.json`) отвечают
+иначе: `{ "result": …, "next", "total", "time" }` — без `errors`.
 
 ---
 
-## 3. Транспорт: form vs json (различается по методу!)
+## 3. Каталог: имя → action → params
 
-У каждой записи каталога есть **`bodyType`** — как мост кодирует тело:
+Форма `params` различается по методу: где-то плоско, где-то вложенно, где-то обёрнуто в `params[…]` —
+колонка «params» показывает точную форму (кодирование тела мост берёт на себя).
 
-- **`bodyType: "form"`** (по умолчанию) — `application/x-www-form-urlencoded`; вложенность кодируется
-  PHP-стилем (`filter[STATUS]=2`, `select[0]=ID`). Объект в `params` рекурсивно разворачивается в такие
-  ключи. Классические `tasks.task.*`, мессенджер `im.v2.*`, REST — всё это форма.
-- **`bodyType: "json"`** — тело уходит как `JSON.stringify(params)` с `Content-Type: application/json`.
-  Так работают **`tasks.v2.*`** (напр. `tasks.v2.Task.get` ждёт `{"task":{"id":N}}`) и `ui.entityselector.*`.
-  `params` при этом сохраняет вложенную структуру как есть (не разворачивается в bracket-ключи).
-
-> Историческая заметка: раньше мост умел только форму, и `tasks.v2.*` были непригодны. Теперь
-> поддержаны — в записи каталога ставь `"bodyType": "json"`, и мост отправит их корректно.
-
-**HTML-ответы (`responseType`).** По умолчанию (`"json"`) ответ разбирается как JSON и проходит через
-конверт из §2. Часть портала отдаёт не JSON, а серверный HTML (side-slider'ы: детали звонка,
-легаси-комментарии задач) — для таких записей ставь **`"responseType": "text"`**, и мост вернёт
-`{ contentType, text }` без разбора. Ошибкой считается только HTTP ≥ 400 или пустое тело, поэтому
-редирект на логин приедет как «успешный» HTML — распознавать его должен разбирающий инструмент
-(так делает `bitrix_call_detail`: нет `data-call-id` → внятная ошибка).
-
-**Бинарные загрузки (`responseType: "binary"`).** Тело ответа не возвращается, а **стримится на диск**:
-расширение читает его как `ArrayBuffer` и шлёт по WS чанками base64 по 1 МиБ (`binary-begin` →
-`binary-chunk`×N → обычный `result`), daemon пишет их в файл. Вызывающему приходит только
-`{ path, bytes, contentType, fileName }` — гигабайты не попадают ни в контекст агента, ни в память
-daemon. Так работают `bitrix_file_download` / `bitrix_call_recording` (§6.7). Потолок — 512 МБ на файл.
-
-**Path-параметры в `endpoint`.** `endpoint` может содержать плейсхолдеры `{имя}` — значение берётся из
-`params` и подставляется в URL (а из тела/query исключается): `"/call/detail/{callId}"` +
-`params: { callId: 4242 }` → `GET /call/detail/4242`. Нет значения — вызов падает с внятной ошибкой,
-а не уходит с дырой в URL.
-
-**CSRF / sessid:** мост всегда шлёт заголовок **`X-Bitrix-Csrf-Token: <sessid>`** (свежий
-`BX.bitrix_sessid()`). Form-тела дополнительно несут `sessid` полем в теле (legacy REST это требует);
-JSON-тела несут sessid **только** в заголовке. Ответ `invalid_csrf`/`invalid_authentication` = сессия
-протухла (перелогинься в браузере).
-
-| Метод (action / endpoint) | bodyType | Где `select`/`filter`/`order` | Пагинация |
+| Имя (`bitrix_call`) | action / endpoint | params | Пагинация |
 |---|---|---|---|
-| `tasks.task.list` | form | **верхний уровень**: `select[]`, `filter{}`, `order{}` | `start` (сдвиг, шаг 50) |
-| `tasks.task.get` | form | верхний уровень: `taskId`, `select[]` | — |
-| `tasks.v2.Task.get` | **json** | `{"task": {"id": N}}` | — |
-| `tasks.v2.Scrum.getTaskInfo` | **json** | `{"taskId": N}` | — |
-| `tasks.v2.File.listObjects` | **json** | `{"ids": [N,…]}` | — |
-| `tasks.v2.Task.View.User.count` | **json** | `{"task": {"id": N}}` | — |
-| `tasks.v2.Task.Relation.Child.list` | **json** | `{"taskId": N, "withIds":true, "navigation":{"size":N}}` | `navigation` |
-| `tasks.v2.Task.Relation.Related.list` | **json** | `{"taskId": N, …}` (как Child) | `navigation` |
-| `socialnetwork.api.workgroup.list` | form | **верхний уровень**: `select[]`, `order{}`, `filter{}` | `start` (шаг 50; `start=(N-1)*50`, `-1` — ответ без `total`) 📖 |
-| `socialnetwork.api.workgroup.get` | form | **обёрнуто**: `params[groupId]`, `params[select][]` | — |
-| `/rest/im.recent.list.json` | form (rest) | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY`, … | `LIMIT` |
-| `/rest/im.user.get.json` | form (rest) | плоско: `ID` | — |
-| `/rest/im.chat.get.json` | form (rest) | плоско: `ENTITY_TYPE`, `ENTITY_ID` | — |
-| `im.v2.Recent.load` | form | плоско: `limit`, `filter[recentSection]`, `filter[unread]`, `filter[parentId]` | `im.v2.Recent.tail` |
-| `im.v2.Recent.tail` | form | плоско: `limit`, `filter[lastMessageDate]` (курсор), `filter[recentSection]` | `filter[lastMessageDate]` |
-| `im.v2.Chat.load` | form | плоско: `dialogId`\|`chatId`, `messageLimit` | — |
-| `im.v2.Chat.getDialogId` | form | плоско: `externalId` | — |
-| `im.v2.Chat.Message.list` | form | плоско: `chatId`, `limit` | только последняя страница — назад **не листает**, используй `.tail` |
-| `im.v2.Chat.Message.tail` | form | плоско: `chatId`, `limit`, `filter[lastId]`, `order[id]` | **см. раздел 6** |
-| `im.v2.Chat.Message.read` | form | плоско: `chatId`, `ids[]`, `actionUuid` | — (мутирующий) |
-| `im.v2.Chat.readAll` | form | без параметров | — (мутирующий) |
-| `ui.entityselector.load` | **json** | `{"dialog": {entities,preselectedItems,…}}` | — |
-| `ui.entityselector.doSearch` | **json** | `{"dialog": {…}, "searchQuery": {"query": "...", "queryWords": ["..."]}}` | — |
+| `tasks.list` | `tasks.task.list` | верхний уровень: `filter{RESPONSIBLE_ID,REAL_STATUS,GROUP_ID,…}`, `select[]`, `order{}` | **`PAGEN_1`** — номер страницы (1, 2, 3…), страница = 20 задач; `start` **не работает** (вернёт ту же первую страницу) |
+| `task.get` | `tasks.task.get` | верхний уровень: `taskId`, `select[]` | — |
+| `task.v2.get` | `tasks.v2.Task.get` | вложенно: `{"task":{"id":N}}` | — |
+| `task.scrum.info` | `tasks.v2.Scrum.getTaskInfo` | `{"taskId":N}` | — |
+| `task.files` | `tasks.v2.File.listObjects` | `{"ids":[N,…]}` | — |
+| `task.views.count` | `tasks.v2.Task.View.User.count` | вложенно: `{"task":{"id":N}}` | — |
+| `task.subtasks` | `tasks.v2.Task.Relation.Child.list` | `{"taskId":N,"withIds":true,"navigation":{"size":N}}` | `navigation` |
+| `task.related` | `tasks.v2.Task.Relation.Related.list` | как `task.subtasks` | `navigation` |
+| `projects.list` | `socialnetwork.api.workgroup.list` | верхний уровень: `select[]`, `order{}`, `filter{}` | `start` (шаг 50; `start=(N-1)*50`, `-1` — ответ без `total`) 📖 |
+| `projects.get` | `socialnetwork.api.workgroup.get` | **обёрнуто**: `params[groupId]`, `params[select][]` | — |
+| `chats.recent` | `/rest/im.recent.list.json` | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY` | `LIMIT` |
+| `recent.load` | `im.v2.Recent.load` | плоско: `limit`, `filter[recentSection]` (`tasksTask`/`collab`/…), `filter[unread]`, `filter[parentId]` | `recent.tail` |
+| `recent.tail` | `im.v2.Recent.tail` | плоско: `limit`, `filter[lastMessageDate]` (курсор), `filter[recentSection]` | `filter[lastMessageDate]` |
+| `chat.load` | `im.v2.Chat.load` | плоско: `dialogId`\|`chatId`, `messageLimit` | — |
+| `chat.dialogId` | `im.v2.Chat.getDialogId` | плоско: `externalId` (напр. `"sg"+groupId`) | — |
+| `chat.messages` | `im.v2.Chat.Message.list` | плоско: `chatId`, `limit` | только последняя страница — назад **не листает**, используй `chat.messages.tail` |
+| `chat.messages.tail` | `im.v2.Chat.Message.tail` | плоско: `chatId`, `limit`, `filter[lastId]`, `order[id]` | `filter[lastId]` (§5.1) |
+| `chat.message.read` | `im.v2.Chat.Message.read` | плоско: `chatId`, `ids[]`, `actionUuid` | ⚠ мутирующий |
+| `chat.read.all` | `im.v2.Chat.readAll` | без параметров | ⚠ мутирующий |
+| `im.user.get` | `/rest/im.user.get.json` | плоско: `ID` | — |
+| `im.chat.get` | `/rest/im.chat.get.json` | плоско: `ENTITY_TYPE`, `ENTITY_ID` (напр. `TASKS_TASK`+taskId) | — |
+| `entityselector.load` | `ui.entityselector.load` | `{"dialog":{entities,preselectedItems,…}}` | — |
+| `entityselector.search` | `ui.entityselector.doSearch` | `{"dialog":{…},"searchQuery":{"query":"…","queryWords":["…"]}}` | — |
+| `call.detail` | `GET /call/detail/{callId}` | `callId` (подставляется в путь), `IFRAME=Y`, `IFRAME_TYPE=SIDE_SLIDER` → HTML | см. §5.4 |
 
 ---
 
-## 4. Каталог: имя → action → параметры
-
-| Имя (`actions.json`) | action / endpoint | bodyType | Ключевые params |
-|---|---|---|---|
-| `tasks.list` | `tasks.task.list` | form | `filter{RESPONSIBLE_ID,REAL_STATUS,GROUP_ID,…}`, `select[]`, `order{}`, `start` |
-| `task.get` | `tasks.task.get` | form | `taskId`, `select[]` |
-| `task.v2.get` | `tasks.v2.Task.get` | json | `task.id` (id задачи) |
-| `task.scrum.info` | `tasks.v2.Scrum.getTaskInfo` | json | `taskId` |
-| `task.files` | `tasks.v2.File.listObjects` | json | `ids` (массив id) |
-| `task.views.count` | `tasks.v2.Task.View.User.count` | json | `task.id` (id задачи) |
-| `task.subtasks` | `tasks.v2.Task.Relation.Child.list` | json | `taskId`, `navigation{size}` |
-| `task.related` | `tasks.v2.Task.Relation.Related.list` | json | `taskId`, `navigation{size}` |
-| `projects.list` | `socialnetwork.api.workgroup.list` | form | `select[]`, `order{}`, `filter{}` |
-| `projects.get` | `socialnetwork.api.workgroup.get` | form | `params[groupId]`, `params[select][]` |
-| `chats.recent` | `/rest/im.recent.list.json` | form | `LIMIT`, `UNREAD_ONLY`, `SKIP_OPENLINES` |
-| `recent.load` | `im.v2.Recent.load` | form | `filter[recentSection]` (`tasksTask`/`collab`/…), `limit`, `filter[unread]` |
-| `recent.tail` | `im.v2.Recent.tail` | form | `filter[lastMessageDate]`, `filter[recentSection]`, `limit` |
-| `chat.load` | `im.v2.Chat.load` | form | `dialogId`\|`chatId`, `messageLimit` |
-| `chat.dialogId` | `im.v2.Chat.getDialogId` | form | `externalId` (напр. `"sg"+groupId`) |
-| `chat.messages` | `im.v2.Chat.Message.list` | form | `chatId`, `limit` (последние; вглубь — `chat.messages.tail`) |
-| `chat.messages.tail` | `im.v2.Chat.Message.tail` | form | `chatId`, `filter[lastId]`, `order[id]`, `limit` |
-| `chat.message.read` | `im.v2.Chat.Message.read` | form | `chatId`, `ids[0]`, `actionUuid` |
-| `chat.read.all` | `im.v2.Chat.readAll` | form | — (⚠ мутирующий) |
-| `im.user.get` | `/rest/im.user.get.json` | form | `ID` |
-| `im.chat.get` | `/rest/im.chat.get.json` | form | `ENTITY_TYPE`, `ENTITY_ID` (напр. `TASKS_TASK`+taskId) |
-| `entityselector.load` | `ui.entityselector.load` | json | `dialog` (объект) |
-| `entityselector.search` | `ui.entityselector.doSearch` | json | `dialog`, `searchQuery{query,queryWords}` |
-| `call.detail` | `GET /call/detail/{callId}` | form, **`responseType: "text"`** | `callId` (в путь), `IFRAME=Y`, `IFRAME_TYPE=SIDE_SLIDER` → HTML, см. §6.6 |
-
----
-
-## 5. Справочник полей
+## 4. Справочник полей
 
 **Задача** (`tasks.task.*`) — поля для `select`/`filter` в UPPER_CASE: `ID`, `TITLE`, `DESCRIPTION`,
 `STATUS`, `REAL_STATUS`, `RESPONSIBLE_ID`, `CREATED_BY`, `CREATED_DATE`, `CHANGED_DATE`, `DEADLINE`,
-`CLOSED_DATE`, `PRIORITY`, `GROUP_ID`, `TAGS`, `TIME_ESTIMATE`, **`CHAT_ID`** (id im-чата обсуждения
-задачи — прямой резолвер `taskId → chatId`, см. §6.3), `UF_*`. Ответ ajax также подкладывает объекты
-`group`, `responsible`, `creator`, `action`.
+`CLOSED_DATE`, `PRIORITY`, `GROUP_ID`, `TAGS`, `TIME_ESTIMATE`, **`CHAT_ID`** (id чата-обсуждения
+задачи — прямой резолвер `taskId → chatId`, §5.2), `UF_*`. Ответ подкладывает объекты `group`,
+`responsible`, `creator`, `action`.
+📖 (`tasks.task.get`/`list`) — сверх этого: `parentId`, `stageId`, `sprintId`, `backlogId`,
+`commentsCount`, `timeSpentInLogs`, `favorite`, `flowId`, `mark`, `accomplices[]`, `auditors[]`,
+`checklist{}`, `subStatus`; в официальном REST-ответе поля приходят **camelCase**, а в `select`/`filter`
+они всегда **UPPER_CASE**. Доп. вычисления — флагами `params{WITH_TIMER_INFO, WITH_RESULT_INFO,
+WITH_PARSED_DESCRIPTION}`.
 
-📖 офиц. (`tasks.task.get` / `tasks.task.list`) — полный набор полей задачи, среди прочего: `parentId`,
-`stageId`, `sprintId`, `backlogId`, `commentsCount`, `serviceCommentsCount`, `timeEstimate`,
-`timeSpentInLogs`, `favorite`, `flowId`, `mark`, `accomplices[]`, `auditors[]`, `checklist{}`,
-`subStatus`. В официальном REST-ответе поля приходят **camelCase** (`groupId`, `responsibleId`), тогда
-как в `select`/`filter` они всегда **UPPER_CASE**; наш ajax-вариант может отдавать иначе — сверяй
-реверсом. Доп. вычисления включаются флагом `params{WITH_TIMER_INFO, WITH_RESULT_INFO, WITH_PARSED_DESCRIPTION}`.
-
-Статусы (`REAL_STATUS` — «настоящее» числовое состояние): `1` Новая · `2` Ждёт выполнения ·
+**Статусы** (`REAL_STATUS` — «настоящее» числовое состояние): `1` Новая · `2` Ждёт выполнения ·
 `3` Выполняется · `4` Ждёт контроля · `5` Завершена · `6` Отложена · `7` Отклонена. Поле `STATUS`
 поверх этого несёт **мета-состояния** отображения (почти просрочена / не просмотрена / просрочена),
-поэтому «работает ли задача сейчас» фильтруй по **`REAL_STATUS`** (напр. `{"REAL_STATUS":3}`), а не
-по `STATUS` (📖 `tasks.task.list`).
+поэтому «работает ли задача сейчас» фильтруй по **`REAL_STATUS`** (напр. `{"REAL_STATUS":3}`) 📖.
+Асимметрия: в **`filter`** работает `REAL_STATUS`, а в **`select`** его указывать бесполезно — поле молча
+не вернётся; чтобы получить состояние, проси `select:["STATUS"]` → в ответе будет ключ `status` со
+значением по той же шкале 1..7 (у обёртки `bitrix_tasks_list` он уже в дефолтном `select`).
 
-**Фильтр `tasks.task.list`.** Перед именем поля ставится оператор: `!` (не равно / исключить),
+**Фильтр `tasks.task.list`** — оператор ставится перед именем поля: `!` (не равно / исключить),
 `<`, `<=`, `>`, `>=`, `%` (LIKE-подстрока). Напр. `{"!REAL_STATUS":5}` — все **незакрытые**,
-`{">=DEADLINE":"2026-07-01"}` — дедлайн не раньше даты, `{"%TITLE":"карта"}` — по подстроке названия.
-Фильтруемые поля: `ID`, `PARENT_ID`, `GROUP_ID`, `CREATED_BY`, `RESPONSIBLE_ID`, `ACCOMPLICE`,
-`AUDITOR`, `REAL_STATUS`, `STATUS`, `PRIORITY`, `TAG`, `STAGE_ID`, `SPRINT_ID`, `BACKLOG_ID`,
-`DEADLINE`, `*_DATE`, `UF_CRM_TASK`.
+`{">=DEADLINE":"2026-07-01"}`, `{"%TITLE":"карта"}`. Фильтруемые поля: `ID`, `PARENT_ID`, `GROUP_ID`,
+`CREATED_BY`, `RESPONSIBLE_ID`, `ACCOMPLICE`, `AUDITOR`, `REAL_STATUS`, `STATUS`, `PRIORITY`, `TAG`,
+`STAGE_ID`, `SPRINT_ID`, `BACKLOG_ID`, `DEADLINE`, `*_DATE`, `UF_CRM_TASK`.
 
 > **«Мои задачи» ≠ только `RESPONSIBLE_ID`.** Роли участника раздельны: ответственный
 > (`RESPONSIBLE_ID`), соисполнитель (`ACCOMPLICE`), наблюдатель (`AUDITOR`), постановщик
-> (`CREATED_BY`). Единого «любая роль» поля в `list` нет — чтобы собрать **все** свои задачи,
-> объедини результаты нескольких вызовов (минимум `RESPONSIBLE_ID` + `ACCOMPLICE`). Тонкость:
-> в **`filter`** роли в **единственном** числе (`ACCOMPLICE`/`AUDITOR`), а в **`select`** — во
-> **множественном** (`ACCOMPLICES`/`AUDITORS`). Не путай.
+> (`CREATED_BY`); единого «любая роль» поля в `list` нет — чтобы собрать **все** свои задачи, объедини
+> результаты нескольких вызовов (минимум `RESPONSIBLE_ID` + `ACCOMPLICE`) и **дедуплицируй по `id`** —
+> одна задача часто попадает сразу в несколько ролей. В **`filter`** роли в **единственном** числе
+> (`ACCOMPLICE`/`AUDITOR`), в **`select`** — во **множественном** (`ACCOMPLICES`/`AUDITORS`).
 
-> **Scrum-задачи (спринты).** Поле `SPRINT_ID` на задаче и жёсткий фильтр `filter[SPRINT_ID]`
-> могут расходиться: задача числится за спринтом по своему полю, но не попадает в выборку по фильтру
-> (вероятно, возвращена в бэклог или в иной stage). Если по фильтру «маловато» — перепроверь без него
-> и отфильтруй по `SPRINT_ID`/`STAGE_ID` на стороне агента. Точного API колонок scrum-доски
-> (`STAGE_ID` → имя колонки) в текущем каталоге нет — это кандидат на реверс.
+> **Scrum-задачи (спринты).** Поле `SPRINT_ID` задачи и жёсткий `filter[SPRINT_ID]` могут расходиться:
+> задача числится за спринтом по своему полю, но не попадает в выборку по фильтру (возвращена в бэклог
+> или в иной stage). Если по фильтру «маловато» — перепроверь без него и отфильтруй по
+> `SPRINT_ID`/`STAGE_ID` у себя. Метода «колонки scrum-доски» (`STAGE_ID` → имя колонки) в каталоге нет.
 
-**Задача v2** (`tasks.v2.*`): id задачи передаётся вложенно — **`{"task": {"id": N}}`** (у `Task.get` и
-`Task.View.User.count`), а у `Scrum.getTaskInfo` и `Relation.*` — плоско `{"taskId": N}`. Это отдельная
-подсистема scrum-борда; структуру ответа сверь реверсом — в захвате видны только параметры запроса.
-
-**Группа/проект — список** (`workgroup.list`, camelCase в ответе): `ID`, `NAME`, `DESCRIPTION`,
-`NUMBER_OF_MEMBERS`, `OWNER_ID`, `DATE_CREATE`, `PROJECT` (Y/N), `TYPE`.
-📖 офиц. (`socialnetwork.api.workgroup.list`) — фильтруемые поля: `ID`, `NAME`, `OWNER_ID`, `ACTIVE`,
-`VISIBLE`, `OPENED`, `CLOSED`, `PROJECT` (Y=проект/N=группа), `SUBJECT_ID`, `SITE_ID`, `DATE_CREATE`,
-`DATE_UPDATE`, `DATE_ACTIVITY`; операторы фильтра `>= > <= < % =% %= !% != !`; без `select` вернётся
-только `ID`. Старый публичный аналог — `sonet_group.get` (те же поля/пагинация, ключи `FILTER`/`ORDER`
-капсом).
+**Группа/проект — список** (`workgroup.list`): `ID`, `NAME`, `DESCRIPTION`, `NUMBER_OF_MEMBERS`,
+`OWNER_ID`, `DATE_CREATE`, `PROJECT` (Y=проект/N=группа), `TYPE`; **без `select` вернётся только `ID`**.
+📖 фильтруемые: `ID`, `NAME`, `OWNER_ID`, `ACTIVE`, `VISIBLE`, `OPENED`, `CLOSED`, `PROJECT`,
+`SUBJECT_ID`, `SITE_ID`, `DATE_CREATE`, `DATE_UPDATE`, `DATE_ACTIVITY`; операторы фильтра
+`>= > <= < % =% %= !% != !`.
 **Группа — карточка** (`workgroup.get`): плюс `OWNER_DATA`, `SUBJECT_DATA`, `MEMBERS[]`,
-`MODERATOR_MEMBERS[]`, `CHAT_ID`, `DIALOG_ID`, `IMAGE_ID`, UF-поля.
+`MODERATOR_MEMBERS[]`, **`CHAT_ID`**, `DIALOG_ID`, `IMAGE_ID`, UF-поля.
 
 **Недавний чат** (`im.recent.list`): `id` (это dialogId: число = юзер, `"chat"+N` = чат), `chat_id`,
-`type` (`user`/`chat`), `title`, `message{id,text,file,author_id,date,status,uuid}`, `counter` (число
-непрочитанных), `unread` (bool), `last_id`, `pinned`, `date_update`, `date_last_activity`, `user{…}`,
-`chat{… entity_type, entity_id, owner, …}`. Есть ли ещё страницы — флаги `hasMore`/`hasMorePages`
-(📖 `im.recent.list`).
-**Недавние по секции** (`im.v2.Recent.load`): фильтр `filter[recentSection]` — `default` (обычные
-диалоги), **`tasksTask` (чаты задач)**, `collab`/`collabDefault` (коллабы). Листание вглубь —
-`im.v2.Recent.tail` с курсором `filter[lastMessageDate]` (ISO-дата последнего элемента страницы).
+`type` (`user`/`chat`), `title`, `message{id,text,file,author_id,date,status}`, `counter` (непрочитанных),
+`unread`, `last_id`, `pinned`, `date_update`, `date_last_activity`, `user{…}`,
+`chat{… entity_type, entity_id, owner, …}`; есть ли ещё страницы — `hasMore`/`hasMorePages` 📖.
+**Недавние по секции** (`im.v2.Recent.load`): `filter[recentSection]` — `default` (обычные диалоги),
+**`tasksTask` (чаты задач)**, `collab`/`collabDefault`. Вглубь — `im.v2.Recent.tail` с курсором
+`filter[lastMessageDate]` (ISO-дата последнего элемента страницы).
+
 **Карточка юзера** (`im.user.get`): `id`, `name`, `first_name`, `last_name`, `avatar`, `work_position`,
 `gender`, `status`, `online` — резолв автора сообщения (`authorId`) в имя.
-**Сообщение** (`im.v2.Chat.Message.*`): `id`, `chatId`, `authorId`, `date`, `text`, `params`, `viewed`.
-Ответ также несёт `users[]` (участники), `additionalMessages[]`, `hasPrevPage`/`hasNextPage`.
-`chatId` берётся из `im.recent.list` (`chat_id`) или из `workgroup.get` (`CHAT_ID`/`DIALOG_ID`).
 
-**Адресация чата (`chat.load`): `dialogId` vs `chatId`.** `chat.load` принимает любой из двух:
-- `dialogId` = **ID пользователя** (число, напр. `11`) → **личный чат 1-на-1** с этим пользователем.
-- `dialogId` = **`"chat"+CHAT_ID`** (напр. `"chat7111"`) → **групповой чат** (проекта/задачи/канала).
-- `chatId` = числовой `CHAT_ID` — то же, что групповой `dialogId`, но без префикса.
-
-📖 офиц. формат `DIALOG_ID` (`im.dialog.get`): `XXX` — личный (userId), `chatXXX` — чат, **`sgXXX`** —
-чат соцгруппы/проекта напрямую (напр. `sg15`). В публичном REST это единый параметр; наш внутренний
-`im.v2.Chat.load` надёжно принимает `dialogId`/`chatId`, а форму `sgXXX` для него сверь реверсом —
-гарантированный путь к чату группы это `bitrix_chat_get_dialog_id { externalId:"sg<groupId>" }`.
-
-Ответ `chat.load` возвращает числовой `chatId` — используй его дальше для `chat.messages` /
-`chat.messages.tail` (листание вглубь) и `chat.message.read` (эти три работают по `chatId`, не по `dialogId`).
+**Сообщение** (`im.v2.Chat.Message.*`): `id`, `chatId`, `authorId`, `date`, `text`, `params`, `viewed`;
+ответ также несёт `users[]` (участники), `additionalMessages[]`, `hasPrevPage`/`hasNextPage`.
 
 ---
 
-## 6. Примеры вызовов
+## 5. Сценарии
 
 ```jsonc
 // открытые задачи ответственного 55, по дедлайну, вторая страница
 bitrix_tasks_list { "params": { "filter": {"RESPONSIBLE_ID":55,"REAL_STATUS":2},
                                 "order": {"DEADLINE":"asc"}, "start": 50 } }
 
-// карточка задачи с расширенным набором полей
-bitrix_task_get { "taskId": 4229, "params": { "select": ["ID","TITLE","DESCRIPTION","TAGS","TIME_ESTIMATE"] } }
-
-// карточка задачи через v2-подсистему (JSON-тело; id вложен в task)
+// карточка задачи с расширенным набором полей; v2-подсистема; файлы, просмотры, связи
+bitrix_task_get    { "taskId": 4229, "params": { "select": ["ID","TITLE","DESCRIPTION","TAGS"] } }
 bitrix_task_get_v2 { "taskId": 4229 }                       // → { "task": { "id": 4229 } }
-bitrix_call { "name": "task.v2.get", "params": { "task": { "id": 4229 } } }
-
-// файлы задачи и счётчик просмотров (v2, JSON-тело); подзадачи/связанные
 bitrix_call { "name": "task.files", "params": { "ids": [4229] } }
-bitrix_call { "name": "task.views.count", "params": { "task": { "id": 4229 } } }
 bitrix_task_subtasks { "taskId": 4229 }
 bitrix_task_related  { "taskId": 4229 }
 
-// проекты по дате создания; полная карточка группы
+// проекты по дате создания; полная карточка группы (отдаёт CHAT_ID / DIALOG_ID)
 bitrix_projects_list { "params": { "order": {"DATE_CREATE":"desc"} } }
-bitrix_project_get { "groupId": 15 }
-
-// открыть чат (первые сообщения)
-bitrix_chat_load { "chatId": 485, "messageLimit": 50 }
-
-// ЛИСТАНИЕ ИСТОРИИ ВГЛУБЬ (старые сообщения): beforeId = минимальный id сообщения
-// из текущей страницы. Повторяй, уменьшая beforeId, до начала истории (order DESC — дефолт).
-bitrix_chat_history { "chatId": 485, "beforeId": 1861279 }
-
-// пометить сообщения прочитанными (МУТИРУЮЩИЙ). actionUuid генерируется автоматически.
-bitrix_chat_mark_read { "chatId": 40271, "ids": [1884131] }
+bitrix_project_get   { "groupId": 15 }
 ```
 
-### 6.1. Мессенджер (IM): модель адресации и как получить `chatId`
+### 5.1. Мессенджер (IM): как получить `chatId`
 
-**IM** (`im.v2`) — встроенный мессенджер Bitrix24. Всё общение — это **чаты**: личные
-1-на-1, групповые (проектов, каналов) и **чаты-обсуждения задач**. У каждого чата есть числовой
-**`chatId`** — это ключ ко всем операциям с сообщениями (`bitrix_chat_messages`,
-`bitrix_chat_history`, `bitrix_chat_mark_read`). Прежде чем читать сообщения, нужно **получить
-`chatId`** — почти любая ошибка агента здесь именно в этом шаге.
+Всё общение — **чаты**: личные 1-на-1, групповые (проектов, каналов) и **чаты-обсуждения задач**.
+Числовой **`chatId`** — ключ ко всем операциям с сообщениями (`bitrix_chat_messages`,
+`bitrix_chat_history`, `bitrix_chat_mark_read`); почти любая ошибка агента здесь — на шаге его получения.
 
-**Три идентификатора одного чата** (не путай — годятся для разных операций):
+**Три идентификатора одного чата** (годятся для разных операций):
 
 | Идентификатор | Что это | Пример | Куда передавать |
 |---|---|---|---|
@@ -300,167 +174,101 @@ bitrix_chat_mark_read { "chatId": 40271, "ids": [1884131] }
 | `dialogId` | адрес для ОТКРЫТИЯ: `userId` (личный 1-на-1) **или** `"chat"+chatId` (групповой) | `11`, `"chat485"` | `bitrix_chat_load` |
 | `externalId` | внешний ключ сущности → резолвится в `dialogId` | `"sg15"` (соцгруппа 15) | `bitrix_chat_get_dialog_id` |
 
-Ключевое: **личный чат с человеком = его `userId` в роли `dialogId`** (отдельного «id чата» у
-1-на-1 знать не нужно). `bitrix_chat_load` принимает `dialogId` **или** `chatId` и всегда
-**возвращает числовой `chatId`** — дальше оперируешь им.
+Ключевое: **личный чат с человеком = его `userId` в роли `dialogId`** (отдельного «id чата» у 1-на-1
+знать не нужно). `bitrix_chat_load` принимает `dialogId` **или** `chatId` и всегда **возвращает
+числовой `chatId`** — дальше оперируешь им.
 
-**Как получить `chatId` — по цели (дерево решений):**
+**Как получить `chatId` — по цели:**
 
 | Хочу открыть чат… | Шаги |
 |---|---|
-| **с пользователем по ИМЕНИ** | `bitrix_entity_search { query:"дмитрий" }` → вернёт диалог с `dialogId` = его userId → `bitrix_chat_load { dialogId }` |
+| **с пользователем по ИМЕНИ** | `bitrix_entity_search { query:"дмитрий" }` → диалог с `dialogId` = его userId → `bitrix_chat_load { dialogId }` |
 | **с пользователем, id известен** | `bitrix_chat_load { dialogId: <userId> }` (userId — из задачи `RESPONSIBLE_ID`/`CREATED_BY`, из `bitrix_chats_recent`, из `bitrix_user_get`) |
-| **обсуждение ЗАДАЧИ** | `bitrix_recent_load { section:"tasksTask" }` **или** `bitrix_entity_search { query:"<название>", section:"tasksTask" }` → `chatId`/`dialogId` → `bitrix_chat_load` (§6.3) |
+| **обсуждение ЗАДАЧИ** | `bitrix_task_get` → `CHAT_ID` (§5.2) |
 | **ПРОЕКТА/группы** | `bitrix_task_get`→`GROUP_ID`→`bitrix_project_get`→`CHAT_ID`; либо `bitrix_chat_get_dialog_id { externalId:"sg<groupId>" }` |
-| **не знаю точно, какой** | `bitrix_chats_recent` (недавние, сопоставь по `title`/`user`) или `bitrix_entity_search { query }` (поиск по названию) |
+| **не знаю точно, какой** | `bitrix_chats_recent` (недавние, сопоставь по `title`/`user`) или `bitrix_entity_search { query }` |
 
 > Почему не «просто список чатов»: `bitrix_chats_recent` (`im.recent.list`) отдаёт лишь недавние и
 > **без чатов задач**. Для поиска конкретного чата — `bitrix_entity_search`; для чатов задач —
 > `bitrix_recent_load { section:"tasksTask" }`.
 
-📖 Публичные аналоги чтения сообщений (если нужно глубже разобраться в модели): `im.dialog.messages.get`
-— по умолчанию отдаёт последние (дефолт 20, макс 50), листание `LAST_ID` (старее) / `FIRST_ID` (новее);
-`imbot.v2 chat.getMessageContext` — ответ `messages[]` (oldest→newest) + `users[]` +
-`hasPrevPage`/`hasNextPage`, что **совпадает по форме** с нашими внутренними `im.v2.Chat.Message.*`.
-
-### 6.2. Сценарий: чат с конкретным пользователем
-
-Личный чат 1-на-1 адресуется `dialogId` = **ID пользователя**. Id берётся из задачи
-(`RESPONSIBLE_ID`/`CREATED_BY`), из `bitrix_chats_recent`, либо резолвится поиском по имени (§6.4).
+**Читать историю.** `bitrix_chat_messages` отдаёт только последнюю страницу; вглубь листает
+`bitrix_chat_history` по курсору `beforeId` = минимальный id сообщения текущей страницы (повторяй,
+уменьшая `beforeId`, до начала истории).
 
 ```jsonc
-// 1) открыть личный чат с пользователем 11 → в ответе будет числовой chatId
-bitrix_chat_load { "dialogId": 11 }
-// 2) листать его историю вглубь по chatId из ответа шага 1
+bitrix_chat_load    { "dialogId": 11 }                  // личный чат юзера 11 → в ответе chatId
 bitrix_chat_history { "chatId": 485, "beforeId": 1861279 }
+bitrix_chat_mark_read { "chatId": 40271, "ids": [1884131] }   // ⚠ мутирующий; actionUuid — автоматом
 ```
 
-### 6.3. Сценарий: обсуждение (чат) конкретной задачи
+📖 Публичные аналоги чтения сообщений: `im.dialog.messages.get` (дефолт 20, макс 50; листание
+`LAST_ID` — старее, `FIRST_ID` — новее); `imbot.v2 chat.getMessageContext` — ответ `messages[]`
+(oldest→newest) + `users[]` + `hasPrevPage`/`hasNextPage`, по форме **совпадает** с внутренними
+`im.v2.Chat.Message.*`.
 
-У каждой задачи есть свой im-чат-обсуждение. Самый надёжный путь — прямой резолв из карточки задачи;
-поиск по названию — запасной.
+### 5.2. Обсуждение (чат) конкретной задачи
 
-**А. Прямой — `CHAT_ID` из карточки задачи (предпочтительно).** `bitrix_task_get` возвращает `CHAT_ID`
-чата-обсуждения (он входит в дефолтный `select`). Это прямой `taskId → chatId` **без** поиска по
-названию и без риска промаха по тёзкам-заголовкам:
+**А. Прямой резолв — предпочтительно.** `bitrix_task_get` возвращает `CHAT_ID` чата-обсуждения (входит
+в дефолтный `select` 📖) — это `taskId → chatId` без поиска по названию и без промаха по тёзкам:
 
 ```jsonc
-bitrix_task_get     { "taskId": 28373 }                 // в ответе CHAT_ID = id чата обсуждения
+bitrix_task_get     { "taskId": 28373 }                 // в ответе CHAT_ID
 bitrix_chat_load    { "chatId": <CHAT_ID> }
 bitrix_chat_history { "chatId": <CHAT_ID>, "beforeId": <мин id страницы> }
 ```
 
-📖 офиц.: в `tasks.task.get` поле `CHAT_ID` отдаётся по умолчанию (tasks-new.md). Общий
-резолвер-альтернатива — **`bitrix_entity_chat`** (обёртка над `im.chat.get`): по паре
-`entityType`/`entityId` отдаёт chatId связанного объекта — для задачи `entityType="TASKS_TASK"`,
-`entityId=<taskId>`; так же адресуются чаты `SONET_GROUP` (группа/проект), `CRM`, `CALENDAR`, `MAIL`,
-`VIDEOCONF`, `CALL`:
+Общая альтернатива — **`bitrix_entity_chat`** (обёртка над `im.chat.get`): chatId любого связанного
+объекта по паре `entityType`/`entityId`; кроме `TASKS_TASK` так же адресуются `SONET_GROUP`
+(группа/проект), `CRM`, `CALENDAR`, `MAIL`, `VIDEOCONF`, `CALL`:
 
 ```jsonc
 bitrix_entity_chat { "entityType": "TASKS_TASK", "entityId": 28373 }   // → chatId
-bitrix_chat_load   { "chatId": <chatId> }
 ```
 
-**Б. Через список чатов задач.** `im.v2.Recent.load` с секцией `tasksTask` отдаёт чаты задач
-(в `bitrix_chats_recent` / `/rest/im.recent.list` их НЕТ). Листать вглубь — `bitrix_recent_tail`.
+**Б. Через список чатов задач** (секция `tasksTask`; в `bitrix_chats_recent` их НЕТ):
 
 ```jsonc
 bitrix_recent_load { "section": "tasksTask" }           // → чаты задач с chatId/dialogId
 bitrix_recent_tail { "section": "tasksTask", "lastMessageDate": "2026-06-29T17:25:38+03:00" }
-// открыть найденный чат и листать историю
-bitrix_chat_load    { "dialogId": "chat38849" }         // или { "chatId": 38849 }
-bitrix_chat_history { "chatId": 38849, "beforeId": 1722353 }
+bitrix_chat_load   { "dialogId": "chat38849" }          // или { "chatId": 38849 }
 ```
 
-**В. Поиском по названию задачи** — `bitrix_entity_search` с секцией `tasksTask` (запасной, матч по тексту):
-
-```jsonc
-bitrix_entity_search { "query": "трекер", "section": "tasksTask" }
-```
+**В. Поиском по названию задачи** (запасной, матч по тексту):
+`bitrix_entity_search { "query": "трекер", "section": "tasksTask" }`
 
 **Чат ПРОЕКТА задачи** (обсуждение группы, не самой задачи) — через `GROUP_ID`:
 
 ```jsonc
 bitrix_task_get    { "taskId": 4229, "params": { "select": ["ID","GROUP_ID"] } }
 bitrix_project_get { "groupId": 15 }                    // отдаёт CHAT_ID / DIALOG_ID
-bitrix_chat_load   { "dialogId": "chat7111" }
 bitrix_chat_get_dialog_id { "externalId": "sg15" }      // либо резолв dialogId соцгруппы напрямую
 ```
 
-### 6.4. Сценарий: поиск чата / пользователя
+### 5.3. Поиск чата / пользователя
 
-Текстовый поиск — `bitrix_entity_search` (обёртка над `ui.entityselector.doSearch`): сам собирает
-диалог `IM_CHAT_SEARCH` и `searchQuery` из строки. `ui.entityselector.*` — **внутренний UI-метод, в
-публичных доках его нет** (форма запроса/ответа — только реверс); публичные аналоги для поиска людей —
-`user.get`/`user.search`, для чатов — `im.recent.list` + фильтрация на стороне агента.
+`bitrix_entity_search` (обёртка над внутренним `ui.entityselector.doSearch`) сам собирает диалог
+`IM_CHAT_SEARCH` и `searchQuery` из строки. Публичные аналоги: люди — `user.get`/`user.search`, чаты —
+`im.recent.list` + фильтрация у себя.
 
 ```jsonc
 bitrix_entity_search { "query": "дмитрий" }                        // среди всех чатов/диалогов
 bitrix_entity_search { "query": "трекер", "section": "tasksTask" } // среди чатов задач
+bitrix_user_get      { "userId": 11 }                              // резолв authorId → имя
 ```
 
-Быстрый путь без поиска — недавние чаты и фильтрация на стороне агента; карточка автора по id:
+### 5.4. Созвон: резюме, расшифровка, запись
+
+AI-анализ звонка (BitrixGPT Follow-Up) живёт на серверно отрендеренной странице `/call/detail/<callId>`
+— JSON-эндпоинта под ней нет, публичного REST для видеовстреч тоже (📖 только телефония `voximplant.*`
+и `crm.activity.call.getTranscript`). Мост читает эту страницу и разбирает её в нормализованный JSON.
+
+**1) Найти звонки.** Серверного поиска звонков по порталу нет — ищем в конкретном чате: звонок
+оставляет системное сообщение с `params.COMPONENT_PARAMS = { messageType: "START", callId }`.
 
 ```jsonc
-bitrix_chats_recent { }                        // сопоставь по title / user
-bitrix_recent_load  { "section": "tasksTask" }
-bitrix_user_get     { "userId": 11 }           // резолв authorId → имя
-```
-
-### 6.5. Легаси-комментарии задачи (HTML-поддомен — пока НЕ в мосте)
-
-У задач два независимых фида обсуждения:
-- **im.v2-чат** — структурный JSON, читается уже сейчас (§6.3); обычно этого достаточно.
-- **Форумные легаси-комментарии** — рендерятся как **HTML** в side-slider'е. Это отдельный
-  «HTML-поддомен» внутреннего API, который **текущий мост не поддерживает** (блокеры ниже).
-
-**Как грузятся (реверс).** Первая страница — GET HTML-страницы iframe (сервер тут же минтит подпись):
-
-```
-GET /task/comments/<taskId>/?IFRAME=Y&IFRAME_TYPE=SIDE_SLIDER   → HTML (комментарии + signedParameters)
-```
-
-Листание — POST компонентного ajax (форма, отдаёт HTML-фрагмент):
-
-```
-POST /bitrix/services/main/ajax.php?mode=class&c=bitrix:forum.comments&action=navigateComment
-form: AJAX_POST=Y, ENTITY_XML_ID=TASK_<taskId>, taskId=<taskId>, MODE=LIST,
-      FILTER[<ID]=<курсор: id, ДО которого грузить старые>, PAGEN_1=1,
-      signedParameters=<подписанный blob>, IFRAME=Y, IFRAME_TYPE=SIDE_SLIDER
-headers: bx-ajax: true, x-bitrix-site-id: s1 (плюс обычный X-Bitrix-Csrf-Token)
-```
-
-`signedParameters` — base64 PHP-массива + HMAC-подпись сервера; кодирует
-`FORUM_ID, ENTITY_TYPE=TK, ENTITY_ID=<taskId>, ENTITY_XML_ID=TASK_<taskId>, …`. **Подделать нельзя** —
-берётся из HTML первой страницы.
-
-**Что мешало и что уже снято.** Два прежних блокера закрыты ради деталей звонка (§6.6): мост умеет
-`responseType: "text"` (HTML не ломает разбор) и path-шаблоны в `endpoint` (§3). Осталось одно:
-листание требует `signedParameters` + заголовки `bx-ajax` / `x-bitrix-site-id`, а заголовки мост пока
-не умеет задавать пер-запись.
-
-**Чтобы подключить** (будущая работа): запись каталога `"/task/comments/{taskId}/"` с
-`responseType: "text"` даст ПЕРВУЮ страницу комментариев уже сейчас; для листания нужен механизм
-кастомных заголовков и прокидывание выпарсенного `signedParameters` в `navigateComment`.
-
----
-
-### 6.6. Сценарий: созвон (видеозвонок) — резюме, расшифровка, запись
-
-Весь AI-анализ звонка (BitrixGPT Follow-Up) живёт на **серверно отрендеренной HTML-странице**
-`/call/detail/<callId>` — JSON-эндпоинта под ней нет; публичного REST для видеовстреч тоже нет
-(в 📖 доках только телефония `voximplant.*` и CRM `crm.activity.call.getTranscript`). Мост читает эту
-страницу через `responseType: "text"` (§3) и разбирает разметку компонента `bitrix:call.ai`.
-
-**1) Найти звонки.** Звонок оставляет в чате системное сообщение с
-`params.COMPONENT_ID = "CallMessage"` и `params.COMPONENT_PARAMS = { messageType: "START", callId }` —
-отсюда и берётся `callId`. Отдельным сообщением приходит резюме BitrixGPT (в `params.ATTACH`, со
-ссылкой `[url=/call/detail/<callId>]`). Серверного поиска звонков по порталу **нет**, поэтому ищем в
-конкретном чате:
-
-```jsonc
-bitrix_chat_calls { "chatId": 9876 }               // чат проекта: bitrix_project_get → CHAT_ID
-bitrix_chat_calls { "chatId": 9876, "maxPages": 20, "beforeId": 5001 }     // продолжить вглубь
+bitrix_chat_calls { "chatId": 9876 }                                      // чат проекта: bitrix_project_get → CHAT_ID
+bitrix_chat_calls { "chatId": 9876, "maxPages": 20, "beforeId": 5001 }    // продолжить вглубь
 ```
 
 Ответ: `calls[] { callId, startedAt, startedBy, startMessageId, events[], summaryMessageId }` плюс
@@ -476,20 +284,7 @@ bitrix_call_detail { "callId": 4242, "transcript": "none" }      // расшиф
 bitrix_call_detail { "callId": 4242, "transcript": "file" }      // всегда в файл, даже короткая
 ```
 
-**Расшифровка длинного звонка не приходит в ответе.** У часовой встречи она даёт ~70 КБ из 80 КБ
-ответа, поэтому при размере свыше ~20 КБ (режим `"auto"`, он же умолчание) она пишется на диск, а в
-ответе остаются `transcript: []`, `transcriptCount` и **`files`**:
-
-| Файл | Что внутри |
-|---|---|
-| `files.transcript` | `~/.bitrix24-mcp-bridge/downloads/call-<id>-transcript.txt` — строка = реплика: `[11:10—11:24] Генрих Богацкий: …`. Читается кусками и **грепается**: в отличие от JSON, найденная строка сама несёт таймкод и спикера |
-| `files.json` | `call-<id>.json` — полный ответ вместе с расшифровкой (архив/постобработка) |
-
-Оба файла перезаписываются при повторном вызове — это кеш звонка, а не пользовательские данные.
-
-Ответ (нормализованный JSON, не HTML):
-
-| Поле | Что внутри |
+| Поле ответа | Что внутри |
 |---|---|
 | `title`, `agenda`, `meetingType` | тема, вступление, тип встречи («Статус-встреча») |
 | `date`, `interval`, `duration` | «23 июля, 15:46», «15:46 - 16:51», «1 ч 4 мин» |
@@ -497,82 +292,43 @@ bitrix_call_detail { "callId": 4242, "transcript": "file" }      // всегда
 | `participants[]` | `{ id, name, talkTimePercent, talkTime, efficiency, metrics[], insight }` |
 | `overview`, `chapters[]` | общее резюме и главы `{ from, to, title, text }` с таймкодами |
 | `decisions[]`, `tasks[]` | «что решили» и задачи `{ assigneeId, assignee, text }` |
-| `transcript[]`, `transcriptCount` | реплики `{ from, to, speakerId, speaker, text }`; длинная — в `files` (см. ниже) |
-| `recording` | `{ path, url, trackId }` — ссылка на аудиозапись (`call.Track.download`) |
+| `transcript[]`, `transcriptCount` | реплики `{ from, to, speakerId, speaker, text }` |
+| `recording` | `{ path, url, trackId }` — аудиозапись, качается `bitrix_call_recording` (§5.5) |
+
+**Расшифровка длинного звонка не приходит в ответе.** У часовой встречи она даёт ~70 КБ из 80 КБ, поэтому
+свыше ~20 КБ (режим `"auto"` = умолчание) пишется на диск, а в ответе остаются `transcript: []`,
+`transcriptCount` и **`files`**: `files.transcript` — `call-<id>-transcript.txt`, где строка = реплика
+(`[11:10—11:24] Генрих Богацкий: …`), её удобно **грепать** (найденная строка сама несёт таймкод и
+спикера); `files.json` — полный ответ с расшифровкой. Оба файла — кеш звонка, перезаписываются.
 
 Тонкости:
-- **Запись** отдаётся по подписанной серверу ссылке (`signedParameters` = base64 PHP-массива
-  `{callId, trackId}` + HMAC). Подпись минтится при рендере страницы, подделать нельзя, но она уже
-  готова к скачиванию под cookie сессии. `url` абсолютный (если известен origin портала), `path` —
-  относительный.
-- **`speakerId`** резолвится по имени из таблицы анализа; у того, кто в неё не попал (говорил мало),
-  будет `speakerId: null`, но сам он останется в `participants` с `id: null`.
-- **`assigneeId` задачи** — это упомянутый в тексте пользователь, а НЕ `data-user-id` кнопки
-  «Создать задачу» (там id смотрящего).
-- Нет доступа к звонку / протухла сессия → портал отдаёт HTML логина; инструмент распознаёт это по
-  отсутствию `data-call-id` и возвращает внятную ошибку, а не пустой разбор.
+- **`speakerId`** резолвится по имени из таблицы анализа; кто говорил мало и в неё не попал — получит
+  `speakerId: null`, но останется в `participants` с `id: null`.
+- **`assigneeId` задачи** — упомянутый в тексте пользователь, а НЕ id смотрящего.
+- Нет доступа к звонку / протухла сессия → инструмент вернёт внятную ошибку (портал отдаёт HTML логина).
 
----
+### 5.5. Скачать файл (вложение чата, файл задачи, запись звонка)
 
-### 6.7. Сценарий: скачать файл (вложение чата, файл задачи, запись звонка)
-
-Ссылки на файлы портал **минтит сам** и подписывает (`_esd` у диска, `signedParameters` у записей
-звонков). Подпись НЕ заменяет авторизацию: без cookie сессии портал отвечает **HTTP 200 и страницей
-логина**, а не файлом. Поэтому качает расширение — в сессии пользователя.
+Ссылки портал минтит и подписывает сам, но подпись НЕ заменяет авторизацию — качает расширение в
+сессии пользователя.
 
 ```jsonc
 // вложение чата: ссылку берём из files[].urlDownload в ответе bitrix_chat_load
 bitrix_file_download { "url": "https://<портал>/bitrix/services/main/ajax.php?action=disk.api.file.download&…" }
-// аудиозапись созвона: ссылку инструмент найдёт сам по callId
-bitrix_call_recording { "callId": 4242 }
-// свой путь / перезапись
+bitrix_call_recording { "callId": 4242 }                        // аудиозапись созвона (ссылку найдёт сам)
 bitrix_file_download { "url": "…", "savePath": "/tmp/photo.png", "overwrite": true }
 ```
 
-Ответ — **путь, а не содержимое**: `{ path, bytes, contentType, fileName }`. По умолчанию файл
-ложится в `~/.bitrix24-mcp-bridge/downloads/`; `savePath` без ведущего `/` трактуется как имя внутри
-этой папки.
+Ответ — **путь, а не содержимое**: `{ path, bytes, contentType, fileName }` (гигабайты не попадают в
+контекст). По умолчанию файл ложится в `~/.bitrix24-mcp-bridge/downloads/`; `savePath` без ведущего `/`
+трактуется как имя внутри этой папки. Потолок — 512 МБ.
 
 Тонкости:
-- **Граница безопасности — origin.** Инструмент принимает произвольный URL (подписи одноразовые, в
-  каталог их не занести), но скачивает только с origin **сконфигурированного портала**; всё
-  остальное отвергается до вызова.
-- **HTTP 200 ≠ файл.** Признак реальной загрузки — `Content-Disposition: attachment`; HTML без него
-  считается страницей логина, вызов падает с внятной ошибкой и **частичный файл не остаётся**.
-- **Имя даёт портал.** Настоящее имя приходит только с ответом (`Content-Disposition`), поэтому без
-  `savePath` тело сначала пишется во временный `.download-*.part` в папке загрузок, а затем
-  переименовывается. Так имя не приходится угадывать (иначе запись звонка легла бы как `call-N.mp3`
-  вместо `Запись звонка N… .ogg`, а то и как `ajax.php`).
-- **Повторное скачивание** того же файла падает с `already exists` (временный файл при этом
-  удаляется) — передай `overwrite: true`, если нужна свежая копия. С явным `savePath` проверка
-  срабатывает ещё до запроса, без лишнего трафика.
+- **Граница безопасности — origin**: скачивается только с origin сконфигурированного портала.
+- **Имя даёт портал** (`Content-Disposition`), поэтому без `savePath` угадывать его не нужно.
+- **Повторное скачивание** того же файла падает с `already exists` — передай `overwrite: true`.
 
 ---
 
-## 7. Как расширить (новый домен: календарь, диск, CRM, …)
-
-> Совет: сперва проверь, задокументирован ли метод в 📖 [`apidocs.bitrix24.com`](https://apidocs.bitrix24.com)
-> (context7: `/bitrix24/b24restdocs`). Для публичных `*.list`/`*.get` там готовые поля, фильтры и
-> пагинация — реверс тогда нужен лишь чтобы подтвердить транспорт (form/json) и конверт ответа. Для
-> внутренних `im.v2.*`/`tasks.v2.*`/UI-методов доков нет — только реверс (`docs/reconnaissance.md`).
-
-1. Сними реальные вызовы (`docs/reconnaissance.md` — авто-запись `bun run capture` или HAR →
-   `bun run catalog:draft`). Черновик `actions.draft.json` накапливает **все уникальные комбинации
-   параметров** на экшен и проставляет `bodyType` (form/json) автоматически.
-2. Определи транспорт по разделу 3: если черновик показал `"bodyType": "json"` — перенеси его в запись.
-3. Добавь запись в `actions.json` (может быть мутирующей — каталог это допускает).
-4. Если удобно — оберни в типизированный инструмент в `src/tools/register.ts` (обёртка регистрируется
-   только если её `catalogName` есть в каталоге).
-5. **`bun run sync:runtime`** — доставь изменения живому daemon: пересобрать бандл, скопировать
-   репо-`actions.json` в `~/.bitrix24-mcp-bridge/actions.json` и погасить daemon. Без этого агент
-   новых имён/инструментов не увидит (daemon читает runtime-папку, не репо). Проверь через
-   `bitrix_call { name, params }` или новую обёртку.
-
-> `actions.json` / `actions.draft.json` — данные конкретного портала (gitignored). Этот файл
-> (`api-notes.md`) — переносимые знания о самом API; держи его в актуальном состоянии при добавлении
-> новых методов.
-
-**Новую запись клади и в `actions.example.json`** — именно он едет в npm-пакет и раздаётся
-установленным мостам: при старте недостающие записи дописываются в пользовательский `actions.json`
-автоматически (удалённые пользователем — не воскрешаются, см. `src/catalog/sync.ts`). Запись только в
-локальном `actions.json` останется вашей личной.
+Расширение каталога новыми методами, транспорт (`bodyType`, `responseType`, path-параметры) и
+доставка правок в живой daemon — `docs/reconnaissance.md`.
