@@ -51,7 +51,14 @@ async function runMcpClient() {
   await client.connect();
 
   const catalog = loadCatalog(cfg.catalogPath);
-  registerTools(server, { sink: client, catalog, defaultPortal: cfg.defaultPortal, portals: Object.keys(cfg.portals) });
+  registerTools(server, {
+    sink: client,
+    catalog,
+    defaultPortal: cfg.defaultPortal,
+    portals: Object.keys(cfg.portals),
+    origins: Object.fromEntries(Object.entries(cfg.portals).map(([alias, p]) => [alias, p.origin])),
+    downloadsDir: runtimePaths(process.env).downloadsDir,
+  });
   await server.connect(new StdioServerTransport());
   console.error("[mcp] bitrix24-bridge client running on stdio");
 

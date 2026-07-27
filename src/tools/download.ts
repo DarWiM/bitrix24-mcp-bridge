@@ -4,7 +4,8 @@
 // security boundary here (the catalog allowlist can't cover per-file signed links).
 
 import { basename, isAbsolute, join } from "node:path";
-import { existsSync, renameSync } from "node:fs";
+import { existsSync, renameSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 
 export interface ResolvedTarget {
   /** Portal alias the URL belongs to. */
@@ -65,20 +66,31 @@ export interface DestinationRequest {
 }
 
 /**
- * The destination has to be picked before the request goes out, but the portal only reveals the
- * real name in Content-Disposition once it answers — so a default-named file gets renamed here.
- * An explicit savePath is always left alone: the caller asked for that exact path.
+ * A download whose destination the caller didn't pick lands here first. The real name only
+ * arrives with the response (Content-Disposition), so guessing one up front would both misname
+ * the file and make "does it already exist?" ask about a name nothing is ever stored under.
  */
-export function renameToServerName(
-  currentPath: string,
-  serverName: string | null,
-  opts: { downloadsDir: string; explicitSavePath: boolean; overwrite?: boolean },
-): string {
-  if (!serverName || opts.explicitSavePath) return currentPath;
-  const wanted = join(opts.downloadsDir, safeFileName(serverName, basename(currentPath)));
-  if (wanted === currentPath) return currentPath;
-  if (!opts.overwrite && existsSync(wanted)) return currentPath; // don't clobber on a rename
-  renameSync(currentPath, wanted);
+export function tempDownloadPath(downloadsDir: string): string {
+  return join(downloadsDir, `.download-${randomUUID()}.part`);
+}
+
+/**
+ * Moves a finished temp download to its real name, now that the portal has named it.
+ * Refuses to clobber an existing file (and drops the temp) unless overwrite was requested.
+ */
+export function finalizeDownload(args: {
+  tempPath: string;
+  serverName: string | null;
+  fallbackName: string;
+  downloadsDir: string;
+  overwrite?: boolean;
+}): string {
+  const wanted = join(args.downloadsDir, safeFileName(args.serverName ?? args.fallbackName, args.fallbackName));
+  if (!args.overwrite && existsSync(wanted)) {
+    rmSync(args.tempPath, { force: true });
+    throw new Error(`${wanted} already exists — pass overwrite: true to download it again`);
+  }
+  renameSync(args.tempPath, wanted);
   return wanted;
 }
 

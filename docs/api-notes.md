@@ -40,6 +40,10 @@
   - Люди/поиск: `bitrix_user_get` (карточка юзера), `bitrix_entity_selector` (загрузка селектора),
     `bitrix_entity_search` (текстовый поиск чатов/сущностей через `ui.entityselector.doSearch`),
     `bitrix_entity_chat` (chatId чата связанного объекта: задачи/группы/CRM — через `im.chat.get`).
+  - Звонки/созвоны: `bitrix_chat_calls` (найти звонки в чате → `callId`), `bitrix_call_detail`
+    (всё по звонку: резюме, решения, задачи, участники, расшифровка, запись). См. §6.6.
+  - Файлы: `bitrix_file_download` (скачать вложение чата/задачи по ссылке на диск),
+    `bitrix_call_recording` (аудиозапись созвона по `callId`). См. §6.7.
 
   Любое имя каталога всегда доступно и напрямую через `bitrix_call { name, params }`.
 - **`bitrix_help`** — этот же гайд, отдаётся через MCP (инструмент + resource `bitrix://api-notes`).
@@ -78,6 +82,24 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 
 > Историческая заметка: раньше мост умел только форму, и `tasks.v2.*` были непригодны. Теперь
 > поддержаны — в записи каталога ставь `"bodyType": "json"`, и мост отправит их корректно.
+
+**HTML-ответы (`responseType`).** По умолчанию (`"json"`) ответ разбирается как JSON и проходит через
+конверт из §2. Часть портала отдаёт не JSON, а серверный HTML (side-slider'ы: детали звонка,
+легаси-комментарии задач) — для таких записей ставь **`"responseType": "text"`**, и мост вернёт
+`{ contentType, text }` без разбора. Ошибкой считается только HTTP ≥ 400 или пустое тело, поэтому
+редирект на логин приедет как «успешный» HTML — распознавать его должен разбирающий инструмент
+(так делает `bitrix_call_detail`: нет `data-call-id` → внятная ошибка).
+
+**Бинарные загрузки (`responseType: "binary"`).** Тело ответа не возвращается, а **стримится на диск**:
+расширение читает его как `ArrayBuffer` и шлёт по WS чанками base64 по 1 МиБ (`binary-begin` →
+`binary-chunk`×N → обычный `result`), daemon пишет их в файл. Вызывающему приходит только
+`{ path, bytes, contentType, fileName }` — гигабайты не попадают ни в контекст агента, ни в память
+daemon. Так работают `bitrix_file_download` / `bitrix_call_recording` (§6.7). Потолок — 512 МБ на файл.
+
+**Path-параметры в `endpoint`.** `endpoint` может содержать плейсхолдеры `{имя}` — значение берётся из
+`params` и подставляется в URL (а из тела/query исключается): `"/call/detail/{callId}"` +
+`params: { callId: 4242 }` → `GET /call/detail/4242`. Нет значения — вызов падает с внятной ошибкой,
+а не уходит с дырой в URL.
 
 **CSRF / sessid:** мост всегда шлёт заголовок **`X-Bitrix-Csrf-Token: <sessid>`** (свежий
 `BX.bitrix_sessid()`). Form-тела дополнительно несут `sessid` полем в теле (legacy REST это требует);
@@ -139,6 +161,7 @@ JSON-тела несут sessid **только** в заголовке. Отве
 | `im.chat.get` | `/rest/im.chat.get.json` | form | `ENTITY_TYPE`, `ENTITY_ID` (напр. `TASKS_TASK`+taskId) |
 | `entityselector.load` | `ui.entityselector.load` | json | `dialog` (объект) |
 | `entityselector.search` | `ui.entityselector.doSearch` | json | `dialog`, `searchQuery{query,queryWords}` |
+| `call.detail` | `GET /call/detail/{callId}` | form, **`responseType: "text"`** | `callId` (в путь), `IFRAME=Y`, `IFRAME_TYPE=SIDE_SLIDER` → HTML, см. §6.6 |
 
 ---
 
@@ -411,17 +434,118 @@ headers: bx-ajax: true, x-bitrix-site-id: s1 (плюс обычный X-Bitrix-C
 `FORUM_ID, ENTITY_TYPE=TK, ENTITY_ID=<taskId>, ENTITY_XML_ID=TASK_<taskId>, …`. **Подделать нельзя** —
 берётся из HTML первой страницы.
 
-**Почему пока не в каталоге (3 блокера):**
-1. Мост парсит ответ только как JSON (`extension/src/connector.ts` → `resp.json()`) — HTML бросит исключение.
-2. Path-параметр в URL (`/task/comments/<taskId>/`) — записи каталога статичны, шаблонов пути нет.
-3. `signedParameters` + заголовки `bx-ajax`/`x-bitrix-site-id` — нужен предварительный GET HTML-страницы.
+**Что мешало и что уже снято.** Два прежних блокера закрыты ради деталей звонка (§6.6): мост умеет
+`responseType: "text"` (HTML не ломает разбор) и path-шаблоны в `endpoint` (§3). Осталось одно:
+листание требует `signedParameters` + заголовки `bx-ajax` / `x-bitrix-site-id`, а заголовки мост пока
+не умеет задавать пер-запись.
 
-**Чтобы подключить** (будущая работа): научить мост возвращать text/HTML при не-JSON ответе и
-поддержать path-шаблон эндпоинта; затем обёртка `bitrix_task_comments { taskId }` (GET первой
-страницы), а листание — через `navigateComment` с выпарсенным `signedParameters`.
+**Чтобы подключить** (будущая работа): запись каталога `"/task/comments/{taskId}/"` с
+`responseType: "text"` даст ПЕРВУЮ страницу комментариев уже сейчас; для листания нужен механизм
+кастомных заголовков и прокидывание выпарсенного `signedParameters` в `navigateComment`.
 
-> Тот же HTML-поддомен: **детали звонка** — `GET /call/detail/<callId>?IFRAME=Y&IFRAME_TYPE=SIDE_SLIDER`
-> (отдаёт HTML). Ограничения идентичны.
+---
+
+### 6.6. Сценарий: созвон (видеозвонок) — резюме, расшифровка, запись
+
+Весь AI-анализ звонка (BitrixGPT Follow-Up) живёт на **серверно отрендеренной HTML-странице**
+`/call/detail/<callId>` — JSON-эндпоинта под ней нет; публичного REST для видеовстреч тоже нет
+(в 📖 доках только телефония `voximplant.*` и CRM `crm.activity.call.getTranscript`). Мост читает эту
+страницу через `responseType: "text"` (§3) и разбирает разметку компонента `bitrix:call.ai`.
+
+**1) Найти звонки.** Звонок оставляет в чате системное сообщение с
+`params.COMPONENT_ID = "CallMessage"` и `params.COMPONENT_PARAMS = { messageType: "START", callId }` —
+отсюда и берётся `callId`. Отдельным сообщением приходит резюме BitrixGPT (в `params.ATTACH`, со
+ссылкой `[url=/call/detail/<callId>]`). Серверного поиска звонков по порталу **нет**, поэтому ищем в
+конкретном чате:
+
+```jsonc
+bitrix_chat_calls { "chatId": 9876 }               // чат проекта: bitrix_project_get → CHAT_ID
+bitrix_chat_calls { "chatId": 9876, "maxPages": 20, "beforeId": 5001 }     // продолжить вглубь
+```
+
+Ответ: `calls[] { callId, startedAt, startedBy, startMessageId, events[], summaryMessageId }` плюс
+`scannedPages` / `oldestScannedMessageId` / **`reachedHistoryStart`** — если он `false`, история
+дочитана НЕ до конца, продолжай с `beforeId: <oldestScannedMessageId>`.
+
+**2) Взять всё по звонку.**
+
+```jsonc
+bitrix_call_detail { "callId": 4242 }                            // всё; длинная расшифровка уедет в файл
+bitrix_call_detail { "callId": 4242, "transcript": "inline" }    // расшифровка прямо в ответе
+bitrix_call_detail { "callId": 4242, "transcript": "none" }      // расшифровка не нужна вовсе
+bitrix_call_detail { "callId": 4242, "transcript": "file" }      // всегда в файл, даже короткая
+```
+
+**Расшифровка длинного звонка не приходит в ответе.** У часовой встречи она даёт ~70 КБ из 80 КБ
+ответа, поэтому при размере свыше ~20 КБ (режим `"auto"`, он же умолчание) она пишется на диск, а в
+ответе остаются `transcript: []`, `transcriptCount` и **`files`**:
+
+| Файл | Что внутри |
+|---|---|
+| `files.transcript` | `~/.bitrix24-mcp-bridge/downloads/call-<id>-transcript.txt` — строка = реплика: `[11:10—11:24] Генрих Богацкий: …`. Читается кусками и **грепается**: в отличие от JSON, найденная строка сама несёт таймкод и спикера |
+| `files.json` | `call-<id>.json` — полный ответ вместе с расшифровкой (архив/постобработка) |
+
+Оба файла перезаписываются при повторном вызове — это кеш звонка, а не пользовательские данные.
+
+Ответ (нормализованный JSON, не HTML):
+
+| Поле | Что внутри |
+|---|---|
+| `title`, `agenda`, `meetingType` | тема, вступление, тип встречи («Статус-встреча») |
+| `date`, `interval`, `duration` | «23 июля, 15:46», «15:46 - 16:51», «1 ч 4 мин» |
+| `efficiency`, `qualityChecklist[]` | оценка встречи в % и критерии `{ ok, text }` |
+| `participants[]` | `{ id, name, talkTimePercent, talkTime, efficiency, metrics[], insight }` |
+| `overview`, `chapters[]` | общее резюме и главы `{ from, to, title, text }` с таймкодами |
+| `decisions[]`, `tasks[]` | «что решили» и задачи `{ assigneeId, assignee, text }` |
+| `transcript[]`, `transcriptCount` | реплики `{ from, to, speakerId, speaker, text }`; длинная — в `files` (см. ниже) |
+| `recording` | `{ path, url, trackId }` — ссылка на аудиозапись (`call.Track.download`) |
+
+Тонкости:
+- **Запись** отдаётся по подписанной серверу ссылке (`signedParameters` = base64 PHP-массива
+  `{callId, trackId}` + HMAC). Подпись минтится при рендере страницы, подделать нельзя, но она уже
+  готова к скачиванию под cookie сессии. `url` абсолютный (если известен origin портала), `path` —
+  относительный.
+- **`speakerId`** резолвится по имени из таблицы анализа; у того, кто в неё не попал (говорил мало),
+  будет `speakerId: null`, но сам он останется в `participants` с `id: null`.
+- **`assigneeId` задачи** — это упомянутый в тексте пользователь, а НЕ `data-user-id` кнопки
+  «Создать задачу» (там id смотрящего).
+- Нет доступа к звонку / протухла сессия → портал отдаёт HTML логина; инструмент распознаёт это по
+  отсутствию `data-call-id` и возвращает внятную ошибку, а не пустой разбор.
+
+---
+
+### 6.7. Сценарий: скачать файл (вложение чата, файл задачи, запись звонка)
+
+Ссылки на файлы портал **минтит сам** и подписывает (`_esd` у диска, `signedParameters` у записей
+звонков). Подпись НЕ заменяет авторизацию: без cookie сессии портал отвечает **HTTP 200 и страницей
+логина**, а не файлом. Поэтому качает расширение — в сессии пользователя.
+
+```jsonc
+// вложение чата: ссылку берём из files[].urlDownload в ответе bitrix_chat_load
+bitrix_file_download { "url": "https://<портал>/bitrix/services/main/ajax.php?action=disk.api.file.download&…" }
+// аудиозапись созвона: ссылку инструмент найдёт сам по callId
+bitrix_call_recording { "callId": 4242 }
+// свой путь / перезапись
+bitrix_file_download { "url": "…", "savePath": "/tmp/photo.png", "overwrite": true }
+```
+
+Ответ — **путь, а не содержимое**: `{ path, bytes, contentType, fileName }`. По умолчанию файл
+ложится в `~/.bitrix24-mcp-bridge/downloads/`; `savePath` без ведущего `/` трактуется как имя внутри
+этой папки.
+
+Тонкости:
+- **Граница безопасности — origin.** Инструмент принимает произвольный URL (подписи одноразовые, в
+  каталог их не занести), но скачивает только с origin **сконфигурированного портала**; всё
+  остальное отвергается до вызова.
+- **HTTP 200 ≠ файл.** Признак реальной загрузки — `Content-Disposition: attachment`; HTML без него
+  считается страницей логина, вызов падает с внятной ошибкой и **частичный файл не остаётся**.
+- **Имя даёт портал.** Настоящее имя приходит только с ответом (`Content-Disposition`), поэтому без
+  `savePath` тело сначала пишется во временный `.download-*.part` в папке загрузок, а затем
+  переименовывается. Так имя не приходится угадывать (иначе запись звонка легла бы как `call-N.mp3`
+  вместо `Запись звонка N… .ogg`, а то и как `ajax.php`).
+- **Повторное скачивание** того же файла падает с `already exists` (временный файл при этом
+  удаляется) — передай `overwrite: true`, если нужна свежая копия. С явным `savePath` проверка
+  срабатывает ещё до запроса, без лишнего трафика.
 
 ---
 

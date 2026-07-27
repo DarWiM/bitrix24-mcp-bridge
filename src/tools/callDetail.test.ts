@@ -1,15 +1,15 @@
 import { describe, it, expect } from "bun:test";
-import { parseCallDetail } from "./callDetail.js";
+import { formatTranscript, parseCallDetail } from "./callDetail.js";
 
 // Synthetic page mirroring the real slider's markup (bitrix/components/bitrix/call.ai).
 // Kept minimal but structurally faithful: real captures carry meeting content and stay out of git.
 const P = "bx-call-component-call-ai";
-const AUDIO = "/bitrix/services/main/ajax.php?action=call.Track.download&SITE_ID=s1&signedParameters=YToyOntzOjY6ImNhbGxJZCI7aToxNzIxO3M6NzoidHJhY2tJZCI7aTo2MTU7fQ%3D%3D.sig";
+const AUDIO = "/bitrix/services/main/ajax.php?action=call.Track.download&SITE_ID=s1&signedParameters=YToyOntzOjY6ImNhbGxJZCI7aTo0MjQyO3M6NzoidHJhY2tJZCI7aTo3Nzt9.sig";
 
 const page = `
-<div class="${P}" data-call-id="1721" data-call-uuid="e75b9aad">
+<div class="${P}" data-call-id="4242" data-call-uuid="1f0f6e4c-mock">
   <h3 class="${P}__resume-title">Планирование спринта</h3>
-  <p class="${P}__resume-description"><span class="bx-call-mention" bx-tooltip-user-id="21729">Пётр</span> открыл встречу.<br>Поехали.</p>
+  <p class="${P}__resume-description"><span class="bx-call-mention" bx-tooltip-user-id="101">Пётр</span> открыл встречу.<br>Поехали.</p>
   <div class="${P}__time-value">23 июля, 15:46</div>
   <div class="${P}__time-value">15:46 - 16:51</div>
   <div class="${P}__time-value">1 ч 4 мин</div>
@@ -33,8 +33,8 @@ const page = `
         <ol class="${P}__result-list">
           <li class="${P}__result-list-item">
             <div class="${P}__result-list-item-container">
-              <p class="${P}__task-description"><span class="bx-call-mention" bx-tooltip-user-id="11">Иван</span>: закрыть задачу сегодня.</p>
-              <span class="${P}__task-button" data-user-id="55" data-description="Иван: закрыть задачу сегодня."></span>
+              <p class="${P}__task-description"><span class="bx-call-mention" bx-tooltip-user-id="102">Иван</span>: закрыть задачу сегодня.</p>
+              <span class="${P}__task-button" data-user-id="103" data-description="Иван: закрыть задачу сегодня."></span>
             </div>
           </li>
         </ol>
@@ -42,7 +42,7 @@ const page = `
     </div>
     <div id="TabRecommendations" class="${P}__tab-details --insights">
       <div class="${P}__insights-graph-table__row">
-        <div class="${P}__employee__column ${P}__employee__row" data-insights-user-id="21729" bx-tooltip-user-id="21729">
+        <div class="${P}__employee__column ${P}__employee__row" data-insights-user-id="101" bx-tooltip-user-id="101">
           <img class="${P}__insights__user-img"> Пётр
         </div>
         <div class="${P}__activity__column ${P}__activity__row">
@@ -52,8 +52,8 @@ const page = `
           <div class="${P}__column-container"><call-ai-efficiency-chart percent="90"></call-ai-efficiency-chart><call-ai-efficiency-value value="90"></call-ai-efficiency-value></div>
         </div>
       </div>
-      <div class="${P}__insights__full-report__info" data-insights-user-id-full="21729">
-        <div class="${P}__insights__full-report__info__name" bx-tooltip-user-id="21729">
+      <div class="${P}__insights__full-report__info" data-insights-user-id-full="101">
+        <div class="${P}__insights__full-report__info__name" bx-tooltip-user-id="101">
           <img class="${P}__insights__user-img"> Пётр
           <div class="activity"><call-ai-efficiency-value value="58"></call-ai-efficiency-value>%&nbsp;(32 мин)</div>
           <div class="efficiency"><call-ai-efficiency-value value="90"></call-ai-efficiency-value></div>
@@ -66,7 +66,7 @@ const page = `
             <div class="${P}__insights__full-report__info__metrics-container"><div class="${P}__insights__full-report__info__metrics-icon --fail"></div> Соблюдает тайминг</div>
           </div>
         </div>
-        <div class="${P}__insights__full-report__info__description"><span class="bx-call-mention" bx-tooltip-user-id="21729">Пётр</span> вёл встречу уверенно.</div>
+        <div class="${P}__insights__full-report__info__description"><span class="bx-call-mention" bx-tooltip-user-id="101">Пётр</span> вёл встречу уверенно.</div>
       </div>
     </div>
     <div id="TabSummary" class="${P}__tab-details --summary">
@@ -107,8 +107,8 @@ const page = `
 describe("parseCallDetail", () => {
   it("reads call identity and timing", () => {
     const call = parseCallDetail(page);
-    expect(call.id).toBe(1721);
-    expect(call.uuid).toBe("e75b9aad");
+    expect(call.id).toBe(4242);
+    expect(call.uuid).toBe("1f0f6e4c-mock");
     expect(call.title).toBe("Планирование спринта");
     expect(call.agenda).toBe("Пётр открыл встречу.\nПоехали.");
     expect(call.date).toBe("23 июля, 15:46");
@@ -128,8 +128,8 @@ describe("parseCallDetail", () => {
   it("separates decisions from tasks and takes the assignee from the mention, not the button", () => {
     const call = parseCallDetail(page);
     expect(call.decisions).toEqual(["Тестируем только английскую локализацию.", "Авторизацию берём готовую."]);
-    // data-user-id on the button is the viewer (55) — the assignee is the mentioned user (11).
-    expect(call.tasks).toEqual([{ assigneeId: 11, assignee: "Иван", text: "Иван: закрыть задачу сегодня." }]);
+    // data-user-id on the button is the viewer (103) — the assignee is the mentioned user (102).
+    expect(call.tasks).toEqual([{ assigneeId: 102, assignee: "Иван", text: "Иван: закрыть задачу сегодня." }]);
   });
 
   it("splits the summary into an overview and timecoded chapters", () => {
@@ -142,7 +142,7 @@ describe("parseCallDetail", () => {
 
   it("merges the analysis table with the full report per participant", () => {
     const [peter] = parseCallDetail(page).participants;
-    expect(peter.id).toBe(21729);
+    expect(peter.id).toBe(101);
     expect(peter.name).toBe("Пётр");
     expect(peter.talkTimePercent).toBe(58);
     expect(peter.talkTime).toBe("32 мин");
@@ -163,7 +163,7 @@ describe("parseCallDetail", () => {
   it("reads the transcript with timecodes and resolves speaker ids", () => {
     const { transcript, transcriptCount } = parseCallDetail(page);
     expect(transcriptCount).toBe(2);
-    expect(transcript[0]).toEqual({ from: "00:13", to: "00:15", speakerId: 21729, speaker: "Пётр", text: "Алло, привет." });
+    expect(transcript[0]).toEqual({ from: "00:13", to: "00:15", speakerId: 101, speaker: "Пётр", text: "Алло, привет." });
     expect(transcript[1].from).toBe("01:03:12");
     expect(transcript[1].speakerId).toBeNull();
   });
@@ -176,12 +176,37 @@ describe("parseCallDetail", () => {
   });
 
   it("returns the recording link, absolute when the portal origin is known", () => {
-    expect(parseCallDetail(page).recording).toEqual({ path: AUDIO, url: null, trackId: 615 });
+    expect(parseCallDetail(page).recording).toEqual({ path: AUDIO, url: null, trackId: 77 });
     expect(parseCallDetail(page, { origin: "https://portal.bitrix24.ru" }).recording?.url)
       .toBe(`https://portal.bitrix24.ru${AUDIO}`);
   });
 
   it("rejects a page that is not a call detail (login redirect, no access)", () => {
     expect(() => parseCallDetail("<html><body>Войти в portal</body></html>")).toThrow(/not a call-detail page/);
+  });
+});
+
+describe("formatTranscript", () => {
+  it("renders one self-contained line per utterance", () => {
+    const call = parseCallDetail(page);
+    const text = formatTranscript(call);
+    const lines = text.split("\n");
+    expect(lines).toContain("[00:13—00:15] Пётр: Алло, привет.");
+    expect(lines).toContain("[01:03:12—01:03:20] Гость: Спасибо, до связи.");
+  });
+
+  it("puts call identity in a header so the file stands on its own", () => {
+    const header = formatTranscript(parseCallDetail(page)).split("\n\n")[0];
+    expect(header).toContain("Звонок №4242");
+    expect(header).toContain("Планирование спринта");
+    expect(header).toContain("1 ч 4 мин");
+    expect(header).toContain("Участники: Пётр, Гость");
+    expect(header).toContain("Реплик: 2");
+  });
+
+  it("survives a line with no timecode or speaker", () => {
+    const call = parseCallDetail(page);
+    call.transcript = [{ from: null, to: null, speakerId: null, speaker: null, text: "неразборчиво" }];
+    expect(formatTranscript(call)).toContain("?: неразборчиво");
   });
 });

@@ -2,31 +2,31 @@ import { describe, it, expect } from "bun:test";
 import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
 
 const startMessage = {
-  id: 1961917,
-  chatId: 7111,
-  authorId: 21729,
+  id: 5001,
+  chatId: 999,
+  authorId: 101,
   date: "2026-07-23T12:46:33+03:00",
-  text: "Начат звонок №1721",
-  params: { COMPONENT_ID: "CallMessage", COMPONENT_PARAMS: { messageType: "START", callId: 1721 }, NOTIFY: "N" },
+  text: "Начат звонок №4242",
+  params: { COMPONENT_ID: "CallMessage", COMPONENT_PARAMS: { messageType: "START", callId: 4242 }, NOTIFY: "N" },
 };
 
 const finishMessage = {
-  id: 1962330,
-  authorId: 21729,
+  id: 5002,
+  authorId: 101,
   date: "2026-07-23T13:51:02+03:00",
-  params: { COMPONENT_ID: "CallMessage", COMPONENT_PARAMS: { messageType: "FINISH", callId: 1721 } },
+  params: { COMPONENT_ID: "CallMessage", COMPONENT_PARAMS: { messageType: "FINISH", callId: 4242 } },
 };
 
 const followUpMessage = {
-  id: 1962335,
+  id: 5003,
   authorId: 0,
   date: "2026-07-23T13:52:10+03:00",
-  text: "BitrixGPT проанализировал звонок №1721",
-  params: { ATTACH: [{ BLOCKS: [{ MESSAGE: "[url=/call/detail/1721]Подробный анализ встречи[/url]" }] }] },
+  text: "BitrixGPT проанализировал звонок №4242",
+  params: { ATTACH: [{ BLOCKS: [{ MESSAGE: "[url=/call/detail/4242]Подробный анализ встречи[/url]" }] }] },
 };
 
 // Chat history is a mixed bag: plain messages carry params as an empty array, not an object.
-const chatterMessage = { id: 1961909, authorId: 55, date: "2026-07-23T12:46:20+03:00", text: "Давайте созвонимся", params: [] };
+const chatterMessage = { id: 5000, authorId: 103, date: "2026-07-23T12:46:20+03:00", text: "Давайте созвонимся", params: [] };
 
 describe("collectChatCalls", () => {
   it("picks the callId out of a CallMessage system message", () => {
@@ -34,11 +34,11 @@ describe("collectChatCalls", () => {
     collectChatCalls([startMessage, chatterMessage], acc);
     expect(sortCalls(acc)).toEqual([
       {
-        callId: 1721,
+        callId: 4242,
         startedAt: "2026-07-23T12:46:33+03:00",
-        startedBy: 21729,
-        startMessageId: 1961917,
-        events: [{ type: "START", messageId: 1961917, date: "2026-07-23T12:46:33+03:00" }],
+        startedBy: 101,
+        startMessageId: 5001,
+        events: [{ type: "START", messageId: 5001, date: "2026-07-23T12:46:33+03:00" }],
         summaryMessageId: null,
       },
     ]);
@@ -48,9 +48,9 @@ describe("collectChatCalls", () => {
     const acc = new Map<number, ChatCall>();
     collectChatCalls([followUpMessage, finishMessage, startMessage], acc);
     const [call] = sortCalls(acc);
-    expect(call.summaryMessageId).toBe(1962335);
+    expect(call.summaryMessageId).toBe(5003);
     expect(call.events.map((e) => e.type)).toEqual(["FINISH", "START"]);
-    expect(call.startMessageId).toBe(1961917);
+    expect(call.startMessageId).toBe(5001);
   });
 
   it("merges pages without duplicating events when one is re-scanned", () => {
@@ -64,9 +64,9 @@ describe("collectChatCalls", () => {
     const acc = new Map<number, ChatCall>();
     collectChatCalls([
       startMessage,
-      { ...startMessage, id: 1970001, params: { COMPONENT_ID: "CallMessage", COMPONENT_PARAMS: { messageType: "START", callId: 1799 } } },
+      { ...startMessage, id: 5010, params: { COMPONENT_ID: "CallMessage", COMPONENT_PARAMS: { messageType: "START", callId: 4243 } } },
     ], acc);
-    expect(sortCalls(acc).map((c) => c.callId)).toEqual([1799, 1721]);
+    expect(sortCalls(acc).map((c) => c.callId)).toEqual([4243, 4242]);
   });
 
   it("ignores messages that are neither call events nor follow-ups", () => {
@@ -81,7 +81,7 @@ describe("readMessagePage", () => {
     const page = readMessagePage({ status: "success", data: { messages: [startMessage, finishMessage], hasNextPage: true }, errors: [] });
     expect(page.messages).toHaveLength(2);
     expect(page.hasNextPage).toBe(true);
-    expect(page.oldestId).toBe(1961917);
+    expect(page.oldestId).toBe(5001);
   });
 
   it("treats an unexpected payload as an empty, final page instead of throwing", () => {
