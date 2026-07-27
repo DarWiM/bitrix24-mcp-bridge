@@ -24,6 +24,7 @@ describe("loadCatalog", () => {
       method: "POST",
       params: {},
       bodyType: "form",
+      responseType: "json",
     });
   });
 
@@ -34,6 +35,7 @@ describe("loadCatalog", () => {
       method: "POST",
       params: {},
       bodyType: "form",
+      responseType: "json",
     });
   });
 
@@ -60,6 +62,7 @@ describe("loadCatalog", () => {
       method: "POST",
       params: {},
       bodyType: "form",
+      responseType: "json",
     });
     // allowlist still enforced — an un-curated name is rejected
     expect(() => cat.resolve("tasks.task.delete")).toThrow(/not allowed/i);

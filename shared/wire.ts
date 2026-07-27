@@ -8,6 +8,10 @@ export interface CallTarget {
   method: "GET" | "POST";
   params: Record<string, unknown>;
   bodyType?: "json" | "form";
+  // "text" opts a call out of JSON parsing (HTML sub-domain: /call/detail/<id> and friends).
+  // "binary" streams the body to a file instead of returning it (attachments, call recordings).
+  // Default stays "json" so a broken response still surfaces as an error, not as fake data.
+  responseType?: "json" | "text" | "binary";
 }
 
 export interface AuthMessage {
@@ -25,6 +29,30 @@ export interface CallResult {
   error?: string;
 }
 
+// Binary downloads stream as base64 chunks between "binary-begin" and the usual CallResult,
+// so the daemon can write straight to disk instead of holding a whole video in memory.
+export interface BinaryBeginMessage {
+  type: "binary-begin";
+  id: string;
+  contentType: string;
+  bytes: number;
+  fileName: string | null;
+}
+
+export interface BinaryChunkMessage {
+  type: "binary-chunk";
+  id: string;
+  seq: number;
+  data: string; // base64
+}
+
+export interface DownloadResult {
+  path: string;
+  bytes: number;
+  contentType: string;
+  fileName: string | null;
+}
+
 // Sent by the extension's capture build while recording (see src/capture-server.ts).
 export interface CapturedEntry {
   endpoint: string;
@@ -40,4 +68,9 @@ export interface CaptureMessage {
   call: CapturedEntry;
 }
 
-export type ExtensionMessage = AuthMessage | CallResult | CaptureMessage;
+export type ExtensionMessage =
+  | AuthMessage
+  | CallResult
+  | CaptureMessage
+  | BinaryBeginMessage
+  | BinaryChunkMessage;

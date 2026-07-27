@@ -27,6 +27,7 @@ function makePaths(sock: string): RuntimePaths {
     sock,
     lock: join(home, "bridge.lock"),
     extensionDir: join(home, "extension"),
+    downloadsDir: join(home, "downloads"),
   };
 }
 

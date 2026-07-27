@@ -3,8 +3,11 @@ import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallTarget, CallResult } from "./protocol.js";
 import type { PortalConnection } from "./daemon.js";
 
+// `savePath` only travels as far as the daemon (binary downloads); it never reaches the browser.
+export type CallOrder = CallTarget & { savePath?: string };
+
 export interface CallSink {
-  call(portal: string | undefined, target: CallTarget): Promise<unknown>;
+  call(portal: string | undefined, target: CallOrder): Promise<unknown>;
   status(): Promise<{ portals: PortalConnection[] }>;
 }
 
@@ -16,6 +19,9 @@ interface UdsClientOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
+// Must stay above the daemon's own download timeout so the daemon's error wins the race
+// and the caller learns what actually went wrong instead of a generic client-side timeout.
+const DOWNLOAD_REQUEST_TIMEOUT_MS = 11 * 60_000;
 
 export class UdsClient implements CallSink {
   private sock?: Socket;
@@ -66,11 +72,11 @@ export class UdsClient implements CallSink {
     });
   }
 
-  private request<T>(kind: "call" | "status", frame: Record<string, unknown>): Promise<T> {
+  private request<T>(kind: "call" | "status", frame: Record<string, unknown>, overrideTimeoutMs?: number): Promise<T> {
     const sock = this.sock;
     if (!sock || sock.destroyed || !sock.writable) return Promise.reject(new Error("client not connected"));
     const id = String(++this.seq);
-    const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const timeoutMs = overrideTimeoutMs ?? this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -81,8 +87,10 @@ export class UdsClient implements CallSink {
     });
   }
 
-  call(portal: string | undefined, target: CallTarget): Promise<unknown> {
-    return this.request("call", { type: "call", portal, ...target });
+  call(portal: string | undefined, target: CallOrder): Promise<unknown> {
+    // Downloads outlive the regular request budget — a big attachment takes as long as it takes.
+    const timeoutMs = target.responseType === "binary" ? DOWNLOAD_REQUEST_TIMEOUT_MS : undefined;
+    return this.request("call", { type: "call", portal, ...target }, timeoutMs);
   }
 
   status(): Promise<{ portals: PortalConnection[] }> {
