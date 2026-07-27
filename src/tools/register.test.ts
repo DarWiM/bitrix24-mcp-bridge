@@ -119,6 +119,7 @@ describe("bitrix_status tool", () => {
 
 const AJAX = "/bitrix/services/main/ajax.php";
 const richEntries: Record<string, { endpoint: string; action: string | null; bodyType: "json" | "form"; params?: Record<string, unknown> }> = {
+  "tasks.list": { endpoint: AJAX, action: "tasks.task.list", bodyType: "form" },
   "task.v2.get": { endpoint: AJAX, action: "tasks.v2.Task.get", bodyType: "json" },
   "chat.load": { endpoint: AJAX, action: "im.v2.Chat.load", bodyType: "form", params: { messageLimit: 25 } },
   "chat.messages.tail": { endpoint: AJAX, action: "im.v2.Chat.Message.tail", bodyType: "form", params: { "order[id]": "DESC", limit: 25 } },
@@ -140,6 +141,30 @@ const richCatalog: Catalog = {
 };
 
 describe("typed tools — json / pagination / write", () => {
+  // Paging this ajax action is PAGEN_1 (page number), not the REST-style `start` offset:
+  // `start` silently returns the first page again, so the page number must survive the merge.
+  it("bitrix_tasks_list keeps STATUS in the default select and forwards PAGEN_1", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_tasks_list"]({ params: { filter: { RESPONSIBLE_ID: 55 }, PAGEN_1: 2 } });
+
+    const target = call.mock.calls[0][1];
+    expect(target.params.select).toContain("STATUS");
+    expect(target.params).toMatchObject({ order: { ID: "desc" }, filter: { RESPONSIBLE_ID: 55 }, PAGEN_1: 2 });
+  });
+
+  it("bitrix_tasks_list lets caller params override the wrapper defaults", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValue({});
+    registerTools(server, { sink: { call, status: async () => ({ portals: [] }) }, catalog: richCatalog, defaultPortal: "d", portals: ["d"] });
+
+    await handlers["bitrix_tasks_list"]({ params: { select: ["ID"], order: { DEADLINE: "asc" } } });
+
+    expect(call.mock.calls[0][1].params).toMatchObject({ select: ["ID"], order: { DEADLINE: "asc" } });
+  });
+
   it("bitrix_task_get_v2 forwards json bodyType with { task }", async () => {
     const { server, handlers } = fakeServer();
     const call = mock().mockResolvedValue({});

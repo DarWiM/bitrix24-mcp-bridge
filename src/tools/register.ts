@@ -149,7 +149,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         '{">=DEADLINE":"2026-07-01"}. Роли участника РАЗДЕЛЬНЫ и в фильтре в ЕД. числе: ' +
         "RESPONSIBLE_ID (ответственный), ACCOMPLICE (соисполнитель), AUDITOR (наблюдатель), " +
         'CREATED_BY (постановщик). «Все мои задачи» = объединить вызовы по RESPONSIBLE_ID и ' +
-        'ACCOMPLICE (одного поля «любая роль» нет). Ещё params: select, order (напр. {"ID":"desc"}), start (шаг 50).',
+        'ACCOMPLICE (одного поля «любая роль» нет; задача может попасть сразу в несколько — дедуплицируй по id). ' +
+        'ПАГИНАЦИЯ: params.PAGEN_1 — НОМЕР страницы (1, 2, 3…), страница = 20 задач; params.start НЕ работает ' +
+        '(вернёт ту же первую страницу). СТАТУС: в select проси "STATUS" (он в дефолтном select) — придёт ключ ' +
+        '"status" по шкале 1..7; "REAL_STATUS" в select молча не возвращается, но в filter работает. ' +
+        'Ещё params: select, order — дефолт этой обёртки {"ID":"desc"}.',
       inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: () => ({ select: TASK_LIST_SELECT, order: { ID: "desc" } }),
     },
