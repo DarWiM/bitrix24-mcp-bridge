@@ -13,7 +13,11 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { loadConfig } from "../src/config.js";
 
 const SRC = "extension/src";
-const DIST = "extension/dist";
+// Deliberately NOT extension/dist: that one belongs to the publish-safe build
+// (`build:ext:static`), which wipes its output directory and runs from `prepare` — i.e. on every
+// `bun install`. Sharing a directory meant an unrelated dependency install silently deleted the
+// manifest of the extension loaded in the browser. The dev build owns this directory alone.
+const DIST = "extension/dev";
 
 const capture = !!process.env.BITRIX_CAPTURE; // capture (recording) build
 // Shared, layered resolution — identical to the daemon's, so the dev extension's token always
@@ -54,4 +58,5 @@ const manifest = template
   .replaceAll("__VERSION__", version);
 writeFileSync(`${DIST}/manifest.json`, manifest);
 
-console.error(`[build:ext] built extension/dist for ${origin} → ws://127.0.0.1:${port}${capture ? " [CAPTURE mode]" : ""}`);
+console.error(`[build:ext] built ${DIST} for ${origin} → ws://127.0.0.1:${port}${capture ? " [CAPTURE mode]" : ""}`);
+console.error(`[build:ext] load it via chrome://extensions → «Load unpacked» → ${DIST}`);

@@ -239,7 +239,7 @@ describe("Daemon", () => {
       const res = await udsCall(sock, { type: "status", id: "1" });
       expect(res.ok).toBe(true);
       expect(res.data.portals).toEqual([
-        { alias: "acme", origin: "https://acme.bitrix24.ru", connected: false },
+        { alias: "acme", origin: "https://acme.bitrix24.ru", connected: false, extensionVersion: null },
       ]);
     } finally {
       await d.stop();

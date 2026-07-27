@@ -11,7 +11,17 @@
 // then reuses the pure bridge-core helpers to build the request, fetch it with the page's
 // cookies, and interpret the response.
 
-import { buildRequest, interpret, type CallRequest, type InterpretResult } from "./bridge-core.ts";
+import {
+  buildRequest,
+  interpret,
+  interpretText,
+  toBase64,
+  looksLikeLoginPage,
+  fileNameFromDisposition,
+  BINARY_CHUNK_BYTES,
+  type CallRequest,
+  type InterpretResult,
+} from "./bridge-core.ts";
 import {
   parseConfig,
   buildSessidRequest,
@@ -24,11 +34,13 @@ import {
 declare const __BITRIX_CAPTURE__: boolean;
 
 // Minimal ambient for the one chrome API we use (no @types/chrome dependency).
-declare const chrome: { runtime: { getURL(path: string): string } };
+declare const chrome: { runtime: { getURL(path: string): string; getManifest(): { version?: string } } };
 
 const ORIGIN = location.origin;
 const SESSID_TIMEOUT_MS = 2000;
 const RECONNECT_MS = 3000;
+// The whole body is buffered here before streaming, so this caps peak tab memory.
+const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 
 let socket: WebSocket | null = null;
 let nonceSeq = 0;
@@ -57,9 +69,9 @@ function freshSessid(): Promise<string> {
   });
 }
 
-async function handleCall(req: CallRequest): Promise<InterpretResult> {
+async function fetchPortal(req: CallRequest): Promise<Response | { error: string }> {
   const sessid = await freshSessid();
-  if (!sessid) return { ok: false, error: "session context not ready — open a normal Bitrix24 portal tab" }; // G5
+  if (!sessid) return { error: "session context not ready — open a normal Bitrix24 portal tab" }; // G5
   const { url, body, contentType } = buildRequest(ORIGIN, req, sessid);
   const init: RequestInit = {
     method: req.method,
@@ -70,15 +82,49 @@ async function handleCall(req: CallRequest): Promise<InterpretResult> {
   let finalUrl = url;
   if (req.method === "POST") init.body = body;
   else finalUrl += (url.includes("?") ? "&" : "?") + body;
-  const resp = await fetch(finalUrl, init);
+  return fetch(finalUrl, init);
+}
+
+async function handleCall(req: CallRequest): Promise<InterpretResult> {
+  const resp = await fetchPortal(req);
+  if (!(resp instanceof Response)) return { ok: false, error: resp.error };
+  if (req.responseType === "text") {
+    return interpretText(await resp.text(), resp.headers.get("content-type") ?? "", resp.status);
+  }
   const json = await resp.json();
   return interpret(json); // G3
+}
+
+/** Streams the body to the daemon as base64 chunks; the daemon writes them to a file. */
+async function handleBinaryCall(req: CallRequest, ws: WebSocket): Promise<InterpretResult> {
+  const resp = await fetchPortal(req);
+  if (!(resp instanceof Response)) return { ok: false, error: resp.error };
+  if (resp.status >= 400) return { ok: false, error: `HTTP ${resp.status}` };
+
+  const contentType = resp.headers.get("content-type") ?? "";
+  const disposition = resp.headers.get("content-disposition");
+  if (looksLikeLoginPage(contentType, disposition)) {
+    return { ok: false, error: "portal answered with an HTML page, not a file — session likely expired" };
+  }
+
+  const bytes = new Uint8Array(await resp.arrayBuffer());
+  if (bytes.length > MAX_DOWNLOAD_BYTES) {
+    return { ok: false, error: `file is ${bytes.length} bytes, over the ${MAX_DOWNLOAD_BYTES} limit` };
+  }
+  const fileName = fileNameFromDisposition(disposition);
+  ws.send(JSON.stringify({ type: "binary-begin", id: req.id, contentType, bytes: bytes.length, fileName }));
+  let seq = 0;
+  for (let at = 0; at < bytes.length; at += BINARY_CHUNK_BYTES) {
+    const slice = bytes.subarray(at, at + BINARY_CHUNK_BYTES);
+    ws.send(JSON.stringify({ type: "binary-chunk", id: req.id, seq: seq++, data: toBase64(slice) }));
+  }
+  return { ok: true, data: { contentType, bytes: bytes.length, fileName, chunks: seq } };
 }
 
 function connect(config: BridgeConfig): void {
   const ws = new WebSocket(`ws://127.0.0.1:${config.port}`);
   ws.addEventListener("open", () => {
-    ws.send(JSON.stringify({ type: "auth", token: config.token })); // auth first (server closes non-auth)
+    ws.send(JSON.stringify({ type: "auth", token: config.token, version: chrome.runtime.getManifest().version }));
     socket = ws;
   });
   ws.addEventListener("message", async (ev: MessageEvent) => {
@@ -91,7 +137,7 @@ function connect(config: BridgeConfig): void {
     }
     if (req.type !== "call") return;
     try {
-      const r = await handleCall(req);
+      const r = req.responseType === "binary" ? await handleBinaryCall(req, ws) : await handleCall(req);
       ws.send(JSON.stringify({ type: "result", id: req.id, ok: r.ok, data: r.data, error: r.error }));
     } catch (e) {
       ws.send(JSON.stringify({ type: "result", id: req.id, ok: false, error: String(e) }));

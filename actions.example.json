@@ -26,5 +26,7 @@
   "im.chat.get": { "endpoint": "/rest/im.chat.get.json", "method": "POST" },
 
   "task.subtasks": { "action": "tasks.v2.Task.Relation.Child.list", "method": "POST", "bodyType": "json" },
-  "task.related": { "action": "tasks.v2.Task.Relation.Related.list", "method": "POST", "bodyType": "json" }
+  "task.related": { "action": "tasks.v2.Task.Relation.Related.list", "method": "POST", "bodyType": "json" },
+
+  "call.detail": { "endpoint": "/call/detail/{callId}", "method": "GET", "params": { "IFRAME": "Y", "IFRAME_TYPE": "SIDE_SLIDER" }, "responseType": "text" }
 }

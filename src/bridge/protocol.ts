@@ -7,4 +7,7 @@ export type {
   CapturedEntry,
   CaptureMessage,
   ExtensionMessage,
+  BinaryBeginMessage,
+  BinaryChunkMessage,
+  DownloadResult,
 } from "../../shared/wire.js";

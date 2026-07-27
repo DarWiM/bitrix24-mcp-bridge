@@ -1,4 +1,7 @@
 import { describe, it, expect, afterEach } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import WebSocket from "ws";
 import { Bridge } from "./server.js";
 import type { CallTarget } from "./protocol.js";
@@ -124,5 +127,95 @@ describe("Bridge origin routing", () => {
     });
     expect(closed).toBe(true);
     await bridge.stop();
+  });
+});
+
+describe("Bridge binary downloads", () => {
+  const temps: string[] = [];
+  afterEach(() => { while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true }); });
+
+  function tempDest(name: string): string {
+    const dir = mkdtempSync(join(tmpdir(), "br24-bin-"));
+    temps.push(dir);
+    return join(dir, name);
+  }
+
+  /** Stands in for the extension: answers a binary call with begin → chunks → result. */
+  function serveBytes(ws: WebSocket, bytes: Buffer, chunkSize: number, contentType = "image/png") {
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      if (req.type !== "call") return;
+      ws.send(JSON.stringify({ type: "binary-begin", id: req.id, contentType, bytes: bytes.length, fileName: "photo.png" }));
+      let seq = 0;
+      for (let at = 0; at < bytes.length; at += chunkSize) {
+        ws.send(JSON.stringify({ type: "binary-chunk", id: req.id, seq: seq++, data: bytes.subarray(at, at + chunkSize).toString("base64") }));
+      }
+      ws.send(JSON.stringify({ type: "result", id: req.id, ok: true, data: { contentType, bytes: bytes.length } }));
+    });
+  }
+
+  it("writes streamed chunks to the destination byte-for-byte", async () => {
+    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [] });
+    await bridge.start();
+    const ws = await connect(TOKEN);
+    // Binary payload with bytes that would not survive a UTF-8 round trip.
+    const bytes = Buffer.from(Array.from({ length: 5000 }, (_, i) => i % 256));
+    serveBytes(ws, bytes, 777);
+    const dest = tempDest("photo.png");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const result = await bridge.callBinary("", target, dest);
+
+    expect(result).toEqual({ path: dest, bytes: bytes.length, contentType: "image/png", fileName: "photo.png" });
+    expect(readFileSync(dest).equals(bytes)).toBe(true);
+    ws.close();
+  });
+
+  it("creates missing parent directories", async () => {
+    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [] });
+    await bridge.start();
+    const ws = await connect(TOKEN);
+    const bytes = Buffer.from("payload");
+    serveBytes(ws, bytes, 4);
+    const dest = join(tempDest("x"), "..", "nested", "deep", "file.bin");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const result = await bridge.callBinary("", target, dest);
+
+    expect(readFileSync(result.path).equals(bytes)).toBe(true);
+    ws.close();
+  });
+
+  it("leaves no half-written file behind when the download fails", async () => {
+    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [] });
+    await bridge.start();
+    const ws = await connect(TOKEN);
+    const dest = tempDest("partial.bin");
+    ws.on("message", (raw) => {
+      const req = JSON.parse(raw.toString());
+      if (req.type !== "call") return;
+      ws.send(JSON.stringify({ type: "binary-begin", id: req.id, contentType: "image/png", bytes: 99, fileName: null }));
+      ws.send(JSON.stringify({ type: "binary-chunk", id: req.id, seq: 0, data: Buffer.from("half").toString("base64") }));
+      ws.send(JSON.stringify({ type: "result", id: req.id, ok: false, error: "portal answered with an HTML page, not a file" }));
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    await expect(bridge.callBinary("", target, dest)).rejects.toThrow(/HTML page/);
+    expect(existsSync(dest)).toBe(false);
+    ws.close();
+  });
+
+  it("ignores binary frames for a call it never made", async () => {
+    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [] });
+    await bridge.start();
+    const ws = await connect(TOKEN);
+    const dest = tempDest("stray.bin");
+    await new Promise((r) => setTimeout(r, 50));
+    ws.send(JSON.stringify({ type: "binary-begin", id: "not-mine", contentType: "image/png", bytes: 1, fileName: null }));
+    ws.send(JSON.stringify({ type: "binary-chunk", id: "not-mine", seq: 0, data: Buffer.from("x").toString("base64") }));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(dest)).toBe(false);
+    ws.close();
   });
 });

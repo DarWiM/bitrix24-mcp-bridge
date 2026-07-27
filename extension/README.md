@@ -55,10 +55,10 @@ daemon читает серверный `config.json` только на стар�
 проверка: `bun run typecheck` гоняет и сервер, и расширение.
 
 ```bash
-bun run build:ext     # dev-сборка пер-пользовательского расширения в extension/dist/
+bun run build:ext     # dev-сборка пер-пользовательского расширения в extension/dev/
 ```
 
-`build:ext` — dev-удобство для мейнтейнера (собирает в `extension/dist/`, gitignored). Обычному
+`build:ext` — dev-удобство для мейнтейнера (собирает в `extension/dev/`, gitignored). Обычному
 пользователю оно не нужно: продовое расширение приходит статичными бандлами в пакете и
 материализуется через `setup`.
 
@@ -84,7 +84,7 @@ extension ID — не секрет и не является границей б�
   единственная защита loopback-порта WebSocket; всё, что на машине может достучаться до
   `127.0.0.1` и знает токен, может управлять мостом.
 - `config.json` пер-пользовательский и **не коммитится**: он живёт в
-  `~/.bitrix24-mcp-bridge/extension/` (вне репозитория), а dev-сборка (`extension/dist/`) —
+  `~/.bitrix24-mcp-bridge/extension/` (вне репозитория), а dev-сборка (`extension/dev/`) —
   в `.gitignore`. В репозитории — только `config.example.json`.
 - daemon отклоняет WS-подключения, у которых браузерный `Origin` не входит в набор
   сконфигурированных порталов (defense-in-depth).

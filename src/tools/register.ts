@@ -4,8 +4,46 @@ import type { CallSink } from "../bridge/uds-client.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { HELP } from "./help.js";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail.js";
+import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
+import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
+import { PACKAGE_VERSION } from "../version.js";
 
-export interface ToolDeps { sink: CallSink; catalog: Catalog; defaultPortal: string; portals: string[]; }
+export interface ToolDeps {
+  sink: CallSink;
+  catalog: Catalog;
+  defaultPortal: string;
+  portals: string[];
+  // alias → portal origin; lets tools hand back absolute links (e.g. a call recording).
+  origins?: Record<string, string>;
+  // Where downloaded attachments land when the caller doesn't pick a path.
+  downloadsDir?: string;
+}
+
+const textResponse = z.object({ text: z.string() });
+
+// A long meeting's transcript dwarfs everything else in the payload (a 1-hour call: ~70 KB of
+// 80 KB). Past this size it goes to disk, where the agent can grep it instead of paying for
+// all 333 utterances to find three.
+const TRANSCRIPT_INLINE_LIMIT = 20_000;
+
+const TRANSCRIPT_MODES = ["auto", "inline", "file", "none"] as const;
+type TranscriptMode = (typeof TRANSCRIPT_MODES)[number];
+
+function shouldSpill(mode: TranscriptMode, call: CallDetail, canWrite: boolean): boolean {
+  if (mode === "none" || mode === "inline") return false;
+  if (!canWrite) return false; // no downloads dir configured — inline is the only option
+  if (mode === "file") return true;
+  return JSON.stringify(call.transcript).length > TRANSCRIPT_INLINE_LIMIT;
+}
+const downloadResult = z.object({
+  path: z.string(),
+  bytes: z.number(),
+  contentType: z.string(),
+  fileName: z.string().nullable(),
+});
 
 function ok(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }; }
 function fail(message: string) { return { isError: true, content: [{ type: "text" as const, text: message }] }; }
@@ -43,7 +81,24 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     async () => {
       try {
         const { portals } = await deps.sink.status();
-        return ok({ configured: true, defaultPortal: deps.defaultPortal, portals });
+        // The bundles on disk are refreshed automatically on upgrade, but Chrome keeps running
+        // the copy it loaded until someone hits "Обновить" — so a stale extension is reported
+        // rather than left to fail later with a confusing error.
+        const stale = portals.filter((p) => p.connected && p.extensionVersion !== PACKAGE_VERSION);
+        return ok({
+          configured: true,
+          defaultPortal: deps.defaultPortal,
+          packageVersion: PACKAGE_VERSION,
+          portals,
+          ...(stale.length > 0
+            ? {
+                warning:
+                  `расширение устарело (${stale.map((p) => `${p.alias}: ${p.extensionVersion ?? "до 0.3.0"}`).join(", ")}), ` +
+                  `мост версии ${PACKAGE_VERSION}. Файлы уже обновлены — нажми «Обновить» на расширении в chrome://extensions ` +
+                  "и перезагрузи вкладку портала, иначе новые методы работать не будут.",
+              }
+            : {}),
+        });
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));
       }
@@ -94,7 +149,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         '{">=DEADLINE":"2026-07-01"}. Роли участника РАЗДЕЛЬНЫ и в фильтре в ЕД. числе: ' +
         "RESPONSIBLE_ID (ответственный), ACCOMPLICE (соисполнитель), AUDITOR (наблюдатель), " +
         'CREATED_BY (постановщик). «Все мои задачи» = объединить вызовы по RESPONSIBLE_ID и ' +
-        'ACCOMPLICE (одного поля «любая роль» нет). Ещё params: select, order (напр. {"ID":"desc"}), start (шаг 50).',
+        'ACCOMPLICE (одного поля «любая роль» нет; задача может попасть сразу в несколько — дедуплицируй по id). ' +
+        'ПАГИНАЦИЯ: params.PAGEN_1 — НОМЕР страницы (1, 2, 3…), страница = 20 задач; params.start НЕ работает ' +
+        '(вернёт ту же первую страницу). СТАТУС: в select проси "STATUS" (он в дефолтном select) — придёт ключ ' +
+        '"status" по шкале 1..7; "REAL_STATUS" в select молча не возвращается, но в filter работает. ' +
+        'Ещё params: select, order — дефолт этой обёртки {"ID":"desc"}.',
       inputSchema: { params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: () => ({ select: TASK_LIST_SELECT, order: { ID: "desc" } }),
     },
@@ -394,6 +453,238 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           const params = { ...entry.params, ...t.toParams(args), ...(args.params ?? {}) };
           const data = await deps.sink.call(args.portal ?? deps.defaultPortal, { ...entry, params });
           return ok(data);
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
+      },
+    );
+  }
+
+  // --- calls. Unlike everything above, the call analysis lives in a server-rendered slider
+  // (HTML), so the catalog entry opts into responseType "text" and we parse it here. ---
+  if (available.has("call.detail")) {
+    server.registerTool(
+      "bitrix_call_detail",
+      {
+        description:
+          "ВСЁ по видеозвонку/созвону по его callId: тема, дата, длительность, участники (доля " +
+          "разговора, оценка, рекомендации), оценка встречи, решения («что решили»), задачи с " +
+          "исполнителями, резюме по главам с таймкодами, ПОЛНАЯ РАСШИФРОВКА по репликам и ссылка на " +
+          "аудиозапись. callId берётся из системного сообщения чата «Начат звонок №N» (см. " +
+          "bitrix_chat_calls) или из ссылки /call/detail/<callId>. " +
+          "ДЛИННАЯ расшифровка по умолчанию НЕ приходит в ответе, а сохраняется на диск: тогда " +
+          "transcript пуст, а пути лежат в files — files.transcript (текст, строка = реплика с " +
+          "таймкодом и спикером: удобно грепать и читать кусками) и files.json (полный ответ). " +
+          "transcript: \"inline\" — вернуть расшифровку в ответе (может быть очень объёмной), " +
+          "\"file\" — всегда в файл, \"none\" — не нужна вовсе, \"auto\" (умолчание) — по размеру. " +
+          "Требует, чтобы у пользователя был доступ к звонку.",
+        inputSchema: {
+          callId: z.union([z.number(), z.string()]),
+          transcript: z.enum(TRANSCRIPT_MODES).optional(),
+          params: z.record(z.unknown()).optional(),
+          portal: z.string().optional(),
+        },
+      },
+      async ({ callId, transcript, params, portal }: { callId: number | string; transcript?: TranscriptMode; params?: Record<string, unknown>; portal?: string }) => {
+        try {
+          const entry = deps.catalog.resolve("call.detail");
+          const alias = portal ?? deps.defaultPortal;
+          const raw = await deps.sink.call(alias, { ...entry, params: { ...entry.params, callId, ...(params ?? {}) } });
+          const page = textResponse.safeParse(raw);
+          if (!page.success) return fail("call.detail did not return text — is responseType \"text\" set in the catalog?");
+          const mode = transcript ?? "auto";
+          const call = parseCallDetail(page.data.text, { origin: deps.origins?.[alias], transcript: mode !== "none" });
+          if (!shouldSpill(mode, call, deps.downloadsDir !== undefined)) return ok(call);
+
+          const dir = deps.downloadsDir!;
+          mkdirSync(dir, { recursive: true });
+          const files = {
+            transcript: join(dir, `call-${call.id}-transcript.txt`),
+            json: join(dir, `call-${call.id}.json`),
+          };
+          writeFileSync(files.transcript, formatTranscript(call), "utf8");
+          // The JSON copy keeps the transcript — it is the archive, not the context-sized reply.
+          writeFileSync(files.json, JSON.stringify(call, null, 1), "utf8");
+          return ok({ ...call, transcript: [], files });
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
+      },
+    );
+  }
+
+  // --- downloads. The portal mints signed, single-file URLs, so these tools take a URL and
+  // check its origin instead of resolving a catalog name. The body never enters the agent's
+  // context: the daemon streams it to disk and only the path comes back. ---
+  if (deps.downloadsDir) {
+    const downloadsDir = deps.downloadsDir;
+
+    const fetchToDisk = async (args: {
+      url: string;
+      savePath?: string;
+      overwrite?: boolean;
+      fallbackName: string;
+      portal?: string;
+    }) => {
+      const origins = deps.origins ?? {};
+      const target = resolvePortalUrl(args.url, origins);
+      // With no savePath the final name is unknown until the portal answers, so the body lands
+      // in a temp file and is moved into place afterwards (see finalizeDownload).
+      const explicitPath = args.savePath !== undefined
+        ? resolveDestination({ savePath: args.savePath, downloadsDir, suggestedName: args.fallbackName, overwrite: args.overwrite })
+        : null;
+      const savePath = explicitPath ?? tempDownloadPath(downloadsDir);
+      const raw = await deps.sink.call(args.portal ?? target.portal, {
+        endpoint: target.endpoint,
+        action: null,
+        method: "GET",
+        params: {},
+        responseType: "binary",
+        savePath,
+      });
+      const done = downloadResult.safeParse(raw);
+      if (!done.success) return raw;
+      if (explicitPath) return done.data;
+      return {
+        ...done.data,
+        path: finalizeDownload({
+          tempPath: done.data.path,
+          serverName: done.data.fileName,
+          fallbackName: fileNameFromUrl(args.url, args.fallbackName),
+          downloadsDir,
+          overwrite: args.overwrite,
+        }),
+      };
+    };
+
+    server.registerTool(
+      "bitrix_file_download",
+      {
+        description:
+          "Скачать ФАЙЛ с портала на диск: вложение чата (фото/видео/документ), файл задачи, " +
+          "аудиозапись звонка. url — готовая ссылка из ответа моста: files[].urlDownload у " +
+          "bitrix_chat_load, ссылки из bitrix_task_files, recording.url у bitrix_call_detail. " +
+          "Скачать может только браузерная сессия, поэтому качает расширение; содержимое файла в " +
+          "ответ НЕ попадает — возвращается путь на диске. По умолчанию кладёт в " +
+          "~/.bitrix24-mcp-bridge/downloads/; savePath — свой путь (абсолютный либо имя файла " +
+          "внутри папки загрузок), overwrite: true — перезаписать существующий.",
+        inputSchema: {
+          url: z.string(),
+          savePath: z.string().optional(),
+          overwrite: z.boolean().optional(),
+          portal: z.string().optional(),
+        },
+      },
+      async ({ url, savePath, overwrite, portal }: { url: string; savePath?: string; overwrite?: boolean; portal?: string }) => {
+        try {
+          return ok(await fetchToDisk({ url, savePath, overwrite, portal, fallbackName: "bitrix-file" }));
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
+      },
+    );
+
+    if (available.has("call.detail")) {
+      server.registerTool(
+        "bitrix_call_recording",
+        {
+          description:
+            "Скачать АУДИОЗАПИСЬ созвона по callId: сам находит ссылку в деталях звонка и сохраняет " +
+            "файл на диск (в ответ возвращается путь, не содержимое). Записи есть не у всех звонков — " +
+            "если её нет, вернётся понятная ошибка. savePath/overwrite — как в bitrix_file_download.",
+          inputSchema: {
+            callId: z.union([z.number(), z.string()]),
+            savePath: z.string().optional(),
+            overwrite: z.boolean().optional(),
+            portal: z.string().optional(),
+          },
+        },
+        async ({ callId, savePath, overwrite, portal }: { callId: number | string; savePath?: string; overwrite?: boolean; portal?: string }) => {
+          try {
+            const entry = deps.catalog.resolve("call.detail");
+            const alias = portal ?? deps.defaultPortal;
+            const raw = await deps.sink.call(alias, { ...entry, params: { ...entry.params, callId } });
+            const page = textResponse.safeParse(raw);
+            if (!page.success) return fail("call.detail did not return text — is responseType \"text\" set in the catalog?");
+            const detail = parseCallDetail(page.data.text, { origin: deps.origins?.[alias], transcript: false });
+            if (!detail.recording?.url) return fail(`call ${callId} has no recording`);
+            return ok(await fetchToDisk({
+              url: detail.recording.url,
+              savePath,
+              overwrite,
+              portal: alias,
+              fallbackName: `call-${detail.id}.mp3`,
+            }));
+          } catch (e) {
+            return fail(e instanceof Error ? e.message : String(e));
+          }
+        },
+      );
+    }
+  }
+
+  if (available.has("chat.messages.tail")) {
+    server.registerTool(
+      "bitrix_chat_calls",
+      {
+        description:
+          "Найти ЗВОНКИ/СОЗВОНЫ в чате: листает историю назад и собирает системные сообщения «Начат " +
+          "звонок №N» вместе с привязанным резюме BitrixGPT. Отдаёт callId — их скармливай " +
+          "bitrix_call_detail. Поиска звонков по порталу целиком нет, поэтому ищи в конкретном чате: " +
+          "chatId проекта — bitrix_project_get → CHAT_ID, чат задачи — CHAT_ID из bitrix_task_get. " +
+          "Просматривает maxPages страниц по 50 сообщений (по умолчанию 6 ≈ 300 сообщений); если в " +
+          "ответе reachedHistoryStart:false, история НЕ дочитана до конца — продолжай с " +
+          "beforeId: <oldestScannedMessageId> или увеличь maxPages.",
+        inputSchema: {
+          chatId: z.union([z.number(), z.string()]),
+          limit: z.number().optional(),
+          maxPages: z.number().optional(),
+          beforeId: z.union([z.number(), z.string()]).optional(),
+          params: z.record(z.unknown()).optional(),
+          portal: z.string().optional(),
+        },
+      },
+      async ({ chatId, limit, maxPages, beforeId, params, portal }: { chatId: number | string; limit?: number; maxPages?: number; beforeId?: number | string; params?: Record<string, unknown>; portal?: string }) => {
+        try {
+          const entry = deps.catalog.resolve("chat.messages.tail");
+          const alias = portal ?? deps.defaultPortal;
+          const wanted = limit ?? 20;
+          const pageBudget = maxPages ?? 6;
+          const found = new Map<number, ChatCall>();
+          let cursor: number | string | null = beforeId ?? null;
+          let scannedPages = 0;
+          let scannedMessages = 0;
+          let reachedHistoryStart = false;
+          while (scannedPages < pageBudget) {
+            const raw = await deps.sink.call(alias, {
+              ...entry,
+              params: {
+                ...entry.params,
+                chatId,
+                limit: 50,
+                ...(cursor !== null ? { "filter[lastId]": cursor } : {}),
+                ...(params ?? {}),
+              },
+            });
+            const page = readMessagePage(raw);
+            collectChatCalls(page.messages, found);
+            scannedPages += 1;
+            scannedMessages += page.messages.length;
+            cursor = page.oldestId;
+            if (!page.hasNextPage || page.oldestId === null) {
+              reachedHistoryStart = true;
+              break;
+            }
+            if (found.size >= wanted) break;
+          }
+          return ok({
+            chatId,
+            calls: sortCalls(found).slice(0, wanted),
+            scannedPages,
+            scannedMessages,
+            oldestScannedMessageId: cursor,
+            reachedHistoryStart,
+          });
         } catch (e) {
           return fail(e instanceof Error ? e.message : String(e));
         }

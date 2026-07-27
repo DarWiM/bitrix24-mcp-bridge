@@ -7,6 +7,7 @@ const entrySchema = z.object({
   method: z.enum(["GET", "POST"]).default("POST"),
   params: z.record(z.unknown()).default({}),
   bodyType: z.enum(["json", "form"]).default("form"),
+  responseType: z.enum(["json", "text"]).default("json"),
 });
 const fileSchema = z.record(entrySchema);
 
@@ -16,6 +17,7 @@ export interface CatalogEntry {
   method: "GET" | "POST";
   params: Record<string, unknown>;
   bodyType: "json" | "form";
+  responseType: "json" | "text";
 }
 
 export interface Catalog {

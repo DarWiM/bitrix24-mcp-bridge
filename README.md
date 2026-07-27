@@ -52,6 +52,19 @@ bitrix24-mcp-bridge`.
   портал по умолчанию, `[p]` порт, `[t]` ротировать токен, `[u]` обновить
   расширение из установленного пакета, `[q]` выход.
 
+**Обновление пакета** почти полностью автоматическое:
+
+- **Каталог** — новые записи дописываются в ваш `~/.bitrix24-mcp-bridge/actions.json` при следующем
+  старте (в stderr — `[catalog] added N new entries…`). Ваши записи и правки не трогаются, а запись,
+  которую вы удалили сами, назад не возвращается: доставленные ключи помечаются в
+  `catalog-state.json`, поэтому удаление считается решением, а не пробелом.
+- **Файлы расширения** в `~/.bitrix24-mcp-bridge/extension/` обновляются там же автоматически, если
+  версия пакета изменилась (`[extension] refreshed …`), — запускать `setup` → `[u]` вручную больше не нужно.
+- **Один ручной шаг остаётся:** нажать «Обновить» на расширении в `chrome://extensions` и перезагрузить
+  вкладку портала. Программно это сделать нельзя — Chrome перечитывает файлы unpacked-расширения только
+  сам. Пока этого не сделано, `bitrix_status` возвращает `warning` с версиями моста и расширения, так
+  что рассинхрон виден сразу, а не всплывает необъяснимой ошибкой.
+
 **Мультипортальность** поддержана: каждый портал — отдельная запись, а в манифесте
 расширения `matches`/`host_permissions` перечисляют ровно сконфигурированные origin'ы
 (least-privilege на origin).
@@ -183,7 +196,7 @@ bun run src/index.ts setup      # интерактивная настройка
 bun test                        # юнит-тесты (bun:test)
 bun run typecheck               # tsc --noEmit (сервер + extension)
 bun run build:dist              # бандл сервера → dist/cli.js
-bun run build:ext               # dev-сборка расширения → extension/dist/ (загружаемое)
+bun run build:ext               # dev-сборка расширения → extension/dev/ (загружаемое)
 bun run sync:runtime            # применить репо-изменения к живому daemon (см. ниже)
 ```
 
@@ -216,6 +229,6 @@ Trusted Publisher** (с provenance, без токенов). CI ([`.github/workfl
 ## Документация
 
 - [docs/RUNBOOK.md](docs/RUNBOOK.md) — установка, настройка, повседневная работа, диагностика
-- [docs/api-notes.md](docs/api-notes.md) — карта API Bitrix24 (единый источник для `bitrix_help`)
-- [docs/reconnaissance.md](docs/reconnaissance.md) — как снять HAR и расширить `actions.json`
+- [docs/api-notes.md](docs/api-notes.md) — карта API Bitrix24 для агента (единый источник для `bitrix_help`)
+- [docs/reconnaissance.md](docs/reconnaissance.md) — capture, транспорт записи каталога, расширение `actions.json`
 - [extension/README.md](extension/README.md) — устройство расширения и модель доверия

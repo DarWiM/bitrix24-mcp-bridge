@@ -1,5 +1,14 @@
 import { describe, it, expect } from "bun:test";
-import { encodeForm, buildRequest, interpret } from "./bridge-core.ts";
+import {
+  encodeForm,
+  buildRequest,
+  interpret,
+  interpretText,
+  applyPathParams,
+  toBase64,
+  looksLikeLoginPage,
+  fileNameFromDisposition,
+} from "./bridge-core.ts";
 
 describe("encodeForm", () => {
   it("serializes nested objects PHP-style", () => {
@@ -74,5 +83,90 @@ describe("interpret", () => {
     expect(r.ok).toBe(false);
     expect(r.error).toContain("QUERY_LIMIT_EXCEEDED");
     expect(r.error).toContain("too many");
+  });
+});
+
+describe("applyPathParams", () => {
+  it("fills {name} from params and consumes the key", () => {
+    const { endpoint, rest } = applyPathParams("/call/detail/{callId}", { callId: 4242, IFRAME: "Y" });
+    expect(endpoint).toBe("/call/detail/4242");
+    expect(rest).toEqual({ IFRAME: "Y" });
+  });
+
+  it("leaves a plain endpoint and its params untouched", () => {
+    const { endpoint, rest } = applyPathParams("/rest/im.user.get.json", { ID: 55 });
+    expect(endpoint).toBe("/rest/im.user.get.json");
+    expect(rest).toEqual({ ID: 55 });
+  });
+
+  it("throws when the path param is missing rather than building a broken URL", () => {
+    expect(() => applyPathParams("/call/detail/{callId}", {})).toThrow(/missing path param "callId"/);
+  });
+
+  it("escapes the substituted value", () => {
+    expect(applyPathParams("/x/{id}", { id: "a b/c" }).endpoint).toBe("/x/a%20b%2Fc");
+  });
+});
+
+describe("buildRequest with a path template", () => {
+  it("substitutes into the URL and keeps the id out of the query", () => {
+    const { url, body } = buildRequest(
+      "https://portal.bitrix24.ru",
+      { type: "call", id: "7", endpoint: "/call/detail/{callId}", action: null, method: "GET", params: { callId: 4242, IFRAME: "Y" } },
+      "s",
+    );
+    expect(url).toBe("https://portal.bitrix24.ru/call/detail/4242");
+    const parsed = new URLSearchParams(body);
+    expect(parsed.get("IFRAME")).toBe("Y");
+    expect(parsed.get("callId")).toBeNull();
+  });
+});
+
+describe("interpretText", () => {
+  it("returns the body and its content type on success", () => {
+    expect(interpretText("<html>x</html>", "text/html; charset=UTF-8", 200)).toEqual({
+      ok: true,
+      data: { contentType: "text/html; charset=UTF-8", text: "<html>x</html>" },
+    });
+  });
+
+  it("fails on an HTTP error status", () => {
+    expect(interpretText("<html>nope</html>", "text/html", 403)).toEqual({ ok: false, error: "HTTP 403" });
+  });
+
+  it("fails on an empty body instead of reporting success", () => {
+    expect(interpretText("   ", "text/html", 200)).toEqual({ ok: false, error: "empty response" });
+  });
+});
+
+describe("binary download helpers", () => {
+  it("base64-encodes bytes the same way Buffer would", () => {
+    const bytes = new Uint8Array([0, 1, 2, 250, 251, 252, 253, 254, 255]);
+    expect(toBase64(bytes)).toBe(Buffer.from(bytes).toString("base64"));
+  });
+
+  it("handles a payload larger than the fromCharCode window without truncating", () => {
+    const bytes = new Uint8Array(0x8000 * 2 + 123).map((_, i) => i % 256);
+    expect(toBase64(bytes)).toBe(Buffer.from(bytes).toString("base64"));
+  });
+
+  it("flags an HTML body with no attachment marker as the login page", () => {
+    expect(looksLikeLoginPage("text/html; charset=UTF-8", null)).toBe(true);
+    expect(looksLikeLoginPage("text/html", "inline")).toBe(true);
+  });
+
+  it("lets a real HTML attachment through", () => {
+    expect(looksLikeLoginPage("text/html", 'attachment; filename="report.html"')).toBe(false);
+  });
+
+  it("does not flag ordinary file types", () => {
+    expect(looksLikeLoginPage("image/png", null)).toBe(false);
+    expect(looksLikeLoginPage("audio/mpeg", null)).toBe(false);
+  });
+
+  it("reads the file name from Content-Disposition, plain and RFC 5987", () => {
+    expect(fileNameFromDisposition('attachment; filename="image (29).png"')).toBe("image (29).png");
+    expect(fileNameFromDisposition("attachment; filename*=UTF-8''%D1%84%D0%BE%D1%82%D0%BE.png")).toBe("фото.png");
+    expect(fileNameFromDisposition(null)).toBeNull();
   });
 });
