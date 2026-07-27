@@ -15,7 +15,7 @@
    ```bash
    bun run build:ext:capture
    ```
-   `chrome://extensions` → у расширения нажми «Обновить» (или Load unpacked → `extension/dist/`).
+   `chrome://extensions` → у расширения нажми «Обновить» (или Load unpacked → `extension/dev/`).
 2. Запусти рекордер (использует тот же `.env`):
    ```bash
    bun run capture

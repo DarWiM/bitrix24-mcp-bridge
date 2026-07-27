@@ -183,7 +183,7 @@ bun run src/index.ts setup      # интерактивная настройка
 bun test                        # юнит-тесты (bun:test)
 bun run typecheck               # tsc --noEmit (сервер + extension)
 bun run build:dist              # бандл сервера → dist/cli.js
-bun run build:ext               # dev-сборка расширения → extension/dist/ (загружаемое)
+bun run build:ext               # dev-сборка расширения → extension/dev/ (загружаемое)
 bun run sync:runtime            # применить репо-изменения к живому daemon (см. ниже)
 ```
 

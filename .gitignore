@@ -85,6 +85,7 @@ dist
 captured.har
 .env
 extension/dist/
+extension/dev/
 actions.json
 actions.draft.json
 
