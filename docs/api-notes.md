@@ -75,6 +75,8 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 | `entityselector.load` | `ui.entityselector.load` | `{"dialog":{entities,preselectedItems,…}}` | — |
 | `entityselector.search` | `ui.entityselector.doSearch` | `{"dialog":{…},"searchQuery":{"query":"…","queryWords":["…"]}}` | — |
 | `call.detail` | `GET /call/detail/{callId}` | `callId` (подставляется в путь), `IFRAME=Y`, `IFRAME_TYPE=SIDE_SLIDER` → HTML | см. §5.4 |
+| `task.comments.page` | `GET /task/comments/{taskId}/` | `taskId` (в путь), `IFRAME=Y`, `IFRAME_TYPE=SIDE_SLIDER` → HTML старых комментариев | см. §5.6 |
+| `task.comments.navigate` | `bitrix:forum.comments` → `navigateComment` | форма: `ENTITY_XML_ID=TASK_<id>`, `EXEMPLAR_ID`, `signedParameters` (оба — из HTML первой страницы), `FILTER[<ID]` | `FILTER[<ID]` — курсор; проще `bitrix_task_comments` (§5.6) |
 
 ---
 
@@ -234,6 +236,10 @@ bitrix_recent_tail { "section": "tasksTask", "lastMessageDate": "2026-06-29T17:2
 bitrix_chat_load   { "dialogId": "chat38849" }          // или { "chatId": 38849 }
 ```
 
+**Чат пуст, а `COMMENTS_COUNT > 0`** — задача старше чатов задач: в чате только системное сообщение
+«Чтобы прочитать комментарии, которые ранее оставили участники задачи…», а само обсуждение лежит в
+форуме → `bitrix_task_comments` (§5.6).
+
 **В. Поиском по названию задачи** (запасной, матч по тексту):
 `bitrix_entity_search { "query": "трекер", "section": "tasksTask" }`
 
@@ -327,6 +333,38 @@ bitrix_file_download { "url": "…", "savePath": "/tmp/photo.png", "overwrite": 
 - **Граница безопасности — origin**: скачивается только с origin сконфигурированного портала.
 - **Имя даёт портал** (`Content-Disposition`), поэтому без `savePath` угадывать его не нужно.
 - **Повторное скачивание** того же файла падает с `already exists` — передай `overwrite: true`.
+
+### 5.6. Старые комментарии задачи (форум)
+
+До перехода на чаты задач обсуждение жило в форуме задачи, и у старых задач оно там и осталось: в
+чате (`CHAT_ID`) только системная заглушка со ссылкой `/task/comments/<id>/`. Признак — в
+`bitrix_task_get` поле `COMMENTS_COUNT > 0` (через `params.select`; `FORUM_TOPIC_ID` тоже заполнен),
+а чат пуст. JSON-метода чтения нет — мост разбирает HTML-страницу комментариев.
+
+```jsonc
+bitrix_task_comments { "taskId": 1234 }                          // всё обсуждение; длинное уедет в файл
+bitrix_task_comments { "taskId": 1234, "limit": 10 }             // только 10 последних
+bitrix_task_comments { "taskId": 1234, "output": "inline" }      // всегда в ответе
+bitrix_task_comments { "taskId": 1234, "beforeId": 5678 }        // продолжить вглубь от id
+```
+
+Ответ: `comments[]` по порядку (старые → новые) — `{ id, authorId, author, date, dateIso, text, isNew,
+system, files[] }`, плюс `total`, `oldestId`, `scannedPages` и **`reachedHistoryStart`**: если он
+`false` (упёрлись в `maxPages`, умолчание 10, или в `limit`), продолжай с `beforeId: <oldestId>`.
+
+- **`system: true`** — служебные записи («вы назначены исполнителем», смена срока, пинги), не слова людей.
+- **`date`** — как на портале («9 марта 2024 08:15»), **`dateIso`** — то же в `2024-03-09T08:15`
+  (местное время портала; для «вчера, 12:00» и дат без года — `null`).
+- **`files[]`** — `{ attachedId, name, size, url }`; `url` скармливай `bitrix_file_download` (§5.5).
+- **`text`** — без разметки; у ссылки с подписью адрес дописан в скобках: «макет (https://…)».
+- **Длинное обсуждение не приходит в ответе** (как расшифровка звонка, §5.4): свыше ~20 КБ (`output:
+  "auto"` = умолчание) в ответе `comments: []` и `files`: `files.text` — `task-<id>-comments.txt`,
+  строка = комментарий (`#5678 [2024-03-09T08:15] Имя (id 101): текст`, переносы — ` ⏎ `), её удобно
+  грепать; `files.json` — полный ответ. `output: "file"` — всегда в файл.
+- **Прочитанным ничего не помечается.** Портал отмечает комментарии отдельным действием
+  `readComment`, которое шлёт JS страницы при прокрутке; мост JS не исполняет. Проверено:
+  `viewedDate` задачи после чтения не меняется. `isNew: true` — комментарий не прочитан пользователем.
+- Нет доступа к задаче / протухла сессия → внятная ошибка (портал отдаёт HTML логина).
 
 ---
 

@@ -27,6 +27,8 @@
 
   "task.subtasks": { "action": "tasks.v2.Task.Relation.Child.list", "method": "POST", "bodyType": "json" },
   "task.related": { "action": "tasks.v2.Task.Relation.Related.list", "method": "POST", "bodyType": "json" },
+  "task.comments.page": { "endpoint": "/task/comments/{taskId}/", "method": "GET", "params": { "IFRAME": "Y", "IFRAME_TYPE": "SIDE_SLIDER" }, "responseType": "text" },
+  "task.comments.navigate": { "endpoint": "/bitrix/services/main/ajax.php?mode=class&c=bitrix%3Aforum.comments&action=navigateComment", "method": "POST", "params": { "AJAX_POST": "Y", "MODE": "LIST", "PAGEN_1": 1, "scope": "web", "IFRAME": "Y", "IFRAME_TYPE": "SIDE_SLIDER" } },
 
   "call.detail": { "endpoint": "/call/detail/{callId}", "method": "GET", "params": { "IFRAME": "Y", "IFRAME_TYPE": "SIDE_SLIDER" }, "responseType": "text" }
 }

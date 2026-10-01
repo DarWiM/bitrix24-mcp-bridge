@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail.js";
 import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
+import { formatComments, parseComments, parseFirstPage, type TaskComment } from "./taskComments.js";
 import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
 import { PACKAGE_VERSION } from "../version.js";
 
@@ -38,6 +39,15 @@ function shouldSpill(mode: TranscriptMode, call: CallDetail, canWrite: boolean):
   if (mode === "file") return true;
   return JSON.stringify(call.transcript).length > TRANSCRIPT_INLINE_LIMIT;
 }
+// Same reasoning as the transcript: a long legacy discussion goes to disk, where it can be grepped.
+const COMMENTS_INLINE_LIMIT = 20_000;
+const COMMENTS_OUTPUT_MODES = ["auto", "inline", "file"] as const;
+type CommentsOutputMode = (typeof COMMENTS_OUTPUT_MODES)[number];
+
+const navigateResponse = z.object({ messageList: z.string(), navigation: z.string().optional() });
+// Digits only: the task id also names the spill files, so anything path-like must not get through.
+const positiveId = z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]).transform(Number);
+
 const downloadResult = z.object({
   path: z.string(),
   bytes: z.number(),
@@ -163,7 +173,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       description:
         "Карточка задачи по id (read-only). В дефолтном select есть CHAT_ID — это id ЧАТА-ОБСУЖДЕНИЯ " +
         "задачи: прямой путь к нему = bitrix_chat_load { chatId: <CHAT_ID> } (не путать с чатом проекта " +
-        "через GROUP_ID). Другие поля — через params.select (напр. UF_*, TAGS, TIME_ESTIMATE).",
+        "через GROUP_ID). Другие поля — через params.select (напр. UF_*, TAGS, TIME_ESTIMATE). " +
+        "У старых задач обсуждение может быть НЕ в чате, а в форуме: COMMENTS_COUNT > 0 при пустом чате → " +
+        "bitrix_task_comments { taskId }.",
       inputSchema: { taskId: z.union([z.number(), z.string()]), params: z.record(z.unknown()).optional(), portal: z.string().optional() },
       toParams: (a) => ({ taskId: a.taskId, select: TASK_GET_SELECT }),
     },
@@ -506,6 +518,117 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           // The JSON copy keeps the transcript — it is the archive, not the context-sized reply.
           writeFileSync(files.json, JSON.stringify(call, null, 1), "utf8");
           return ok({ ...call, transcript: [], files });
+        } catch (e) {
+          return fail(e instanceof Error ? e.message : String(e));
+        }
+      },
+    );
+  }
+
+  // --- legacy task comments: the forum discussion tasks had before task chats. The first page is a
+  // server-rendered slider that also mints the signed parameters navigateComment needs. ---
+  if (available.has("task.comments.page") && available.has("task.comments.navigate")) {
+    server.registerTool(
+      "bitrix_task_comments",
+      {
+        description:
+          "СТАРЫЕ комментарии задачи (форум) — обсуждение, которое было у задачи до перехода на чаты задач. " +
+          "Признак: у задачи COMMENTS_COUNT > 0 (bitrix_task_get с params.select), а в чате задачи " +
+          "(CHAT_ID → bitrix_chat_load) только системное сообщение «Чтобы прочитать комментарии, которые " +
+          "ранее оставили…». Отдаёт комментарии по порядку (старые → новые): { id, authorId, author, date, " +
+          "dateIso, text, isNew, system, files[] }; system: true — служебные (смена срока, «назначены " +
+          "исполнителем», пинги); files[].url — ссылка для bitrix_file_download. НИЧЕГО не помечает " +
+          "прочитанным. Сам листает до начала истории (maxPages, по умолчанию 10); если в ответе " +
+          "reachedHistoryStart:false — продолжи с beforeId: <oldestId>. limit — вернуть только N последних. " +
+          "ДЛИННОЕ обсуждение по умолчанию сохраняется на диск: тогда comments пуст, а пути в files — " +
+          "files.text (строка = комментарий с id, датой и автором — удобно грепать) и files.json. " +
+          "output: \"inline\" — всегда в ответе, \"file\" — всегда в файл, \"auto\" (умолчание) — по размеру.",
+        inputSchema: {
+          taskId: z.union([z.number(), z.string()]),
+          limit: z.number().int().positive().optional(),
+          maxPages: z.number().int().positive().optional(),
+          beforeId: z.union([z.number(), z.string()]).optional(),
+          output: z.enum(COMMENTS_OUTPUT_MODES).optional(),
+          portal: z.string().optional(),
+        },
+      },
+      async (args: {
+        taskId: number | string; limit?: number; maxPages?: number; beforeId?: number | string; output?: CommentsOutputMode; portal?: string;
+      }) => {
+        const { limit, maxPages, output, portal } = args;
+        const taskIdArg = positiveId.safeParse(args.taskId);
+        const beforeIdArg = positiveId.optional().safeParse(args.beforeId);
+        if (!taskIdArg.success) return fail(`taskId must be a positive integer, got ${JSON.stringify(args.taskId)}`);
+        if (!beforeIdArg.success) return fail(`beforeId must be a positive integer, got ${JSON.stringify(args.beforeId)}`);
+        const taskId = taskIdArg.data;
+        const beforeId = beforeIdArg.data;
+        try {
+          const alias = portal ?? deps.defaultPortal;
+          const origin = deps.origins?.[alias];
+          const pageEntry = deps.catalog.resolve("task.comments.page");
+          const raw = await deps.sink.call(alias, { ...pageEntry, params: { ...pageEntry.params, taskId } });
+          const page = textResponse.safeParse(raw);
+          if (!page.success) return fail("task.comments.page did not return text — is responseType \"text\" set in the catalog?");
+          const first = parseFirstPage(page.data.text, origin);
+
+          const byId = new Map<number, TaskComment>();
+          const before = beforeId ?? null;
+          // Continuing a previous run: the first page is fetched only for its fresh signature.
+          if (before === null) for (const c of first.comments) byId.set(c.id, c);
+          let cursor = before ?? (first.comments[0]?.id ?? null);
+          let reachedHistoryStart = before === null && !first.hasOlder;
+          let scannedPages = 0;
+          const navEntry = deps.catalog.resolve("task.comments.navigate");
+          while (!reachedHistoryStart && cursor !== null && scannedPages < (maxPages ?? 10)) {
+            if (limit !== undefined && byId.size >= limit) break;
+            const rawNav = await deps.sink.call(alias, {
+              ...navEntry,
+              params: {
+                ...navEntry.params,
+                ENTITY_XML_ID: `TASK_${taskId}`,
+                EXEMPLAR_ID: first.exemplarId,
+                "FILTER[<ID]": cursor,
+                taskId,
+                signedParameters: first.signedParameters,
+              },
+            });
+            const nav = navigateResponse.safeParse(rawNav);
+            if (!nav.success) return fail("task.comments.navigate returned an unexpected shape (no messageList)");
+            scannedPages += 1;
+            const older = parseComments(nav.data.messageList, origin).filter((c) => !byId.has(c.id));
+            for (const c of older) byId.set(c.id, c);
+            if (older.length > 0) cursor = older[0].id;
+            // navigation carries the "load more" markup; it is empty once the oldest comment is in.
+            if (older.length === 0 || !nav.data.navigation?.trim()) reachedHistoryStart = true;
+          }
+
+          const loaded = [...byId.values()].sort((a, b) => a.id - b.id);
+          const comments = limit !== undefined ? loaded.slice(-limit) : loaded;
+          // Older comments cut off by `limit` are not "the start of history" from the caller's side.
+          if (comments.length < loaded.length) reachedHistoryStart = false;
+          const result = {
+            taskId,
+            total: comments.length,
+            reachedHistoryStart,
+            oldestId: comments[0]?.id ?? null,
+            scannedPages,
+            comments,
+          };
+
+          const mode = output ?? "auto";
+          const spill = deps.downloadsDir !== undefined &&
+            (mode === "file" || (mode === "auto" && JSON.stringify(comments).length > COMMENTS_INLINE_LIMIT));
+          if (!spill) return ok(result);
+
+          const dir = deps.downloadsDir!;
+          mkdirSync(dir, { recursive: true });
+          const files = {
+            text: join(dir, `task-${taskId}-comments.txt`),
+            json: join(dir, `task-${taskId}-comments.json`),
+          };
+          writeFileSync(files.text, formatComments(taskId, comments, reachedHistoryStart), "utf8");
+          writeFileSync(files.json, JSON.stringify(result, null, 1), "utf8");
+          return ok({ ...result, comments: [], files });
         } catch (e) {
           return fail(e instanceof Error ? e.message : String(e));
         }

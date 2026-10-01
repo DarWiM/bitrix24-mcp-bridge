@@ -127,30 +127,38 @@ JSON-тела — только в заголовке. Ответ `invalid_csrf`/
 
 ---
 
-## Кандидат на реверс: легаси-комментарии задачи (HTML-поддомен)
+## Пример реверса: легаси-комментарии задачи (HTML-поддомен)
 
-У задач два независимых фида обсуждения: **im.v2-чат** (структурный JSON, читается уже сейчас) и
-**форумные легаси-комментарии**, которые рендерятся как HTML в side-slider'е и мостом пока не поддержаны.
+У задач два независимых фида обсуждения: **im.v2-чат** (структурный JSON) и **форумные легаси-комментарии**,
+которые рендерятся как HTML в side-slider'е. Второй читает `bitrix_task_comments` (`src/tools/taskComments.ts`)
+поверх двух записей каталога.
 
-Первая страница — GET HTML-страницы iframe (сервер тут же минтит подпись):
-
-```
-GET /task/comments/<taskId>/?IFRAME=Y&IFRAME_TYPE=SIDE_SLIDER   → HTML (комментарии + signedParameters)
-```
-
-Листание — POST компонентного ajax (форма, отдаёт HTML-фрагмент):
+Первая страница — GET HTML-страницы iframe (`task.comments.page`); сервер тут же минтит подпись:
 
 ```
-POST /bitrix/services/main/ajax.php?mode=class&c=bitrix:forum.comments&action=navigateComment
-form: AJAX_POST=Y, ENTITY_XML_ID=TASK_<taskId>, taskId=<taskId>, MODE=LIST,
-      FILTER[<ID]=<курсор: id, ДО которого грузить старые>, PAGEN_1=1,
-      signedParameters=<подписанный blob>, IFRAME=Y, IFRAME_TYPE=SIDE_SLIDER
-headers: bx-ajax: true, x-bitrix-site-id: s1 (плюс обычный X-Bitrix-Csrf-Token)
+GET /task/comments/<taskId>/?IFRAME=Y&IFRAME_TYPE=SIDE_SLIDER   → HTML (комментарии + FCList({...}))
 ```
 
-`signedParameters` — base64 PHP-массива + HMAC-подпись сервера (`FORUM_ID, ENTITY_TYPE=TK,
-ENTITY_ID=<taskId>, …`); подделать нельзя, берётся из HTML первой страницы.
+В инициализации `FCList({...})` лежат `EXEMPLAR_ID` (`<число>_xxxxxx`) и `ajax.params` — это и есть
+`signedParameters`: base64 PHP-массива (`FORUM_ID, ENTITY_TYPE=TK, ENTITY_ID=<taskId>, …`) + `.` + HMAC
+сервера; подделать нельзя. Ссылка `[id$="_page_nav"]` («Предыдущие комментарии (N)») есть, только если
+старее что-то осталось.
 
-Что осталось сделать: запись каталога `"/task/comments/{taskId}/"` с `responseType: "text"` даст ПЕРВУЮ
-страницу уже сейчас; для листания нужен механизм кастомных заголовков (`bx-ajax`, `x-bitrix-site-id`)
-пер-запись и прокидывание выпарсенного `signedParameters` в `navigateComment`.
+Листание — POST компонентного ajax (`task.comments.navigate`):
+
+```
+POST /bitrix/services/main/ajax.php?mode=class&c=bitrix%3Aforum.comments&action=navigateComment
+form: AJAX_POST=Y, ENTITY_XML_ID=TASK_<taskId>, EXEMPLAR_ID=<из HTML>, taskId=<taskId>, MODE=LIST,
+      FILTER[<ID]=<курсор: самый старый уже загруженный id>, PAGEN_1=1,
+      signedParameters=<из HTML>, scope=web, IFRAME=Y, IFRAME_TYPE=SIDE_SLIDER
+→ { status:"success", exemplarId, messageList: <HTML-фрагмент>, navigation: <"ещё" или ""> }
+```
+
+Пустой `navigation` = дошли до начала. Браузер шлёт ещё `bx-ajax: true` и `x-bitrix-site-id: s1`, но
+они **не нужны**: вызов проходит с обычными заголовками моста. Query (`mode`, `c`, `action`) живёт прямо в
+`endpoint` записи с `action: null` — иначе мост дописал бы второй `?action=`.
+
+**Прочитанным не помечает.** Отметку о прочтении ставит отдельное действие того же компонента
+`readComment`, которое вызывает JS страницы, когда комментарий попадает в видимую область. Мост
+только забирает HTML. Проверено вживую: `viewedDate` задачи (`tasks.task.list`, `select: ["VIEWED_DATE"]`)
+и `task.views.count` после чтения не меняются.

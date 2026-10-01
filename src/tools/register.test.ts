@@ -485,6 +485,193 @@ describe("call tools", () => {
   });
 });
 
+const NAVIGATE_ENDPOINT = "/bitrix/services/main/ajax.php?mode=class&c=bitrix%3Aforum.comments&action=navigateComment";
+
+const commentsCatalog: Catalog = {
+  resolve: (name) => {
+    if (name === "task.comments.page")
+      return { endpoint: "/task/comments/{taskId}/", action: null, method: "GET", params: { IFRAME: "Y", IFRAME_TYPE: "SIDE_SLIDER" }, bodyType: "form", responseType: "text" };
+    if (name === "task.comments.navigate")
+      return { endpoint: NAVIGATE_ENDPOINT, action: null, method: "POST", params: { AJAX_POST: "Y", MODE: "LIST" }, bodyType: "form", responseType: "json" };
+    throw new Error(`call "${name}" is not allowed`);
+  },
+  names: () => ["task.comments.page", "task.comments.navigate"],
+};
+
+function forumComment(id: number, body = `Комментарий ${id}`): string {
+  return `<div class="feed-com-block-cover" bx-mpl-entity-id="${id}" bx-mpl-read-status="old">` +
+    `<div class="feed-com-block blog-comment-user-7"><div class="feed-com-user-box">` +
+    `<a class="feed-com-name" bx-tooltip-user-id="7">Пётр</a><a class="feed-com-time">4 мая 2025 09:30</a></div>` +
+    `<div class="feed-com-text-inner-inner">${body}</div></div></div>`;
+}
+
+function commentsPage(ids: number[], withOlder: boolean): { contentType: string; text: string } {
+  const nav = withOlder ? `<a id="TASK_42-7_Xy_page_nav">Предыдущие комментарии</a>` : "";
+  return {
+    contentType: "text/html",
+    text: `<div>${nav}${ids.map((id) => forumComment(id)).join("")}</div>` +
+      `<script>new FCList({ EXEMPLAR_ID : '7_Xy', ajax : {"componentName":"bitrix:forum.comments","params":"c2lnbmVk.sig"} });</script>`,
+  };
+}
+
+function navigatePage(ids: number[], more: boolean) {
+  return { status: "success", messageList: ids.map((id) => forumComment(id)).join(""), navigation: more ? "<a>ещё</a>" : "" };
+}
+
+function commentsDeps(call: ReturnType<typeof mock>, downloadsDir?: string) {
+  return {
+    sink: { call, status: async () => ({ portals: [] }) },
+    catalog: commentsCatalog,
+    defaultPortal: "d",
+    portals: ["d"],
+    origins: { d: "https://d.bitrix24.ru" },
+    downloadsDir,
+  };
+}
+
+describe("bitrix_task_comments", () => {
+  it("reads the first page, then pages back with the signed parameters until the start", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock()
+      .mockResolvedValueOnce(commentsPage([30, 31], true))
+      .mockResolvedValueOnce(navigatePage([20, 21], true))
+      .mockResolvedValueOnce(navigatePage([10], false));
+    registerTools(server, commentsDeps(call));
+
+    const payload = JSON.parse((await handlers["bitrix_task_comments"]({ taskId: 42 })).content[0].text);
+
+    expect(call.mock.calls[0][1]).toMatchObject({ endpoint: "/task/comments/{taskId}/", method: "GET", responseType: "text", params: { taskId: 42 } });
+    expect(call.mock.calls[1][1]).toMatchObject({
+      endpoint: NAVIGATE_ENDPOINT,
+      method: "POST",
+      params: { AJAX_POST: "Y", MODE: "LIST", ENTITY_XML_ID: "TASK_42", EXEMPLAR_ID: "7_Xy", "FILTER[<ID]": 30, taskId: 42, signedParameters: "c2lnbmVk.sig" },
+    });
+    expect(call.mock.calls[2][1].params["FILTER[<ID]"]).toBe(20);
+    expect(payload.comments.map((c: { id: number }) => c.id)).toEqual([10, 20, 21, 30, 31]);
+    expect(payload).toMatchObject({ taskId: 42, total: 5, reachedHistoryStart: true, oldestId: 10, scannedPages: 2 });
+  });
+
+  it("makes a single request when the first page already holds the whole discussion", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValueOnce(commentsPage([5, 6], false));
+    registerTools(server, commentsDeps(call));
+
+    const payload = JSON.parse((await handlers["bitrix_task_comments"]({ taskId: 42 })).content[0].text);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(payload).toMatchObject({ total: 2, reachedHistoryStart: true, scannedPages: 0 });
+  });
+
+  it("stops at maxPages and says where to continue", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock()
+      .mockResolvedValueOnce(commentsPage([30], true))
+      .mockResolvedValueOnce(navigatePage([20], true));
+    registerTools(server, commentsDeps(call));
+
+    const payload = JSON.parse((await handlers["bitrix_task_comments"]({ taskId: 42, maxPages: 1 })).content[0].text);
+
+    expect(payload).toMatchObject({ reachedHistoryStart: false, oldestId: 20, scannedPages: 1 });
+  });
+
+  it("continues from beforeId, using the first page only for a fresh signature", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock()
+      .mockResolvedValueOnce(commentsPage([30], true))
+      .mockResolvedValueOnce(navigatePage([10], false));
+    registerTools(server, commentsDeps(call));
+
+    const payload = JSON.parse((await handlers["bitrix_task_comments"]({ taskId: 42, beforeId: 20 })).content[0].text);
+
+    expect(call.mock.calls[1][1].params["FILTER[<ID]"]).toBe(20);
+    expect(payload.comments.map((c: { id: number }) => c.id)).toEqual([10]);
+    expect(payload.reachedHistoryStart).toBe(true);
+  });
+
+  it("returns only the latest `limit` comments without paging further than needed", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValueOnce(commentsPage([30, 31, 32], true));
+    registerTools(server, commentsDeps(call));
+
+    const payload = JSON.parse((await handlers["bitrix_task_comments"]({ taskId: 42, limit: 2 })).content[0].text);
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(payload.comments.map((c: { id: number }) => c.id)).toEqual([31, 32]);
+    expect(payload).toMatchObject({ reachedHistoryStart: false, oldestId: 31 });
+  });
+
+  it("spills a long discussion to disk and returns the paths", async () => {
+    const { server, handlers } = fakeServer();
+    const dir = tempDir();
+    const ids = Array.from({ length: 200 }, (_, i) => 1000 + i);
+    const call = mock().mockResolvedValueOnce(commentsPage(ids, false));
+    registerTools(server, commentsDeps(call, dir));
+
+    const payload = JSON.parse((await handlers["bitrix_task_comments"]({ taskId: 42 })).content[0].text);
+
+    expect(payload.comments).toEqual([]);
+    expect(payload.total).toBe(200);
+    expect(payload.files).toEqual({ text: join(dir, "task-42-comments.txt"), json: join(dir, "task-42-comments.json") });
+    expect(readFileSync(payload.files.text, "utf8")).toContain("#1000 [2025-05-04T09:30] Пётр (id 7): Комментарий 1000");
+    expect(JSON.parse(readFileSync(payload.files.json, "utf8")).comments).toHaveLength(200);
+  });
+
+  it("keeps a short discussion inline, and honours output:file / output:inline", async () => {
+    const dir = tempDir();
+    const ids = Array.from({ length: 200 }, (_, i) => 1000 + i);
+
+    const short = fakeServer();
+    registerTools(short.server, commentsDeps(mock().mockResolvedValue(commentsPage([1], false)), dir));
+    expect(JSON.parse((await short.handlers["bitrix_task_comments"]({ taskId: 42 })).content[0].text).comments).toHaveLength(1);
+    expect(readdirSync(dir)).toEqual([]);
+    expect(JSON.parse((await short.handlers["bitrix_task_comments"]({ taskId: 42, output: "file" })).content[0].text).files).toBeDefined();
+
+    const long = fakeServer();
+    registerTools(long.server, commentsDeps(mock().mockResolvedValue(commentsPage(ids, false)), tempDir()));
+    expect(JSON.parse((await long.handlers["bitrix_task_comments"]({ taskId: 42, output: "inline" })).content[0].text).comments).toHaveLength(200);
+  });
+
+  it("does not claim the whole history when `limit` cut older comments off", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValueOnce(commentsPage([30, 31, 32], false));
+    registerTools(server, commentsDeps(call));
+
+    const payload = JSON.parse((await handlers["bitrix_task_comments"]({ taskId: 42, limit: 2 })).content[0].text);
+
+    expect(payload).toMatchObject({ total: 2, reachedHistoryStart: false, oldestId: 31 });
+  });
+
+  it("rejects a non-numeric taskId before it can name a file or reach the portal", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock();
+    registerTools(server, commentsDeps(call, tempDir()));
+
+    const bad = await handlers["bitrix_task_comments"]({ taskId: "../../escape", output: "file" });
+    const badCursor = await handlers["bitrix_task_comments"]({ taskId: 42, beforeId: "abc" });
+
+    expect(bad.isError).toBe(true);
+    expect(badCursor.isError).toBe(true);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a login page as an error instead of an empty discussion", async () => {
+    const { server, handlers } = fakeServer();
+    const call = mock().mockResolvedValueOnce({ contentType: "text/html", text: "<form id='auth'></form>" });
+    registerTools(server, commentsDeps(call));
+
+    const res = await handlers["bitrix_task_comments"]({ taskId: 42 });
+
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("not a task comments page");
+  });
+
+  it("is not registered without both catalog entries", () => {
+    const { server, handlers } = fakeServer();
+    registerTools(server, { ...commentsDeps(mock()), catalog: { ...commentsCatalog, names: () => ["task.comments.page"] } });
+    expect(handlers["bitrix_task_comments"]).toBeUndefined();
+  });
+});
+
 describe("download tools", () => {
   const deps = (call: ReturnType<typeof mock>, downloadsDir = "/tmp/br24-downloads") => ({
     sink: { call, status: async () => ({ portals: [] }) },
