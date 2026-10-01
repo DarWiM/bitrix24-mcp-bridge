@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.4.0...bitrix24-mcp-bridge-v0.5.0) (2026-10-01)
+
+
+### Features
+
+* **tools:** read legacy task comments ([c9f2894](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/c9f28943276323b310b85fe8cb4391534d72b677))
+
 ## [0.4.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.3.0...bitrix24-mcp-bridge-v0.4.0) (2026-07-27)
 
 
