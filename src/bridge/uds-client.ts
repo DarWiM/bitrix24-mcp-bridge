@@ -33,6 +33,7 @@ const BUDGET_TIMEOUT_MS: Record<Exclude<OpBudget, "call">, number> = {
 
 export class UdsClient implements CallSink {
   private sock?: Socket;
+  private connecting?: Promise<void>;
   private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private seq = 0;
 
@@ -85,9 +86,31 @@ export class UdsClient implements CallSink {
     });
   }
 
-  private request<T>(kind: "op" | "status", frame: Record<string, unknown>, overrideTimeoutMs?: number): Promise<T> {
+  private live(): Socket | undefined {
     const sock = this.sock;
-    if (!sock || sock.destroyed || !sock.writable) return Promise.reject(new Error("client not connected"));
+    return sock && !sock.destroyed && sock.writable ? sock : undefined;
+  }
+
+  // The daemon may restart under an open session (upgrade, setup toggling mutations, idle exit):
+  // reconnect once per request instead of failing every call until the agent restarts.
+  // Concurrent requests share one attempt, so a restart never opens two sockets.
+  private async reconnect(): Promise<Socket> {
+    this.connecting ??= this.connect().finally(() => { this.connecting = undefined; });
+    await this.connecting;
+    const sock = this.live();
+    if (!sock) throw new Error("client not connected");
+    return sock;
+  }
+
+  private request<T>(kind: "op" | "status", frame: Record<string, unknown>, overrideTimeoutMs?: number): Promise<T> {
+    // Registered in the same tick as the liveness check: a close that lands in between would
+    // otherwise find nothing pending to reject, and the request would hang until its timeout.
+    const sock = this.live();
+    if (sock) return this.send<T>(sock, kind, frame, overrideTimeoutMs);
+    return this.reconnect().then((fresh) => this.send<T>(fresh, kind, frame, overrideTimeoutMs));
+  }
+
+  private send<T>(sock: Socket, kind: "op" | "status", frame: Record<string, unknown>, overrideTimeoutMs?: number): Promise<T> {
     const id = String(++this.seq);
     const timeoutMs = overrideTimeoutMs ?? this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     return new Promise<T>((resolve, reject) => {

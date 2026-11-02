@@ -87,6 +87,37 @@ describe("UdsClient", () => {
     }
   });
 
+  it("reconnects to a restarted daemon on the next request", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const portals = { acme: { origin: "https://acme.bitrix24.ru" } };
+    const old = new Daemon({ port: 0, token: "t", sockPath: sock, portals, ...opDefaults("acme") });
+    await old.start();
+    const port = old.port;
+    let fresh: Daemon | undefined;
+    const client = new UdsClient({
+      sockPath: sock,
+      spawnDaemon: () => {
+        fresh = new Daemon({ port, token: "t", sockPath: sock, portals, ...opDefaults("acme") });
+        void fresh.start();
+      },
+      connectTimeoutMs: 3000,
+    });
+    await client.connect();
+    try {
+      await old.stop();
+      // Let the client see its connection go before asking again.
+      await new Promise((r) => setTimeout(r, 50));
+
+      const [first, second] = await Promise.all([client.status(), client.status()]);
+      expect(first.portals).toHaveLength(1);
+      expect(second.portals).toHaveLength(1);
+      expect(fresh).toBeDefined();
+    } finally {
+      client.close();
+      await fresh?.stop();
+    }
+  });
+
   it("spawns the daemon when none is running", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
     let started: Daemon | undefined;
