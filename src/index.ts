@@ -11,6 +11,7 @@ import { registerTools } from "./tools/register.js";
 import { registerUnconfiguredTools } from "./tools/unconfigured.js";
 import { runSetup } from "./setup/setup.js";
 import { refreshMaterializedExtension } from "./setup/config-core.js";
+import { removeObsoleteFiles } from "./setup/cleanup.js";
 import { PACKAGE_VERSION, isReleaseBuild } from "./version.js";
 
 async function runDaemon() {
@@ -87,6 +88,15 @@ async function runMcpClient() {
     }
   } catch (e) {
     console.error(`[extension] could not refresh: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  if (isReleaseBuild) {
+    try {
+      const removed = removeObsoleteFiles(paths.home);
+      if (removed.length > 0) console.error(`[cleanup] removed ${removed.join(", ")}`);
+    } catch (e) {
+      console.error(`[cleanup] could not remove obsolete files: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   registerTools(server, {
