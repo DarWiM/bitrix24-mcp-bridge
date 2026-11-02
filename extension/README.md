@@ -30,8 +30,9 @@
 - `manifest.json` — генерируется **программно** (`buildManifest`) под сконфигурированные
   порталы: `matches` / `host_permissions` = `<origin>/*` каждого портала (least-privilege на
   origin), `content_scripts` (ISOLATED `connector.js` + MAIN `sessid-shim.js`) и запись
-  `web_accessible_resources` для `config.json` с `use_dynamic_url: true`. Отдельного
-  файла-шаблона манифеста больше нет.
+  `web_accessible_resources` для `config.json` с `use_dynamic_url: true`. Шаблон
+  `extension/src/manifest.template.json` используется только dev-сборкой (`bun run build:ext`,
+  `scripts/build-extension.ts` → `extension/dev/`).
 
 daemon читает серверный `config.json` только на старте, поэтому `setup` сам останавливает
 работающий daemon после правки — следующий вызов агента поднимет новый с актуальным конфигом.
