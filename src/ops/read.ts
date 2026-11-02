@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { CallTarget } from "../../shared/wire.js";
-import { defineOperation, type OpContext, type Operation } from "./operation.js";
+import { agentParams, defineOperation, type OpContext, type Operation } from "./operation.js";
 
 const AJAX = "/bitrix/services/main/ajax.php";
 
@@ -48,7 +48,7 @@ const TASK_GET_SELECT = ["ID", "TITLE", "DESCRIPTION", "STATUS", "RESPONSIBLE_ID
 const GROUP_LIST_SELECT = ["ID", "NAME", "DESCRIPTION", "NUMBER_OF_MEMBERS", "OWNER_ID", "DATE_CREATE", "PROJECT"];
 const GROUP_GET_SELECT = ["ID", "NAME", "DESCRIPTION", "OWNER_DATA", "SUBJECT_DATA", "NUMBER_OF_MEMBERS", "DATE_CREATE"];
 
-const params = z.record(z.unknown()).optional();
+const params = agentParams();
 // A fresh schema per field: zod-to-json-schema turns a reused instance into a `$ref` to the first
 // field, and the tool's JSON Schema should stay as plain as it was.
 const anyId = () => z.union([z.number(), z.string()]);

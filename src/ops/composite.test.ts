@@ -86,6 +86,21 @@ describe("call_detail", () => {
     expect(payload).toMatchObject({ id: 4242, title: "Синк" });
   });
 
+  it("lets agent params override the defaults, but never the callId that fills the path", async () => {
+    const { ctx, call } = fakeCtx({ call: async () => html(callPage) });
+
+    await run("call_detail", ctx, { callId: 4242, params: { IFRAME: "N", callId: "../../admin" } });
+
+    expect(call.mock.calls[0][0].params).toEqual({ IFRAME: "N", IFRAME_TYPE: "SIDE_SLIDER", callId: 4242 });
+  });
+
+  it("rejects a reserved params key before any request", async () => {
+    const { ctx, call } = fakeCtx({ call: async () => html(callPage) });
+
+    await expect(op("call_detail").execute(ctx, { callId: 4242, params: { action: "x" } })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("keeps a short transcript inline", async () => {
     const dir = tempDir();
     const { ctx } = fakeCtx({ call: async () => html(pageWithTranscript(3)), downloadsDir: dir });
@@ -189,6 +204,21 @@ describe("chat_calls", () => {
     expect(payload.reachedHistoryStart).toBe(false);
     expect(payload.oldestScannedMessageId).toBe(5002);
     expect(payload.scannedPages).toBe(2);
+  });
+
+  it("lets agent params override the defaults", async () => {
+    const { ctx, call } = fakeCtx({ call: async () => ({ data: { messages: [], hasNextPage: false } }) });
+
+    await run("chat_calls", ctx, { chatId: 999, params: { limit: 20, "order[id]": "ASC" } });
+
+    expect(call.mock.calls[0][0].params).toEqual({ "order[id]": "ASC", chatId: 999, limit: 20 });
+  });
+
+  it("rejects a reserved params key before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("chat_calls").execute(ctx, { chatId: 999, params: { mode: "class" } })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("starts from beforeId when continuing a previous scan", async () => {

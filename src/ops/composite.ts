@@ -8,7 +8,7 @@ import type { DownloadResult } from "../../shared/wire.js";
 import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail.js";
 import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
 import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
-import { defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
+import { agentParams, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { CHAT_MESSAGES_TAIL, callTarget } from "./read.js";
 import { formatComments, parseComments, parseFirstPage, type TaskComment } from "./taskComments.js";
 
@@ -51,8 +51,9 @@ function shouldSpill(mode: TranscriptMode, call: CallDetail): boolean {
 const COMMENTS_INLINE_LIMIT = 20_000;
 const COMMENTS_OUTPUT_MODES = ["auto", "inline", "file"] as const;
 
-async function loadCallDetail(ctx: OpContext, callId: number | string, agentParams: Record<string, unknown> | undefined, transcript: boolean) {
-  const raw = await ctx.call({ ...CALL_DETAIL, params: { ...CALL_DETAIL.params, callId, ...(agentParams ?? {}) } });
+async function loadCallDetail(ctx: OpContext, callId: number | string, extra: Record<string, unknown> | undefined, transcript: boolean) {
+  // callId goes last: it fills the path template, so agent params must not swap in an unchecked one.
+  const raw = await ctx.call({ ...CALL_DETAIL, params: { ...CALL_DETAIL.params, ...(extra ?? {}), callId } });
   const page = textResponse.safeParse(raw);
   if (!page.success) throw new Error("call detail did not come back as text (responseType \"text\")");
   return parseCallDetail(page.data.text, { origin: ctx.origin, transcript });
@@ -111,7 +112,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
     input: {
       callId: z.union([z.number(), z.string()]),
       transcript: z.enum(TRANSCRIPT_MODES).optional(),
-      params: z.record(z.unknown()).optional(),
+      params: agentParams(),
     },
     async run(ctx, a) {
       const mode = a.transcript ?? "auto";
@@ -265,7 +266,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       limit: z.number().optional(),
       maxPages: z.number().optional(),
       beforeId: z.union([z.number(), z.string()]).optional(),
-      params: z.record(z.unknown()).optional(),
+      params: agentParams(),
     },
     async run(ctx, { chatId, limit, maxPages, beforeId, params }) {
       const wanted = limit ?? 20;

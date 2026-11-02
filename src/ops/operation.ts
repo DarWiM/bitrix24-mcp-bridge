@@ -33,6 +33,26 @@ export class OpRefusedError extends Error {}
 // `$ref` to the first field, and tool schemas should stay plain.
 export const idArg = () => z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]).transform(Number);
 
+// ajax.php picks the controller from `action` / `c` / `mode` and the CSRF token from `sessid`, and
+// PHP may read them from the body as well as the query. An agent's `params` land in the body after
+// the operation's own fields, so these keys must not come from there: a read could turn into any
+// other call. The base of a bracketed key counts too: PHP reads `action[0]` as `action`.
+const RESERVED_PARAM_KEYS = new Set(["action", "c", "mode", "sessid"]);
+
+// The Bitrix-native `params` object an operation lets the agent merge into its request.
+// A factory for the same `$ref` reason as idArg.
+export const agentParams = () =>
+  z
+    .record(z.unknown())
+    .superRefine((value, ctx) => {
+      for (const key of Object.keys(value)) {
+        if (RESERVED_PARAM_KEYS.has(key.split("[")[0])) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `"${key}" is fixed by the operation and cannot be set through params` });
+        }
+      }
+    })
+    .optional();
+
 export function defineOperation<S extends z.ZodRawShape>(def: {
   name: string;
   description: string;

@@ -1,6 +1,6 @@
 import { describe, it, expect, mock } from "bun:test";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
-import type { OpContext, Operation } from "./operation.js";
+import { OpInputError, type OpContext, type Operation } from "./operation.js";
 import { OPERATIONS } from "./index.js";
 
 const AJAX = "/bitrix/services/main/ajax.php";
@@ -251,6 +251,26 @@ describe("read operations", () => {
     expect(params.ids).toEqual([1884131]);
     expect(typeof params.actionUuid).toBe("string");
     expect(String(params.actionUuid).length).toBeGreaterThan(10);
+  });
+
+  it("refuses agent params that would replace the operation's controller or token, before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    for (const key of ["action", "c", "mode", "sessid", "action[0]"]) {
+      const err = await op("tasks_list").execute(ctx, { params: { [key]: "tasks.task.delete" } }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(OpInputError);
+      expect((err as Error).message).toContain(`params: "${key}" is fixed by the operation`);
+    }
+    await expect(op("task_get_v2").execute(ctx, { taskId: 1, params: { action: "tasks.v2.Task.delete" } })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("still lets agent params that merely look similar through", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await op("tasks_list").execute(ctx, { params: { ACTION: "x", actionUuid: "y", filter: { action: "z" } } });
+
+    expect(call.mock.calls[0][0].params).toMatchObject({ ACTION: "x", actionUuid: "y", filter: { action: "z" } });
   });
 
   it("task_files explains that ids are attached-object ids and downloadUrl is relative", () => {
