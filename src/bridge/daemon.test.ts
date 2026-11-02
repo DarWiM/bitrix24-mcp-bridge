@@ -7,8 +7,13 @@ import { WebSocket } from "ws";
 import { Daemon } from "./daemon.js";
 import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
+import { z } from "zod";
+import { createRegistry } from "../ops/registry.js";
+import { defineOperation } from "../ops/operation.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 const sockIn = () => join(mkdtempSync(join(tmpdir(), "br24d-")), "bridge.sock");
+const opDefaults = (defaultPortal: string) => ({ defaultPortal, downloadsDir: tmpdir(), allowMutations: true });
 
 async function fakeExtension(port: number, origin: string) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { origin } });
@@ -37,6 +42,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     await fakeExtension(d.port, "https://acme.bitrix24.ru");
@@ -52,6 +58,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     expect(statSync(sock).mode & 0o777).toBe(0o600);
@@ -62,9 +69,9 @@ describe("Daemon", () => {
     // Singleton is gated by the WS port: the loser must reject and must NOT touch
     // the winner's live socket.
     const sock = sockIn();
-    const a = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
+    const a = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } }, ...opDefaults("d") });
     await a.start();
-    const b = new Daemon({ port: a.port, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
+    const b = new Daemon({ port: a.port, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } }, ...opDefaults("d") });
     await expect(b.start()).rejects.toThrow(/already running/i);
 
     // A guarded loser calling stop() must NOT unlink the winner's live socket
@@ -85,6 +92,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock, idleMs: 100,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     expect(existsSync(sock)).toBe(true);
@@ -100,6 +108,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock, idleMs: 100,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     await fakeExtension(d.port, "https://acme.bitrix24.ru");
@@ -119,6 +128,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     await fakeExtension(d.port, "https://acme.bitrix24.ru");
@@ -147,6 +157,7 @@ describe("Daemon", () => {
     const a = new Daemon({
       port: 0, token: "t", sockPath: sock, idleMs: 60,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await a.start();
     const port = a.port;
@@ -161,6 +172,7 @@ describe("Daemon", () => {
     const b = new Daemon({
       port, token: "t", sockPath: sock, idleMs: 5_000,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await b.start();
     expect(existsSync(sock)).toBe(true);
@@ -194,6 +206,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await expect(d.start()).rejects.toThrow();
 
@@ -208,6 +221,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     // fake extension that echoes the received bodyType back in the result
@@ -233,6 +247,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     try {
@@ -241,6 +256,7 @@ describe("Daemon", () => {
       expect(res.data.portals).toEqual([
         { alias: "acme", origin: "https://acme.bitrix24.ru", connected: false, extensionVersion: null },
       ]);
+      expect(res.data.version).toBe(PACKAGE_VERSION);
     } finally {
       await d.stop();
     }
@@ -251,6 +267,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"),
     });
     await d.start();
     expect(d.port).toBeGreaterThan(0);
@@ -268,5 +285,148 @@ describe("Daemon", () => {
         c.on("error", reject);
       }),
     ).rejects.toThrow();
+  });
+});
+
+const twoPortals = {
+  acme: { origin: "https://acme.bitrix24.ru" },
+  beta: { origin: "https://beta.bitrix24.ru" },
+};
+
+// Echoes which portal the daemon picked and where the request actually went.
+const whereOp = defineOperation({
+  name: "where",
+  description: "test",
+  mutating: false,
+  input: { via: z.string().optional() },
+  run: async (ctx, args) => ({
+    portal: ctx.portal,
+    origin: ctx.origin,
+    origins: ctx.origins,
+    reply: await ctx.call({ endpoint: "/x", action: null, method: "POST", params: {} }, args.via),
+  }),
+});
+
+describe("Daemon operations", () => {
+  it("runs an op frame on the default portal when it names none, with two portals configured", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock, portals: twoPortals,
+      ...opDefaults("beta"), registry: createRegistry([whereOp]),
+    });
+    await d.start();
+    try {
+      await fakeExtension(d.port, "https://acme.bitrix24.ru");
+      await fakeExtension(d.port, "https://beta.bitrix24.ru");
+      await new Promise((r) => setTimeout(r, 50));
+
+      const res = await udsCall(sock, { type: "op", id: "1", op: "where", args: {} });
+      expect(res).toEqual({
+        type: "result", id: "1", ok: true,
+        data: {
+          portal: "beta",
+          origin: "https://beta.bitrix24.ru",
+          origins: { acme: "https://acme.bitrix24.ru", beta: "https://beta.bitrix24.ru" },
+          reply: { ok: "https://beta.bitrix24.ru" },
+        },
+      });
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("routes a single request to the portal an op overrides it with", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock, portals: twoPortals,
+      ...opDefaults("beta"), registry: createRegistry([whereOp]),
+    });
+    await d.start();
+    try {
+      await fakeExtension(d.port, "https://acme.bitrix24.ru");
+      await fakeExtension(d.port, "https://beta.bitrix24.ru");
+      await new Promise((r) => setTimeout(r, 50));
+
+      const res = await udsCall(sock, { type: "op", id: "2", portal: "beta", op: "where", args: { via: "acme" } });
+      expect(res.ok).toBe(true);
+      expect(res.data.portal).toBe("beta");
+      expect(res.data.reply).toEqual({ ok: "https://acme.bitrix24.ru" });
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("refuses an override alias that is not configured", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock, portals: twoPortals,
+      ...opDefaults("acme"), registry: createRegistry([whereOp]),
+    });
+    await d.start();
+    try {
+      const res = await udsCall(sock, { type: "op", id: "3", op: "where", args: { via: "constructor" } });
+      expect(res).toEqual({ type: "result", id: "3", ok: false, error: 'unknown portal "constructor"' });
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("answers an op frame naming an unknown portal with an error", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock, portals: twoPortals,
+      ...opDefaults("acme"), registry: createRegistry([whereOp]),
+    });
+    await d.start();
+    try {
+      const res = await udsCall(sock, { type: "op", id: "4", portal: "nope", op: "where", args: {} });
+      expect(res).toEqual({ type: "result", id: "4", ok: false, error: 'unknown portal "nope"' });
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("reports invalid op arguments as an error reply", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock, portals: twoPortals,
+      ...opDefaults("acme"), registry: createRegistry([whereOp]),
+    });
+    await d.start();
+    try {
+      const res = await udsCall(sock, { type: "op", id: "5", op: "where", args: { via: 42 } });
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/invalid arguments for where/);
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("serves the real operation set by default", async () => {
+    const sock = sockIn();
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: twoPortals, ...opDefaults("acme") });
+    await d.start();
+    try {
+      const res = await udsCall(sock, { type: "op", id: "6", op: "no_such_op", args: {} });
+      expect(res).toEqual({ type: "result", id: "6", ok: false, error: 'unknown operation "no_such_op"' });
+      // A known op gets past the registry and only fails because no extension is connected.
+      const known = await udsCall(sock, { type: "op", id: "7", op: "task_get", args: { taskId: 1 } });
+      expect(known.ok).toBe(false);
+      expect(known.error).toMatch(/not connected/);
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("answers an unsupported frame type instead of staying silent", async () => {
+    const sock = sockIn();
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: twoPortals, ...opDefaults("acme") });
+    await d.start();
+    try {
+      const res = await udsCall(sock, { type: "foo", id: "1" });
+      expect(res).toEqual({ type: "result", id: "1", ok: false, error: "unsupported request type foo" });
+    } finally {
+      await d.stop();
+    }
   });
 });

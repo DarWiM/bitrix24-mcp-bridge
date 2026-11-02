@@ -3,6 +3,7 @@ export type {
   CallTarget,
   AuthMessage,
   CallRequest,
+  OpRequest,
   CallResult,
   CapturedEntry,
   CaptureMessage,

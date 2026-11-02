@@ -4,6 +4,10 @@ import { dirname } from "node:path";
 import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult } from "./protocol.js";
+import { OPERATIONS } from "../ops/index.js";
+import { OpRefusedError, type OpContext } from "../ops/operation.js";
+import { createRegistry, runOperation, type Registry } from "../ops/registry.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 export interface PortalConnection {
   alias: string;
@@ -19,6 +23,10 @@ export interface DaemonOptions {
   portals: Record<string, { origin: string }>;
   sockPath: string;
   idleMs?: number;
+  defaultPortal: string;
+  downloadsDir: string;
+  allowMutations: boolean;
+  registry?: Registry;
 }
 
 export class DaemonAlreadyRunning extends Error {
@@ -27,6 +35,8 @@ export class DaemonAlreadyRunning extends Error {
 
 export class Daemon {
   private bridge: Bridge;
+  private registry: Registry;
+  private origins: Record<string, string>;
   private uds?: Server;
   private clients = new Set<Socket>();
   private idleTimer?: NodeJS.Timeout;
@@ -39,6 +49,8 @@ export class Daemon {
       token: opts.token,
       allowedOrigins: Object.values(opts.portals).map((p) => p.origin),
     });
+    this.registry = opts.registry ?? createRegistry(OPERATIONS);
+    this.origins = Object.fromEntries(Object.entries(opts.portals).map(([alias, p]) => [alias, p.origin]));
   }
 
   get port(): number {
@@ -84,6 +96,7 @@ export class Daemon {
     this.clients.add(sock);
     this.armIdle();
     const dec = new FrameDecoder();
+    const reply = (r: CallResult) => sock.write(encodeFrame(r));
     sock.on("data", (chunk) => {
       // A malformed frame must never crash the daemon (that would kill routing for
       // every portal). Drop the bad data for this connection and keep serving.
@@ -107,12 +120,19 @@ export class Daemon {
                 extensionVersion: this.bridge.extensionVersion(p.origin),
               }),
             );
-            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { portals } }));
+            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { portals, version: PACKAGE_VERSION } }));
             continue;
           }
-          if (msg?.type !== "call") continue;
+          if (msg?.type === "op") {
+            this.handleOp(msg, reply);
+            continue;
+          }
+          if (msg?.type !== "call") {
+            // A client waiting on this id would otherwise hang until its own timeout.
+            if (msg?.id !== undefined) reply({ type: "result", id: msg.id, ok: false, error: `unsupported request type ${msg?.type}` });
+            continue;
+          }
           const origin = this.resolveOrigin(msg.portal);
-          const reply = (r: CallResult) => sock.write(encodeFrame(r));
           if (!origin) {
             reply({ type: "result", id: msg.id, ok: false, error: `unknown portal "${msg.portal}"` });
             continue;
@@ -132,6 +152,36 @@ export class Daemon {
     });
     sock.on("close", () => { this.clients.delete(sock); this.armIdle(); });
     sock.on("error", () => { this.clients.delete(sock); this.armIdle(); });
+  }
+
+  // The frame is untyped JSON straight off the socket, so every field is checked here.
+  private handleOp(frame: { id?: unknown; portal?: unknown; op?: unknown; args?: unknown }, reply: (r: CallResult) => void) {
+    if (typeof frame.id !== "string") return;
+    const id = frame.id;
+    const fail = (e: unknown) => reply({ type: "result", id, ok: false, error: e instanceof Error ? e.message : String(e) });
+    if (typeof frame.op !== "string") return fail("invalid op request: op must be a string");
+    if (frame.portal !== undefined && typeof frame.portal !== "string") return fail("invalid op request: portal must be a string");
+    const alias = frame.portal ?? this.opts.defaultPortal;
+    if (!Object.hasOwn(this.origins, alias)) return fail(`unknown portal "${alias}"`);
+    runOperation(this.registry, frame.op, frame.args, this.opContext(alias), { allowMutations: this.opts.allowMutations })
+      .then((data) => reply({ type: "result", id, ok: true, data }))
+      .catch(fail);
+  }
+
+  private opContext(alias: string): OpContext {
+    // hasOwn, not a plain lookup: an alias like "constructor" must not resolve to a prototype member.
+    const originOf = (portal: string) => {
+      if (!Object.hasOwn(this.origins, portal)) throw new OpRefusedError(`unknown portal "${portal}"`);
+      return this.origins[portal];
+    };
+    return {
+      portal: alias,
+      origin: this.origins[alias],
+      origins: { ...this.origins },
+      downloadsDir: this.opts.downloadsDir,
+      call: async (target, portal = alias) => this.bridge.call(originOf(portal), target),
+      callBinary: async (target, destPath, portal = alias) => this.bridge.callBinary(originOf(portal), target, destPath),
+    };
   }
 
   private resolveOrigin(portal: string | undefined): string | undefined {

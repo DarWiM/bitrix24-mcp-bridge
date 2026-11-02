@@ -24,6 +24,15 @@ export interface AuthMessage {
 
 export type CallRequest = CallTarget & { type: "call"; id: string; portal?: string };
 
+// MCP client → daemon (UDS only): run a named domain operation; the daemon builds the calls.
+export interface OpRequest {
+  type: "op";
+  id: string;
+  portal?: string;
+  op: string;
+  args: unknown;
+}
+
 export interface CallResult {
   type: "result";
   id: string;

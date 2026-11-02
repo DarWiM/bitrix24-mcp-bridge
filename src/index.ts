@@ -15,8 +15,16 @@ import { refreshMaterializedExtension } from "./setup/config-core.js";
 
 async function runDaemon() {
   const cfg = loadConfig(process.env);
-  const sockPath = runtimePaths(process.env).sock;
-  const daemon = new Daemon({ port: cfg.port, token: cfg.token, portals: cfg.portals, sockPath });
+  const paths = runtimePaths(process.env);
+  const daemon = new Daemon({
+    port: cfg.port,
+    token: cfg.token,
+    portals: cfg.portals,
+    sockPath: paths.sock,
+    defaultPortal: cfg.defaultPortal,
+    downloadsDir: paths.downloadsDir,
+    allowMutations: true,
+  });
   await daemon.start();
   const shutdown = () => daemon.stop().finally(() => process.exit(0));
   process.on("SIGTERM", shutdown);

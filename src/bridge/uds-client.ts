@@ -1,14 +1,20 @@
 import { connect, Socket } from "node:net";
 import { encodeFrame, FrameDecoder } from "./frame.js";
-import type { CallTarget, CallResult } from "./protocol.js";
+import type { CallTarget, CallResult, OpRequest } from "./protocol.js";
 import type { PortalConnection } from "./daemon.js";
 
 // `savePath` only travels as far as the daemon (binary downloads); it never reaches the browser.
 export type CallOrder = CallTarget & { savePath?: string };
 
+export interface DaemonStatus {
+  portals: PortalConnection[];
+  version: string;
+}
+
 export interface CallSink {
   call(portal: string | undefined, target: CallOrder): Promise<unknown>;
-  status(): Promise<{ portals: PortalConnection[] }>;
+  op(portal: string | undefined, name: string, args: unknown): Promise<unknown>;
+  status(): Promise<DaemonStatus>;
 }
 
 interface UdsClientOptions {
@@ -22,6 +28,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
 // Must stay above the daemon's own download timeout so the daemon's error wins the race
 // and the caller learns what actually went wrong instead of a generic client-side timeout.
 const DOWNLOAD_REQUEST_TIMEOUT_MS = 11 * 60_000;
+const DOWNLOAD_OPS = new Set(["file_download", "call_recording"]);
 
 export class UdsClient implements CallSink {
   private sock?: Socket;
@@ -72,7 +79,7 @@ export class UdsClient implements CallSink {
     });
   }
 
-  private request<T>(kind: "call" | "status", frame: Record<string, unknown>, overrideTimeoutMs?: number): Promise<T> {
+  private request<T>(kind: "call" | "op" | "status", frame: Record<string, unknown>, overrideTimeoutMs?: number): Promise<T> {
     const sock = this.sock;
     if (!sock || sock.destroyed || !sock.writable) return Promise.reject(new Error("client not connected"));
     const id = String(++this.seq);
@@ -93,8 +100,14 @@ export class UdsClient implements CallSink {
     return this.request("call", { type: "call", portal, ...target }, timeoutMs);
   }
 
-  status(): Promise<{ portals: PortalConnection[] }> {
-    return this.request<{ portals: PortalConnection[] }>("status", { type: "status" });
+  op(portal: string | undefined, name: string, args: unknown): Promise<unknown> {
+    const timeoutMs = DOWNLOAD_OPS.has(name) ? DOWNLOAD_REQUEST_TIMEOUT_MS : undefined;
+    const frame: Omit<OpRequest, "id"> = { type: "op", portal, op: name, args };
+    return this.request("op", frame, timeoutMs);
+  }
+
+  status(): Promise<DaemonStatus> {
+    return this.request<DaemonStatus>("status", { type: "status" });
   }
 
   close(): void { this.sock?.destroy(); }

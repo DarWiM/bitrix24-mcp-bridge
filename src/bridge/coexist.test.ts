@@ -10,7 +10,7 @@ import { UdsClient } from "./uds-client.js";
 describe("multi-instance coexistence", () => {
   it("serves two concurrent clients through one daemon, no EADDRINUSE", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24x-")), "bridge.sock");
-    const d = new Daemon({ port: 39970, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
+    const d = new Daemon({ port: 39970, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } }, defaultPortal: "acme", downloadsDir: tmpdir(), allowMutations: true });
     await d.start();
     const ws = new WebSocket("ws://127.0.0.1:39970", { headers: { origin: "https://acme.bitrix24.ru" } });
     await new Promise((r) => ws.on("open", r));

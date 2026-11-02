@@ -8,6 +8,11 @@ import { WebSocket } from "ws";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import { Daemon } from "./daemon.js";
 import { UdsClient, requestDaemonShutdown } from "./uds-client.js";
+import { z } from "zod";
+import { createRegistry } from "../ops/registry.js";
+import { defineOperation } from "../ops/operation.js";
+
+const opDefaults = (defaultPortal: string) => ({ defaultPortal, downloadsDir: tmpdir(), allowMutations: true });
 
 function startFakeUdsServer(
   sockPath: string,
@@ -27,7 +32,7 @@ function startFakeUdsServer(
 describe("UdsClient", () => {
   it("connects to a running daemon and proxies a call", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
-    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } }, ...opDefaults("acme") });
     await d.start();
 
     const ws = new WebSocket(`ws://127.0.0.1:${d.port}`, { headers: { origin: "https://acme.bitrix24.ru" } });
@@ -47,13 +52,69 @@ describe("UdsClient", () => {
     await d.stop();
   });
 
+  it("op() round-trips an operation through a running daemon", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const echo = defineOperation({
+      name: "echo", description: "test", mutating: false, input: { n: z.number() },
+      run: async (ctx, a) => ({ portal: ctx.portal, n: a.n, reply: await ctx.call({ endpoint: "/x", action: null, method: "POST", params: {} }) }),
+    });
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"), registry: createRegistry([echo]),
+    });
+    await d.start();
+
+    const ws = new WebSocket(`ws://127.0.0.1:${d.port}`, { headers: { origin: "https://acme.bitrix24.ru" } });
+    await new Promise((r) => ws.on("open", r));
+    ws.send(JSON.stringify({ type: "auth", token: "t" }));
+    ws.on("message", (raw) => {
+      const m = JSON.parse(raw.toString());
+      if (m.type === "call") ws.send(JSON.stringify({ type: "result", id: m.id, ok: true, data: 42 }));
+    });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const client = new UdsClient({ sockPath: sock });
+    await client.connect();
+    try {
+      expect(await client.op(undefined, "echo", { n: 7 })).toEqual({ portal: "acme", n: 7, reply: 42 });
+      const err = await client.op("acme", "echo", { n: "x" }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/invalid arguments for echo/);
+    } finally {
+      client.close();
+      await d.stop();
+    }
+  });
+
+  it("op() gives download operations the long timeout and everything else the regular one", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const received: any[] = [];
+    const server = await startFakeUdsServer(sock, (msg, s) => {
+      received.push(msg);
+      setTimeout(() => s.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: msg.op })), 150);
+    });
+
+    const client = new UdsClient({ sockPath: sock, requestTimeoutMs: 50 });
+    await client.connect();
+    try {
+      await expect(client.op(undefined, "task_get", { taskId: 1 })).rejects.toThrow(/did not respond to op in 50ms/);
+      expect(await client.op("acme", "file_download", { url: "/x" })).toBe("file_download");
+      expect(await client.op("acme", "call_recording", { callId: 1 })).toBe("call_recording");
+      expect(received[0]).toEqual({ id: received[0].id, type: "op", op: "task_get", args: { taskId: 1 } });
+      expect(received[1]).toMatchObject({ type: "op", portal: "acme", op: "file_download" });
+    } finally {
+      client.close();
+      server.close();
+    }
+  });
+
   it("spawns the daemon when none is running", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
     let started: Daemon | undefined;
     const client = new UdsClient({
       sockPath: sock,
       spawnDaemon: () => {
-        started = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } } });
+        started = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } }, ...opDefaults("d") });
         started.start();
       },
       connectTimeoutMs: 3000,
@@ -65,7 +126,7 @@ describe("UdsClient", () => {
 
   it("status() round-trips a status request and resolves with the portals payload", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
-    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } } });
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } }, ...opDefaults("acme") });
     await d.start();
 
     const client = new UdsClient({ sockPath: sock });
@@ -73,6 +134,7 @@ describe("UdsClient", () => {
     try {
       const res = await client.status();
       expect(res.portals).toEqual([{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: false, extensionVersion: null }]);
+      expect(typeof res.version).toBe("string");
     } finally {
       client.close();
       await d.stop();
@@ -87,7 +149,7 @@ describe("UdsClient", () => {
       if (received.length === 2) {
         // reply in reverse order: the second request received gets answered first
         for (const m of [received[1], received[0]]) {
-          const data = m.type === "status" ? { portals: [] } : "call-payload";
+          const data = m.type === "status" ? { portals: [], version: "1.2.3" } : "call-payload";
           s.write(encodeFrame({ type: "result", id: m.id, ok: true, data }));
         }
       }
@@ -101,7 +163,7 @@ describe("UdsClient", () => {
 
       const [callRes, statusRes] = await Promise.all([callPromise, statusPromise]);
       expect(callRes).toBe("call-payload");
-      expect(statusRes).toEqual({ portals: [] });
+      expect(statusRes).toEqual({ portals: [], version: "1.2.3" });
     } finally {
       client.close();
       server.close();

@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CallSink } from "../bridge/uds-client.js";
+import type { CallSink, DaemonStatus } from "../bridge/uds-client.js";
 import type { Catalog } from "../catalog/catalog.js";
 import { HELP } from "./help.js";
 import { randomUUID } from "node:crypto";
@@ -13,7 +13,8 @@ import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl
 import { PACKAGE_VERSION } from "../version.js";
 
 export interface ToolDeps {
-  sink: CallSink;
+  // Only what these tools touch, so their fakes need not implement the operation path.
+  sink: Pick<CallSink, "call"> & { status(): Promise<Pick<DaemonStatus, "portals">> };
   catalog: Catalog;
   defaultPortal: string;
   portals: string[];

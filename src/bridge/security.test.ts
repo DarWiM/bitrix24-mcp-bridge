@@ -1,7 +1,15 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import { Bridge } from "./server.js";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import WebSocket from "ws";
+import { Daemon } from "./daemon.js";
+import { encodeFrame, FrameDecoder } from "./frame.js";
+import type { CallResult } from "./protocol.js";
+import { createRegistry } from "../ops/registry.js";
+import { defineOperation } from "../ops/operation.js";
 
 let bridge: Bridge;
 let bridge2: Bridge;
@@ -108,5 +116,38 @@ describe("bridge enforces allowedOrigin", () => {
     expect(notClosed).toBe(true);
     expect(bridge.connectedOrigins()).toContain("");
     ws.close();
+  });
+});
+
+describe("daemon enforces the mutation policy", () => {
+  it("refuses a mutating op when mutations are disabled, without reaching the portal", async () => {
+    let ran = false;
+    const mutate = defineOperation({
+      name: "mutate", description: "test", mutating: true, input: {},
+      run: async () => { ran = true; return null; },
+    });
+    const sock = join(mkdtempSync(join(tmpdir(), "br24s-")), "bridge.sock");
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      defaultPortal: "acme", downloadsDir: tmpdir(), allowMutations: false,
+      registry: createRegistry([mutate]),
+    });
+    await d.start();
+    try {
+      const res = await new Promise<CallResult>((resolve, reject) => {
+        const c = connect(sock);
+        const dec = new FrameDecoder();
+        c.on("connect", () => c.write(encodeFrame({ type: "op", id: "1", op: "mutate", args: {} })));
+        c.on("data", (chunk) => { const [m] = dec.push(chunk) as CallResult[]; if (m) { resolve(m); c.end(); } });
+        c.on("error", reject);
+      });
+      expect(res.id).toBe("1");
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/mutations/);
+      expect(ran).toBe(false);
+    } finally {
+      await d.stop();
+    }
   });
 });
