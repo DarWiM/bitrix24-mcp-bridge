@@ -80,7 +80,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
       { description: op.description, inputSchema: { ...op.input, portal: z.string().optional() } },
       async ({ portal, ...args }) => {
         try {
-          return ok(await deps.sink.op(portal, op.name, args));
+          return ok(await deps.sink.op(portal, op.name, args, op.budget));
         } catch (e) {
           return fail(e instanceof Error ? e.message : String(e));
         }

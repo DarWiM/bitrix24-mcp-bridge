@@ -12,10 +12,15 @@ export interface OpContext {
   callBinary(target: CallTarget, destPath: string, portal?: string): Promise<DownloadResult>;
 }
 
+// How long the MCP client waits for the daemon's answer. "long" covers operations that chain many
+// portal requests, each allowed up to the daemon's own per-request timeout.
+export type OpBudget = "call" | "download" | "long";
+
 export interface Operation {
   name: string;
   description: string;
   mutating: boolean;
+  budget: OpBudget;
   input: z.ZodRawShape;
   execute(ctx: OpContext, rawArgs: unknown): Promise<unknown>;
 }
@@ -32,6 +37,7 @@ export function defineOperation<S extends z.ZodRawShape>(def: {
   name: string;
   description: string;
   mutating: boolean;
+  budget?: OpBudget;
   input: S;
   run(ctx: OpContext, args: z.infer<z.ZodObject<S>>): Promise<unknown>;
 }): Operation {
@@ -40,6 +46,7 @@ export function defineOperation<S extends z.ZodRawShape>(def: {
     name: def.name,
     description: def.description,
     mutating: def.mutating,
+    budget: def.budget ?? "call",
     input: def.input,
     async execute(ctx, rawArgs) {
       const parsed = schema.safeParse(rawArgs ?? {});

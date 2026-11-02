@@ -107,6 +107,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "\"file\" — всегда в файл, \"none\" — не нужна вовсе, \"auto\" (умолчание) — по размеру. " +
       "Требует, чтобы у пользователя был доступ к звонку.",
     mutating: false,
+    budget: "long",
     input: {
       callId: z.union([z.number(), z.string()]),
       transcript: z.enum(TRANSCRIPT_MODES).optional(),
@@ -145,6 +146,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "files.text (строка = комментарий с id, датой и автором — удобно грепать) и files.json. " +
       "output: \"inline\" — всегда в ответе, \"file\" — всегда в файл, \"auto\" (умолчание) — по размеру.",
     mutating: false,
+    budget: "long",
     input: {
       taskId: idArg(),
       limit: z.number().int().positive().optional(),
@@ -226,6 +228,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "~/.bitrix24-mcp-bridge/downloads/; savePath — свой путь (абсолютный либо имя файла " +
       "внутри папки загрузок), overwrite: true — перезаписать существующий.",
     mutating: false,
+    budget: "download",
     input: { url: z.string(), savePath: z.string().optional(), overwrite: z.boolean().optional() },
     run: (ctx, a) => downloadToDisk(ctx, ctx.origins, { ...a, fallbackName: "bitrix-file" }),
   }),
@@ -236,6 +239,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "файл на диск (в ответ возвращается путь, не содержимое). Записи есть не у всех звонков — " +
       "если её нет, вернётся понятная ошибка. savePath/overwrite — как в bitrix_file_download.",
     mutating: false,
+    budget: "download",
     input: { callId: z.union([z.number(), z.string()]), savePath: z.string().optional(), overwrite: z.boolean().optional() },
     async run(ctx, { callId, savePath, overwrite }) {
       const detail = await loadCallDetail(ctx, callId, undefined, false);
@@ -255,6 +259,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "ответе reachedHistoryStart:false, история НЕ дочитана до конца — продолжай с " +
       "beforeId: <oldestScannedMessageId> или увеличь maxPages.",
     mutating: false,
+    budget: "long",
     input: {
       chatId: z.union([z.number(), z.string()]),
       limit: z.number().optional(),

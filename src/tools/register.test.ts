@@ -80,7 +80,7 @@ describe("registerTools", () => {
     const res = readResult(await client.callTool({ name: "bitrix_echo", arguments: { taskId: 7, note: "hi", portal: "beta" } }));
 
     expect(op).toHaveBeenCalledTimes(1);
-    expect(op).toHaveBeenCalledWith("beta", "echo", { taskId: 7, note: "hi" });
+    expect(op).toHaveBeenCalledWith("beta", "echo", { taskId: 7, note: "hi" }, "call");
     expect(res).toEqual({ isError: false, text: JSON.stringify({ id: 7 }) });
   });
 
@@ -90,7 +90,17 @@ describe("registerTools", () => {
 
     await client.callTool({ name: "bitrix_echo", arguments: { taskId: 3 } });
 
-    expect(op).toHaveBeenCalledWith(undefined, "echo", { taskId: 3 });
+    expect(op).toHaveBeenCalledWith(undefined, "echo", { taskId: 3 }, "call");
+  });
+
+  it("passes the operation's time budget along, so a multi-page scan is not cut off", async () => {
+    const op = mock().mockResolvedValue(null);
+    const scan = defineOperation({ name: "scan", description: "test", mutating: false, budget: "long", input: {}, run: async () => null });
+    const client = await connect(deps({ sink: { op, status: noStatus }, operations: [scan] }));
+
+    await client.callTool({ name: "bitrix_scan", arguments: {} });
+
+    expect(op).toHaveBeenCalledWith(undefined, "scan", {}, "long");
   });
 
   it("returns a daemon error as an error result", async () => {

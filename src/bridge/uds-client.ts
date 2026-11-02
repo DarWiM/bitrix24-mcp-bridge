@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult, OpRequest } from "./protocol.js";
 import type { PortalConnection } from "./daemon.js";
+import type { OpBudget } from "../ops/operation.js";
 
 export interface DaemonStatus {
   portals: PortalConnection[];
@@ -10,7 +11,7 @@ export interface DaemonStatus {
 }
 
 export interface CallSink {
-  op(portal: string | undefined, name: string, args: unknown): Promise<unknown>;
+  op(portal: string | undefined, name: string, args: unknown, budget?: OpBudget): Promise<unknown>;
   status(): Promise<DaemonStatus>;
 }
 
@@ -22,10 +23,13 @@ interface UdsClientOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
-// Must stay above the daemon's own download timeout so the daemon's error wins the race
+// A download must outlast the daemon's own download timeout, so the daemon's error wins the race
 // and the caller learns what actually went wrong instead of a generic client-side timeout.
-const DOWNLOAD_REQUEST_TIMEOUT_MS = 11 * 60_000;
-const DOWNLOAD_OPS = new Set(["file_download", "call_recording"]);
+// "long" fits a default multi-page scan (about ten portal requests at the daemon's 30 s each).
+const BUDGET_TIMEOUT_MS: Record<Exclude<OpBudget, "call">, number> = {
+  download: 11 * 60_000,
+  long: 5 * 60_000 + 5_000,
+};
 
 export class UdsClient implements CallSink {
   private sock?: Socket;
@@ -96,9 +100,8 @@ export class UdsClient implements CallSink {
     });
   }
 
-  op(portal: string | undefined, name: string, args: unknown): Promise<unknown> {
-    // Downloads outlive the regular request budget — a big attachment takes as long as it takes.
-    const timeoutMs = DOWNLOAD_OPS.has(name) ? DOWNLOAD_REQUEST_TIMEOUT_MS : undefined;
+  op(portal: string | undefined, name: string, args: unknown, budget: OpBudget = "call"): Promise<unknown> {
+    const timeoutMs = budget === "call" ? undefined : BUDGET_TIMEOUT_MS[budget];
     const frame: Omit<OpRequest, "id"> = { type: "op", portal, op: name, args };
     return this.request("op", frame, timeoutMs);
   }

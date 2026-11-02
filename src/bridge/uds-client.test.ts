@@ -64,7 +64,7 @@ describe("UdsClient", () => {
     }
   });
 
-  it("op() gives download operations the long timeout and everything else the regular one", async () => {
+  it("op() waits as long as the operation's budget allows and the regular time otherwise", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
     const received: any[] = [];
     const server = await startFakeUdsServer(sock, (msg, s) => {
@@ -76,10 +76,11 @@ describe("UdsClient", () => {
     await client.connect();
     try {
       await expect(client.op(undefined, "task_get", { taskId: 1 })).rejects.toThrow(/did not respond to op in 50ms/);
-      expect(await client.op("acme", "file_download", { url: "/x" })).toBe("file_download");
-      expect(await client.op("acme", "call_recording", { callId: 1 })).toBe("call_recording");
+      await expect(client.op(undefined, "task_get", { taskId: 1 }, "call")).rejects.toThrow(/did not respond to op in 50ms/);
+      expect(await client.op("acme", "file_download", { url: "/x" }, "download")).toBe("file_download");
+      expect(await client.op("acme", "task_comments", { taskId: 1 }, "long")).toBe("task_comments");
       expect(received[0]).toEqual({ id: received[0].id, type: "op", op: "task_get", args: { taskId: 1 } });
-      expect(received[1]).toMatchObject({ type: "op", portal: "acme", op: "file_download" });
+      expect(received[2]).toMatchObject({ type: "op", portal: "acme", op: "file_download" });
     } finally {
       client.close();
       server.close();
