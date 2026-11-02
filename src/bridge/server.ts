@@ -8,7 +8,6 @@ import type {
   BinaryChunkMessage,
   CallResult,
   CallTarget,
-  CapturedEntry,
   DownloadResult,
   ExtensionMessage,
 } from "./protocol.js";
@@ -17,7 +16,6 @@ interface BridgeOptions {
   port: number;
   token: string;
   allowedOrigins: string[];
-  onCapture?: (call: CapturedEntry) => void; // recording mode (src/capture-server.ts)
 }
 interface Pending { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout; }
 interface Download { path: string; stream: WriteStream; bytes: number; contentType: string; fileName: string | null; }
@@ -82,7 +80,6 @@ export class Bridge {
         return;
       }
       if (msg.type === "result") this.resolvePending(msg);
-      else if (msg.type === "capture") this.opts.onCapture?.(msg.call);
       else if (msg.type === "binary-begin") this.beginDownload(msg);
       else if (msg.type === "binary-chunk") this.writeChunk(msg);
     });

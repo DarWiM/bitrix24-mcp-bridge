@@ -9,23 +9,23 @@ import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail
 import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
 import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
 import { defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
-import { CHAT_MESSAGES_TAIL, catalogTarget } from "./read.js";
+import { CHAT_MESSAGES_TAIL, callTarget } from "./read.js";
 import { formatComments, parseComments, parseFirstPage, type TaskComment } from "./taskComments.js";
 
 // The call analysis and the legacy comments live in server-rendered sliders (HTML), hence "text".
-const CALL_DETAIL = catalogTarget({
+const CALL_DETAIL = callTarget({
   endpoint: "/call/detail/{callId}",
   method: "GET",
   params: { IFRAME: "Y", IFRAME_TYPE: "SIDE_SLIDER" },
   responseType: "text",
 });
-const TASK_COMMENTS_PAGE = catalogTarget({
+const TASK_COMMENTS_PAGE = callTarget({
   endpoint: "/task/comments/{taskId}/",
   method: "GET",
   params: { IFRAME: "Y", IFRAME_TYPE: "SIDE_SLIDER" },
   responseType: "text",
 });
-const TASK_COMMENTS_NAVIGATE = catalogTarget({
+const TASK_COMMENTS_NAVIGATE = callTarget({
   endpoint: "/bitrix/services/main/ajax.php?mode=class&c=bitrix%3Aforum.comments&action=navigateComment",
   method: "POST",
   params: { AJAX_POST: "Y", MODE: "LIST", PAGEN_1: 1, scope: "web", IFRAME: "Y", IFRAME_TYPE: "SIDE_SLIDER" },

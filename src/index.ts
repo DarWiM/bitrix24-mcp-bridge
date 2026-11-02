@@ -5,7 +5,6 @@ import { loadConfig, loadConfigState, PROJECT_ROOT } from "./config.js";
 import { runtimePaths } from "./paths.js";
 import { Daemon } from "./bridge/daemon.js";
 import { UdsClient, replaceStaleDaemon, stopDaemon } from "./bridge/uds-client.js";
-import { syncCatalogWithPackage } from "./catalog/sync.js";
 import { OPERATIONS } from "./ops/index.js";
 import { join } from "node:path";
 import { registerTools } from "./tools/register.js";
@@ -74,17 +73,7 @@ async function runMcpClient() {
     console.error(`[mcp] daemon handover failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // A package upgrade ships new catalog entries, but the installed catalog is the user's file
-  // (and the allowlist), so it is never overwritten — only extended with entries this install
-  // has not been offered before.
-  const added = syncCatalogWithPackage({
-    catalogPath: cfg.catalogPath,
-    examplePath: join(PROJECT_ROOT, "actions.example.json"),
-    statePath: paths.catalogStateJson,
-  });
-  if (added.length > 0) console.error(`[catalog] added ${added.length} new entries from the package: ${added.join(", ")}`);
-
-  // Same idea for the extension bundles: refresh what setup materialized, so an upgrade doesn't
+  // Refresh the extension bundles setup materialized, so an upgrade doesn't
   // depend on the user remembering `setup` → [u]. They still have to hit "Обновить" in Chrome —
   // and bitrix_status says so, because the extension reports its own version on connect.
   try {

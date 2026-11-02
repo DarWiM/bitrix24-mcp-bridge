@@ -1,11 +1,10 @@
 import { fileURLToPath } from "node:url";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { runtimePaths } from "./paths.js";
 
 export interface PortalConfig {
   origin: string;
-  catalog?: string;
 }
 
 export interface Config {
@@ -14,7 +13,6 @@ export interface Config {
   portals: Record<string, PortalConfig>;
   defaultPortal: string;
   bitrixOrigin: string;
-  catalogPath: string;
   allowedOrigins: string[];
   allowMutations: boolean;
 }
@@ -29,7 +27,6 @@ interface FileConfig {
   port?: number;
   defaultPortal?: string;
   portals?: Record<string, PortalConfig>;
-  catalog?: string;
   mutations?: unknown;
 }
 
@@ -69,7 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     if (typeof p.origin !== "string" || !p.origin) {
       throw new Error(`config.json portal "${alias}" is missing a string origin`);
     }
-    portals[alias] = { ...p, origin: stripSlash(p.origin) };
+    portals[alias] = { origin: stripSlash(p.origin) };
   }
   const envOrigin = env.BITRIX_ORIGIN?.trim();
   if (envOrigin) portals.default = { origin: stripSlash(envOrigin) };
@@ -82,18 +79,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     (file.defaultPortal && portals[file.defaultPortal] ? file.defaultPortal : undefined) ??
     (portals.default ? "default" : aliases[0]);
 
-  const rawCatalog = env.BITRIX_CATALOG?.trim() || file.catalog;
-  const catalogPath = rawCatalog
-    ? (isAbsolute(rawCatalog) ? rawCatalog : resolve(PROJECT_ROOT, rawCatalog))
-    : runtimePaths(env).actionsJson;
-
   return {
     token,
     port: Number(env.BITRIX_MCP_PORT ?? file.port ?? 39917),
     portals,
     defaultPortal,
     bitrixOrigin: portals[defaultPortal].origin,
-    catalogPath,
     allowedOrigins: Object.values(portals).map((p) => p.origin),
     allowMutations: parseMutationsEnv(env.BITRIX_MCP_MUTATIONS) ?? parseMutationsFile(file.mutations, runtimePaths(env).configJson) ?? true,
   };

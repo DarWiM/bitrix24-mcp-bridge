@@ -5,8 +5,6 @@ export type {
   CallRequest,
   OpRequest,
   CallResult,
-  CapturedEntry,
-  CaptureMessage,
   ExtensionMessage,
   BinaryBeginMessage,
   BinaryChunkMessage,

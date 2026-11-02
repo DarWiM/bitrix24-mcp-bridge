@@ -133,8 +133,8 @@ describe("mutators (immutable)", () => {
   const base = () => createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" });
 
   it("addPortal adds and strips slash; rejects duplicates", () => {
-    const next = addPortal(base(), { alias: "beta", origin: "https://beta.bitrix24.ru/", catalog: "beta.json" });
-    expect(next.portals.beta).toEqual({ origin: "https://beta.bitrix24.ru", catalog: "beta.json" });
+    const next = addPortal(base(), { alias: "beta", origin: "https://beta.bitrix24.ru/" });
+    expect(next.portals.beta).toEqual({ origin: "https://beta.bitrix24.ru" });
     expect(next.defaultPortal).toBe("acme"); // unchanged
     expect(() => addPortal(next, { alias: "acme", origin: "https://x.bitrix24.ru" })).toThrow(/exists/i);
   });

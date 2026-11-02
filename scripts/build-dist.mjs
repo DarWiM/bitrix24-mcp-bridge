@@ -26,7 +26,6 @@ await build({
   define: {
     __API_NOTES__: JSON.stringify(apiNotes),
     __EXT_VERSION__: JSON.stringify(version),
-    __BITRIX_CAPTURE__: "false",
   },
   logLevel: "info",
 });

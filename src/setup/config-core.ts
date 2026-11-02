@@ -11,7 +11,6 @@ export interface ServerConfig {
   port: number;
   defaultPortal: string;
   portals: Record<string, PortalConfig>;
-  catalog?: string;
   mutations?: boolean;
 }
 
@@ -71,18 +70,16 @@ export function createInitialConfig(args: { origin: string; alias: string; port?
   };
 }
 
-export function addPortal(config: ServerConfig, args: { alias: string; origin: string; catalog?: string }): ServerConfig {
+export function addPortal(config: ServerConfig, args: { alias: string; origin: string }): ServerConfig {
   const alias = validateAlias(args.alias);
   if (config.portals[alias]) throw new Error(`portal "${alias}" already exists`);
   const portal: PortalConfig = { origin: validateOrigin(args.origin) };
-  if (args.catalog) portal.catalog = args.catalog;
   return { ...config, portals: { ...config.portals, [alias]: portal } };
 }
 
-export function editPortal(config: ServerConfig, args: { alias: string; origin: string; catalog?: string }): ServerConfig {
+export function editPortal(config: ServerConfig, args: { alias: string; origin: string }): ServerConfig {
   if (!config.portals[args.alias]) throw new Error(`portal "${args.alias}" does not exist`);
   const portal: PortalConfig = { origin: validateOrigin(args.origin) };
-  if (args.catalog) portal.catalog = args.catalog;
   return { ...config, portals: { ...config.portals, [args.alias]: portal } };
 }
 

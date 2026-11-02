@@ -66,24 +66,8 @@ export interface DownloadResult {
   fileName: string | null;
 }
 
-// Sent by the extension's capture build while recording (see src/capture-server.ts).
-export interface CapturedEntry {
-  endpoint: string;
-  action: string | null;
-  method: "GET" | "POST";
-  transport: "ajax" | "rest" | "other";
-  bodyType: "json" | "form";
-  sampleParams: Record<string, unknown>;
-}
-
-export interface CaptureMessage {
-  type: "capture";
-  call: CapturedEntry;
-}
-
 export type ExtensionMessage =
   | AuthMessage
   | CallResult
-  | CaptureMessage
   | BinaryBeginMessage
   | BinaryChunkMessage;

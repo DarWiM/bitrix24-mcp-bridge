@@ -2,9 +2,9 @@ import type { ServerConfig } from "./config-core.js";
 import { addPortal, removePortal, editPortal, setPort, setMutations, rotateToken, setDefaultPortal } from "./config-core.js";
 
 export type SetupCommand =
-  | { kind: "add-portal"; alias: string; origin: string; catalog?: string }
+  | { kind: "add-portal"; alias: string; origin: string }
   | { kind: "remove-portal"; alias: string }
-  | { kind: "edit-portal"; alias: string; origin: string; catalog?: string }
+  | { kind: "edit-portal"; alias: string; origin: string }
   | { kind: "set-port"; port: number }
   | { kind: "set-mutations"; on: boolean }
   | { kind: "rotate-token" }

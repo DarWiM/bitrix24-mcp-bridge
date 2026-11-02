@@ -23,12 +23,10 @@ function makePaths(sock: string): RuntimePaths {
   return {
     home,
     configJson: join(home, "config.json"),
-    actionsJson: join(home, "actions.json"),
     sock,
     lock: join(home, "bridge.lock"),
     extensionDir: join(home, "extension"),
     downloadsDir: join(home, "downloads"),
-    catalogStateJson: join(home, "catalog-state.json"),
   };
 }
 

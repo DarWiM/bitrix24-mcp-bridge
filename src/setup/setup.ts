@@ -1,7 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import type { Interface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { existsSync, copyFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { runtimePaths } from "../paths.js";
 import type { RuntimePaths } from "../paths.js";
@@ -38,10 +37,6 @@ function staticExtDir(): string {
   return join(PROJECT_ROOT, "extension/dist");
 }
 
-function actionsExample(): string {
-  return join(PROJECT_ROOT, "actions.example.json");
-}
-
 function defaultAlias(origin: string): string {
   try {
     const label = new URL(origin).hostname.split(".")[0];
@@ -49,12 +44,6 @@ function defaultAlias(origin: string): string {
   } catch {
     return "portal";
   }
-}
-
-function seedActions(paths: RuntimePaths): void {
-  if (existsSync(paths.actionsJson)) return;
-  mkdirSync(paths.home, { recursive: true });
-  copyFileSync(actionsExample(), paths.actionsJson);
 }
 
 function printManualSteps(paths: RuntimePaths): void {
@@ -131,10 +120,9 @@ async function firstRun(ask: Ask, paths: RuntimePaths): Promise<void> {
   }
 
   writeServerConfig(paths.home, config);
-  seedActions(paths);
   materializeExtension({ home: paths.home, config, staticExtDir: staticExtDir() });
 
-  stdout.write(`\nWrote ${paths.configJson}\nSeeded ${paths.actionsJson}\nExtension materialized at ${paths.extensionDir}\n`);
+  stdout.write(`\nWrote ${paths.configJson}\nExtension materialized at ${paths.extensionDir}\n`);
   printManualSteps(paths);
 }
 

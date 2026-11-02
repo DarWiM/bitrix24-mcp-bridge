@@ -1,7 +1,7 @@
 // Helpers for pulling files (chat attachments, task files, call recordings) off the portal.
 // Download URLs are minted by the portal itself and carry their own signature, so the tool
 // takes a whole URL — but only after checking it points at a configured portal, which is the
-// security boundary here (the catalog allowlist can't cover per-file signed links).
+// security boundary here (the operations' fixed targets can't cover per-file signed links).
 
 import { basename, isAbsolute, join } from "node:path";
 import { existsSync, renameSync, rmSync } from "node:fs";
@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 export interface ResolvedTarget {
   /** Portal alias the URL belongs to. */
   portal: string;
-  /** Path + query, ready to be used as a catalog-style endpoint. */
+  /** Path + query, ready to be used as a call endpoint. */
   endpoint: string;
 }
 

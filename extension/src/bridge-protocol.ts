@@ -4,10 +4,7 @@
 // two content scripts and the packaged config, and both are pure/testable:
 //   1) parseConfig  — validate the per-user config.json ({ token, port }).
 //   2) the postMessage protocol — the envelopes the ISOLATED connector and the MAIN
-//      script exchange over window.postMessage (sessid request/response, and — in the
-//      capture build — MAIN-observed capture entries forwarded to the connector).
-
-import type { CapturedEntry } from "./bridge-core.ts";
+//      script exchange over window.postMessage (sessid request/response).
 
 export interface BridgeConfig {
   token: string;
@@ -89,28 +86,4 @@ export function parseSessidResponse(data: unknown, expectedNonce: string): Sessi
   if (typeof data.nonce !== "string" || data.nonce !== expectedNonce) return null;
   if (typeof data.sessid !== "string") return null;
   return { source: BRIDGE_MSG_SOURCE, kind: "sessid-response", nonce: data.nonce, sessid: data.sessid };
-}
-
-// --- capture forwarding (capture build only) -------------------------------
-//
-// The capture hooks must observe the PAGE's fetch/XHR, so they run in the MAIN world.
-// The socket lives only in the ISOLATED connector, so MAIN forwards each observed entry
-// to the connector over postMessage; the connector relays it to the daemon.
-
-export interface CaptureForwardMsg {
-  source: typeof BRIDGE_MSG_SOURCE;
-  kind: "capture";
-  call: CapturedEntry;
-}
-
-export function buildCaptureForward(call: CapturedEntry): CaptureForwardMsg {
-  return { source: BRIDGE_MSG_SOURCE, kind: "capture", call };
-}
-
-/** For the ISOLATED connector: a capture entry forwarded by the MAIN script, or null. */
-export function parseCaptureForward(data: unknown): CaptureForwardMsg | null {
-  if (!isRecord(data)) return null;
-  if (data.source !== BRIDGE_MSG_SOURCE || data.kind !== "capture") return null;
-  if (!isRecord(data.call)) return null;
-  return { source: BRIDGE_MSG_SOURCE, kind: "capture", call: data.call as unknown as CapturedEntry };
 }

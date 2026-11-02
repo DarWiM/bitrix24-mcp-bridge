@@ -5,42 +5,42 @@ import { defineOperation, type OpContext, type Operation } from "./operation.js"
 
 const AJAX = "/bitrix/services/main/ajax.php";
 
-// A Bitrix24 request as the old actions.json catalog described it, with the same defaults.
-export function catalogTarget(entry: Pick<CallTarget, "method"> & Partial<CallTarget>): CallTarget {
+// A Bitrix24 request target with the defaults most calls share.
+export function callTarget(entry: Pick<CallTarget, "method"> & Partial<CallTarget>): CallTarget {
   return { endpoint: AJAX, action: null, params: {}, bodyType: "form", responseType: "json", ...entry };
 }
 
-const TASKS_LIST = catalogTarget({ action: "tasks.task.list", method: "POST" });
-const TASK_GET = catalogTarget({ action: "tasks.task.get", method: "POST" });
-const TASK_V2_GET = catalogTarget({ action: "tasks.v2.Task.get", method: "POST", bodyType: "json" });
-const TASK_SCRUM_INFO = catalogTarget({ action: "tasks.v2.Scrum.getTaskInfo", method: "POST", bodyType: "json" });
-const TASK_FILES = catalogTarget({ action: "tasks.v2.File.listObjects", method: "POST", bodyType: "json" });
-const TASK_VIEWS_COUNT = catalogTarget({ action: "tasks.v2.Task.View.User.count", method: "POST", bodyType: "json" });
-const TASK_SUBTASKS = catalogTarget({ action: "tasks.v2.Task.Relation.Child.list", method: "POST", bodyType: "json" });
-const TASK_RELATED = catalogTarget({ action: "tasks.v2.Task.Relation.Related.list", method: "POST", bodyType: "json" });
-const PROJECTS_LIST = catalogTarget({ action: "socialnetwork.api.workgroup.list", method: "POST" });
-const PROJECTS_GET = catalogTarget({ action: "socialnetwork.api.workgroup.get", method: "POST" });
-const CHATS_RECENT = catalogTarget({
+const TASKS_LIST = callTarget({ action: "tasks.task.list", method: "POST" });
+const TASK_GET = callTarget({ action: "tasks.task.get", method: "POST" });
+const TASK_V2_GET = callTarget({ action: "tasks.v2.Task.get", method: "POST", bodyType: "json" });
+const TASK_SCRUM_INFO = callTarget({ action: "tasks.v2.Scrum.getTaskInfo", method: "POST", bodyType: "json" });
+const TASK_FILES = callTarget({ action: "tasks.v2.File.listObjects", method: "POST", bodyType: "json" });
+const TASK_VIEWS_COUNT = callTarget({ action: "tasks.v2.Task.View.User.count", method: "POST", bodyType: "json" });
+const TASK_SUBTASKS = callTarget({ action: "tasks.v2.Task.Relation.Child.list", method: "POST", bodyType: "json" });
+const TASK_RELATED = callTarget({ action: "tasks.v2.Task.Relation.Related.list", method: "POST", bodyType: "json" });
+const PROJECTS_LIST = callTarget({ action: "socialnetwork.api.workgroup.list", method: "POST" });
+const PROJECTS_GET = callTarget({ action: "socialnetwork.api.workgroup.get", method: "POST" });
+const CHATS_RECENT = callTarget({
   endpoint: "/rest/im.recent.list.json",
   method: "POST",
   params: { LIMIT: 50, SKIP_OPENLINES: "Y", GET_ORIGINAL_TEXT: "Y", PARSE_TEXT: "Y", WITH_COUNTERS: "N" },
 });
-const CHAT_LOAD = catalogTarget({ action: "im.v2.Chat.load", method: "POST", params: { messageLimit: 25 } });
-const CHAT_MESSAGES = catalogTarget({ action: "im.v2.Chat.Message.list", method: "POST" });
-export const CHAT_MESSAGES_TAIL = catalogTarget({
+const CHAT_LOAD = callTarget({ action: "im.v2.Chat.load", method: "POST", params: { messageLimit: 25 } });
+const CHAT_MESSAGES = callTarget({ action: "im.v2.Chat.Message.list", method: "POST" });
+export const CHAT_MESSAGES_TAIL = callTarget({
   action: "im.v2.Chat.Message.tail",
   method: "POST",
   params: { "order[id]": "DESC", limit: 25 },
 });
-const CHAT_MESSAGE_READ = catalogTarget({ action: "im.v2.Chat.Message.read", method: "POST" });
-const ENTITYSELECTOR_LOAD = catalogTarget({ action: "ui.entityselector.load", method: "POST", bodyType: "json" });
-const ENTITYSELECTOR_SEARCH = catalogTarget({ action: "ui.entityselector.doSearch", method: "POST", bodyType: "json" });
-const RECENT_LOAD = catalogTarget({ action: "im.v2.Recent.load", method: "POST" });
-const RECENT_TAIL = catalogTarget({ action: "im.v2.Recent.tail", method: "POST" });
-const CHAT_DIALOG_ID = catalogTarget({ action: "im.v2.Chat.getDialogId", method: "POST" });
-const CHAT_READ_ALL = catalogTarget({ action: "im.v2.Chat.readAll", method: "POST" });
-const IM_USER_GET = catalogTarget({ endpoint: "/rest/im.user.get.json", method: "POST" });
-const IM_CHAT_GET = catalogTarget({ endpoint: "/rest/im.chat.get.json", method: "POST" });
+const CHAT_MESSAGE_READ = callTarget({ action: "im.v2.Chat.Message.read", method: "POST" });
+const ENTITYSELECTOR_LOAD = callTarget({ action: "ui.entityselector.load", method: "POST", bodyType: "json" });
+const ENTITYSELECTOR_SEARCH = callTarget({ action: "ui.entityselector.doSearch", method: "POST", bodyType: "json" });
+const RECENT_LOAD = callTarget({ action: "im.v2.Recent.load", method: "POST" });
+const RECENT_TAIL = callTarget({ action: "im.v2.Recent.tail", method: "POST" });
+const CHAT_DIALOG_ID = callTarget({ action: "im.v2.Chat.getDialogId", method: "POST" });
+const CHAT_READ_ALL = callTarget({ action: "im.v2.Chat.readAll", method: "POST" });
+const IM_USER_GET = callTarget({ endpoint: "/rest/im.user.get.json", method: "POST" });
+const IM_CHAT_GET = callTarget({ endpoint: "/rest/im.chat.get.json", method: "POST" });
 
 // Default field selections. Overridable per call via the operation's `params`.
 const TASK_LIST_SELECT = ["ID", "TITLE", "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "DEADLINE", "GROUP_ID", "PRIORITY"];

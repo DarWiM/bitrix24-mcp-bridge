@@ -2,7 +2,7 @@
   "type": "module",
   "name": "bitrix24-mcp-bridge",
   "version": "0.5.0",
-  "description": "MCP bridge server for Bitrix24 — exposes REST API access, tasks, projects and chat to MCP clients like Claude Code.",
+  "description": "MCP bridge server for Bitrix24 — exposes tasks, projects, chats and calls from your live browser session to MCP clients like Claude Code.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,8 +15,7 @@
   "files": [
     "dist",
     "extension/dist",
-    "docs/api-notes.md",
-    "actions.example.json"
+    "docs/api-notes.md"
   ],
   "scripts": {
     "test": "bun test",
@@ -24,12 +23,8 @@
     "typecheck": "bunx tsc --noEmit && bunx tsc -p extension/tsconfig.json",
     "build:dist": "node scripts/build-dist.mjs",
     "build:ext": "bun run scripts/build-extension.ts",
-    "build:ext:capture": "BITRIX_CAPTURE=1 bun run scripts/build-extension.ts",
     "build:ext:static": "node scripts/build-ext-static.mjs",
     "prepare": "node scripts/build-dist.mjs && node scripts/build-ext-static.mjs",
-    "capture": "bun run src/capture-server.ts",
-    "catalog:draft": "bun run src/catalog/build-catalog.ts captured.har > actions.draft.json",
-    "catalog": "bun run src/catalog/build-catalog.ts",
     "sync:runtime": "bun run scripts/sync-runtime.ts"
   },
   "dependencies": {

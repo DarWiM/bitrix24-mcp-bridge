@@ -20,10 +20,6 @@ await build({
   format: "iife",
   outdir: DIST,
   sourcemap: true, // emits *.js.map + //# sourceMappingURL for DevTools
-  minifySyntax: true, // drop dead branches (e.g. capture recorder in normal builds)
-  define: {
-    __BITRIX_CAPTURE__: "false",
-  },
   logLevel: "info",
 });
 
