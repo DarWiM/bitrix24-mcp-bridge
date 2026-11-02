@@ -63,6 +63,12 @@ describe("loadConfig", () => {
       expect(loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({ mutations: false }) }).allowMutations).toBe(false);
     });
 
+    it("rejects a non-boolean file value instead of leaving mutations enabled", () => {
+      for (const bad of ["false", "off", 0]) {
+        expect(() => loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({ mutations: bad }) })).toThrow(/"mutations"/);
+      }
+    });
+
     it("env wins over the file in both directions", () => {
       const off = loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({}), BITRIX_MCP_MUTATIONS: "off" });
       expect(off.allowMutations).toBe(false);

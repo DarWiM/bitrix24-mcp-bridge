@@ -30,7 +30,7 @@ interface FileConfig {
   defaultPortal?: string;
   portals?: Record<string, PortalConfig>;
   catalog?: string;
-  mutations?: boolean;
+  mutations?: unknown;
 }
 
 function parseMutationsEnv(raw: string | undefined): boolean | undefined {
@@ -39,6 +39,12 @@ function parseMutationsEnv(raw: string | undefined): boolean | undefined {
   if (value === "on") return true;
   if (value === "off") return false;
   throw new Error(`BITRIX_MCP_MUTATIONS must be "on" or "off", got "${raw}"`);
+}
+
+function parseMutationsFile(value: unknown, path: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  throw new Error(`${path}: "mutations" must be true or false, got ${JSON.stringify(value)}`);
 }
 
 function readFileConfig(env: NodeJS.ProcessEnv): FileConfig {
@@ -89,7 +95,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     bitrixOrigin: portals[defaultPortal].origin,
     catalogPath,
     allowedOrigins: Object.values(portals).map((p) => p.origin),
-    allowMutations: parseMutationsEnv(env.BITRIX_MCP_MUTATIONS) ?? file.mutations !== false,
+    allowMutations: parseMutationsEnv(env.BITRIX_MCP_MUTATIONS) ?? parseMutationsFile(file.mutations, runtimePaths(env).configJson) ?? true,
   };
 }
 
