@@ -103,8 +103,8 @@ export class UdsClient implements CallSink {
     return this.request("op", frame, timeoutMs);
   }
 
-  status(): Promise<DaemonStatus> {
-    return this.request<DaemonStatus>("status", { type: "status" });
+  status(timeoutMs?: number): Promise<DaemonStatus> {
+    return this.request<DaemonStatus>("status", { type: "status" }, timeoutMs);
   }
 
   close(): void { this.sock?.destroy(); }
@@ -149,9 +149,11 @@ export function requestDaemonShutdown(sockPath: string, timeoutMs = 2000): Promi
 
 // The shutdown ack arrives before the daemon has let go of anything. It unlinks its socket right
 // before releasing the WS port, so only once the socket is gone can a respawned daemon take over.
+// The wait does not depend on the ack: a daemon another client is already stopping refuses the
+// request, yet still holds the port until its socket goes.
 export async function stopDaemon(sockPath: string, timeoutMs = 3000): Promise<boolean> {
-  if (!(await requestDaemonShutdown(sockPath, timeoutMs))) return false;
   const deadline = Date.now() + timeoutMs;
+  await requestDaemonShutdown(sockPath, timeoutMs);
   while (existsSync(sockPath)) {
     if (Date.now() > deadline) return false;
     await new Promise((r) => setTimeout(r, 25));
@@ -159,21 +161,46 @@ export async function stopDaemon(sockPath: string, timeoutMs = 3000): Promise<bo
   return true;
 }
 
+// Short, because the handshake runs before the MCP server answers its host.
+const HANDSHAKE_STATUS_TIMEOUT_MS = 3000;
+
 // A daemon outlives the client that spawned it, so after an upgrade the previous version can still
 // be serving the socket. Dev builds report a sentinel version and must leave the installed daemon alone.
 export async function replaceStaleDaemon(
   client: Pick<UdsClient, "status" | "close" | "connect">,
-  opts: { version: string; enabled: boolean; stopDaemon: () => Promise<boolean>; log: (line: string) => void },
+  opts: {
+    version: string;
+    enabled: boolean;
+    stopDaemon: () => Promise<boolean>;
+    log: (line: string) => void;
+    statusTimeoutMs?: number;
+  },
 ): Promise<void> {
   if (!opts.enabled) return;
-  // Daemons from before this handshake answer status without a version.
-  const version = (await client.status()).version || "unknown";
-  if (version === opts.version) return;
-  if (!(await opts.stopDaemon())) {
-    opts.log(`[mcp] daemon ${version} is stale (expected ${opts.version}) but did not stop; using it`);
+  const versionOf = async (): Promise<{ version: string } | { error: string }> => {
+    try {
+      // Daemons from before this handshake answer status without a version.
+      return { version: (await client.status(opts.statusTimeoutMs ?? HANDSHAKE_STATUS_TIMEOUT_MS)).version || "unknown" };
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : String(e) };
+    }
+  };
+
+  const before = await versionOf();
+  if ("version" in before && before.version === opts.version) return;
+  if ("error" in before) opts.log(`[mcp] daemon did not answer the version check (${before.error}); restarting it`);
+  // Reconnect whatever the stop reports: a daemon stopped by another client has already taken
+  // this connection down, and connect() either reaches a live daemon or spawns a fresh one.
+  await opts.stopDaemon();
+  client.close();
+  try {
+    await client.connect();
+  } catch (e) {
+    opts.log(`[mcp] could not reach the respawned daemon: ${e instanceof Error ? e.message : String(e)}`);
     return;
   }
-  client.close();
-  await client.connect();
-  opts.log(`[mcp] restarted daemon ${version} → ${opts.version}`);
+  const after = await versionOf();
+  const from = "version" in before ? before.version : "unresponsive";
+  if ("version" in after && after.version === opts.version) opts.log(`[mcp] restarted daemon ${from} → ${after.version}`);
+  else opts.log(`[mcp] daemon is still ${"version" in after ? after.version : "unresponsive"} after a restart attempt (expected ${opts.version})`);
 }

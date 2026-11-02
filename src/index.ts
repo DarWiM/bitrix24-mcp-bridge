@@ -71,7 +71,7 @@ async function runMcpClient() {
       log: (line) => console.error(line),
     });
   } catch (e) {
-    console.error(`[mcp] daemon version check failed: ${e instanceof Error ? e.message : String(e)}`);
+    console.error(`[mcp] daemon handover failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // A package upgrade ships new catalog entries, but the installed catalog is the user's file

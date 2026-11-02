@@ -1,6 +1,6 @@
 // src/bridge/uds-client.test.ts
 import { describe, it, expect, mock } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server, type Socket } from "node:net";
@@ -282,31 +282,46 @@ describe("stopDaemon", () => {
     expect(existsSync(sock)).toBe(false);
   });
 
-  it("resolves false when no daemon is listening", async () => {
+  it("resolves true at once when nothing is at the socket path", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    await expect(stopDaemon(sock, 200)).resolves.toBe(true);
+  });
+
+  it("resolves false when the socket path stays in place", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    writeFileSync(sock, "");
     await expect(stopDaemon(sock, 200)).resolves.toBe(false);
   });
 });
 
 describe("replaceStaleDaemon", () => {
-  function fakeClient(version: string) {
+  // Each status() answers with the next entry; an Error entry rejects.
+  function fakeClient(...answers: Array<string | Error>) {
     const calls: string[] = [];
+    const timeouts: Array<number | undefined> = [];
     const client = {
-      status: mock(async () => { calls.push("status"); return { portals: [], version }; }),
+      status: mock(async (timeoutMs?: number) => {
+        calls.push("status");
+        timeouts.push(timeoutMs);
+        const next = answers.shift() ?? new Error("no more answers");
+        if (next instanceof Error) throw next;
+        return { portals: [], version: next };
+      }),
       close: mock(() => { calls.push("close"); }),
       connect: mock(async () => { calls.push("connect"); }),
     };
-    return { client, calls };
+    return { client, calls, timeouts };
   }
 
   it("stops a daemon of another version and reconnects to a fresh one", async () => {
-    const { client, calls } = fakeClient("0.4.0");
+    const { client, calls, timeouts } = fakeClient("0.4.0", "0.5.0");
     const stop = mock(async () => { calls.push("stop"); return true; });
     const log = mock((_line: string) => {});
 
     await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: stop, log });
 
-    expect(calls).toEqual(["status", "stop", "close", "connect"]);
+    expect(calls).toEqual(["status", "stop", "close", "connect", "status"]);
+    expect(timeouts).toEqual([3000, 3000]);
     expect(log).toHaveBeenCalledWith("[mcp] restarted daemon 0.4.0 → 0.5.0");
   });
 
@@ -330,14 +345,94 @@ describe("replaceStaleDaemon", () => {
     expect(stop).not.toHaveBeenCalled();
   });
 
-  it("keeps the current connection and says so when the old daemon does not stop", async () => {
-    const { client, calls } = fakeClient("0.4.0");
+  it("reconnects even when the stop was not confirmed, since another client may have stopped it first", async () => {
+    const { client, calls } = fakeClient("0.4.0", "0.5.0");
     const log = mock((_line: string) => {});
 
     await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: async () => false, log });
 
-    expect(calls).toEqual(["status"]);
-    expect(log).toHaveBeenCalledWith("[mcp] daemon 0.4.0 is stale (expected 0.5.0) but did not stop; using it");
+    expect(calls).toEqual(["status", "close", "connect", "status"]);
+    expect(log).toHaveBeenCalledWith("[mcp] restarted daemon 0.4.0 → 0.5.0");
+  });
+
+  it("says so when the old daemon is still there after the attempt", async () => {
+    const { client } = fakeClient("0.4.0", "0.4.0");
+    const log = mock((_line: string) => {});
+
+    await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: async () => false, log });
+
+    expect(log).toHaveBeenCalledWith("[mcp] daemon is still 0.4.0 after a restart attempt (expected 0.5.0)");
+  });
+
+  it("treats a daemon that does not answer the version check as stale", async () => {
+    const { client, calls } = fakeClient(new Error("daemon did not respond to status in 3000ms"), "0.5.0");
+    const log = mock((_line: string) => {});
+
+    await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: async () => true, log });
+
+    expect(calls).toEqual(["status", "close", "connect", "status"]);
+    expect(log).toHaveBeenCalledWith("[mcp] daemon did not answer the version check (daemon did not respond to status in 3000ms); restarting it");
+    expect(log).toHaveBeenCalledWith("[mcp] restarted daemon unresponsive → 0.5.0");
+  });
+
+  it("reports a respawned daemon it cannot reach without throwing", async () => {
+    const { client } = fakeClient("0.4.0");
+    client.connect.mockImplementation(async () => { throw new Error("could not reach daemon at /x.sock"); });
+    const log = mock((_line: string) => {});
+
+    await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: async () => true, log });
+
+    expect(log).toHaveBeenCalledWith("[mcp] could not reach the respawned daemon: could not reach daemon at /x.sock");
+  });
+
+  it("gives up on a daemon that never answers within the short timeout", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const server = await startFakeUdsServer(sock, () => { /* never answers */ });
+    const client = new UdsClient({ sockPath: sock });
+    await client.connect();
+    const log = mock((_line: string) => {});
+    try {
+      const started = Date.now();
+      await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: async () => false, log, statusTimeoutMs: 100 });
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(log).toHaveBeenCalledWith("[mcp] daemon did not answer the version check (daemon did not respond to status in 100ms); restarting it");
+      expect(log).toHaveBeenCalledWith("[mcp] daemon is still unresponsive after a restart attempt (expected 0.5.0)");
+    } finally {
+      client.close();
+      server.close();
+    }
+  });
+
+  it("recovers when another client's stop already took this connection down", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const portals = { acme: { origin: "https://acme.bitrix24.ru" } };
+    const old = new Daemon({ port: 0, token: "t", sockPath: sock, portals, ...opDefaults("acme") });
+    await old.start();
+    const port = old.port;
+    let fresh: Daemon | undefined;
+    const client = new UdsClient({
+      sockPath: sock,
+      spawnDaemon: () => {
+        fresh = new Daemon({ port, token: "t", sockPath: sock, portals, ...opDefaults("acme") });
+        void fresh.start();
+      },
+      connectTimeoutMs: 3000,
+    });
+    await client.connect();
+    try {
+      // The other client wins: the daemon goes away with our connection, and our own stop gets no ack.
+      const stopLost = async () => { await old.stop(); return false; };
+      await replaceStaleDaemon(client, { version: "9.9.9", enabled: true, stopDaemon: stopLost, log: () => {} });
+
+      expect(fresh).toBeDefined();
+      const res = await client.status();
+      expect(res.portals).toHaveLength(1);
+    } finally {
+      client.close();
+      await fresh?.stop();
+      await old.stop();
+    }
   });
 
   it("hands the client over to a daemon respawned on the same port and socket", async () => {
