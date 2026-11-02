@@ -39,8 +39,13 @@ export function resolvePortalUrl(rawUrl: string, origins: Record<string, string>
     const known = Object.values(origins).join(", ") || "none configured";
     throw new Error(`refusing to download from ${url.origin} — not a configured portal (known: ${known})`);
   }
-  const action = url.searchParams.get("action");
-  const allowed = DOWNLOAD_LINKS.some((link) => link.path === url.pathname && action !== null && link.actions.has(action));
+  const actions = url.searchParams.getAll("action");
+  // PHP takes the last value of a repeated key and folds `action[]=` into an array, while we
+  // would read the first — so anything but exactly one plain `action` could smuggle another one past us.
+  const ambiguous = actions.length > 1 || [...url.searchParams.keys()].some((key) => key.startsWith("action["));
+  const action = actions[0] ?? null;
+  const allowed =
+    !ambiguous && DOWNLOAD_LINKS.some((link) => link.path === url.pathname && action !== null && link.actions.has(action));
   if (!allowed) {
     throw new Error(`refusing to download ${url.pathname}?action=${action ?? "none"} — not a portal file link`);
   }
