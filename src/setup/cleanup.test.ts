@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, mock } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,21 @@ describe("removeObsoleteFiles", () => {
 
   it("returns [] when nothing is there", () => {
     expect(removeObsoleteFiles(tempHome())).toEqual([]);
+  });
+
+  it("logs a file it could not remove and carries on with the rest", () => {
+    const home = tempHome();
+    // A non-empty directory under the obsolete name: rmSync without recursive refuses it.
+    mkdirSync(join(home, "actions.json"));
+    writeFileSync(join(home, "actions.json", "inner"), "x");
+    writeFileSync(join(home, "catalog-state.json"), "{}");
+    const log = mock((_line: string) => {});
+
+    const removed = removeObsoleteFiles(home, log);
+
+    expect(removed).toEqual([join(home, "catalog-state.json")]);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).toStartWith(`[cleanup] could not remove ${join(home, "actions.json")}: `);
   });
 
   it("leaves unrelated files untouched", () => {

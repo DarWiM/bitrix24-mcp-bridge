@@ -47,7 +47,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
     },
     async () => {
       try {
-        const { portals } = await deps.sink.status();
+        const { portals, mutations } = await deps.sink.status();
         // The bundles on disk are refreshed automatically on upgrade, but Chrome keeps running
         // the copy it loaded until someone hits "Обновить" — so a stale extension is reported
         // rather than left to fail later with a confusing error.
@@ -56,6 +56,8 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           configured: true,
           defaultPortal: deps.defaultPortal,
           packageVersion: PACKAGE_VERSION,
+          // null: the daemon is too old to report whether mutating operations are allowed.
+          mutations: mutations ?? null,
           portals,
           ...(stale.length > 0
             ? {

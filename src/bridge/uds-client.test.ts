@@ -7,7 +7,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { WebSocket } from "ws";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import { Daemon } from "./daemon.js";
-import { UdsClient, replaceStaleDaemon, requestDaemonShutdown, stopDaemon } from "./uds-client.js";
+import { UdsClient, compareVersions, replaceStaleDaemon, requestDaemonShutdown, stopDaemon } from "./uds-client.js";
 import { z } from "zod";
 import { createRegistry } from "../ops/registry.js";
 import { defineOperation } from "../ops/operation.js";
@@ -326,6 +326,26 @@ describe("stopDaemon", () => {
   });
 });
 
+describe("compareVersions", () => {
+  it("orders x.y.z numerically, not as text", () => {
+    expect(compareVersions("0.10.0", "0.9.9")).toBe(1);
+    expect(compareVersions("0.9.9", "0.10.0")).toBe(-1);
+    expect(compareVersions("1.2.3", "1.2.3")).toBe(0);
+    expect(compareVersions("2.0.0", "1.99.99")).toBe(1);
+  });
+
+  it("puts a release after its own prereleases", () => {
+    expect(compareVersions("0.6.0", "0.6.0-rc.1")).toBe(1);
+    expect(compareVersions("0.6.0-rc.1", "0.6.0")).toBe(-1);
+    expect(compareVersions("0.6.0-rc.10", "0.6.0-rc.2")).toBe(1);
+  });
+
+  it("treats an unparsable version as the oldest", () => {
+    expect(compareVersions("unknown", "0.1.0")).toBe(-1);
+    expect(compareVersions("0.1.0", "unknown")).toBe(1);
+  });
+});
+
 describe("replaceStaleDaemon", () => {
   // Each status() answers with the next entry; an Error entry rejects.
   function fakeClient(...answers: Array<string | Error>) {
@@ -345,7 +365,7 @@ describe("replaceStaleDaemon", () => {
     return { client, calls, timeouts };
   }
 
-  it("stops a daemon of another version and reconnects to a fresh one", async () => {
+  it("stops an older daemon and reconnects to a fresh one", async () => {
     const { client, calls, timeouts } = fakeClient("0.4.0", "0.5.0");
     const stop = mock(async () => { calls.push("stop"); return true; });
     const log = mock((_line: string) => {});
@@ -365,6 +385,28 @@ describe("replaceStaleDaemon", () => {
 
     expect(calls).toEqual(["status"]);
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("keeps a newer daemon and says so", async () => {
+    const { client, calls } = fakeClient("0.10.0");
+    const stop = mock(async () => true);
+    const log = mock((_line: string) => {});
+
+    await replaceStaleDaemon(client, { version: "0.9.1", enabled: true, stopDaemon: stop, log });
+
+    expect(calls).toEqual(["status"]);
+    expect(stop).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("[mcp] daemon 0.10.0 is newer than this client 0.9.1; leaving it");
+  });
+
+  it("replaces a daemon that predates the version handshake", async () => {
+    const { client, calls } = fakeClient("", "0.5.0");
+    const log = mock((_line: string) => {});
+
+    await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: async () => true, log });
+
+    expect(calls).toEqual(["status", "close", "connect", "status"]);
+    expect(log).toHaveBeenCalledWith("[mcp] restarted daemon unknown → 0.5.0");
   });
 
   it("leaves the daemon alone in a dev build", async () => {

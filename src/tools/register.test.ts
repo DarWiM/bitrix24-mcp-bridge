@@ -114,8 +114,8 @@ describe("registerTools", () => {
 });
 
 describe("bitrix_status tool", () => {
-  async function status(portals: DaemonStatus["portals"]) {
-    const client = await connect(deps({ sink: { op: mock(), status: async () => ({ portals, version: "0.0.0-dev" }) } }));
+  async function status(portals: DaemonStatus["portals"], extra: Partial<DaemonStatus> = {}) {
+    const client = await connect(deps({ sink: { op: mock(), status: async () => ({ portals, version: "0.0.0-dev", ...extra }) } }));
     return JSON.parse(readResult(await client.callTool({ name: "bitrix_status", arguments: {} })).text);
   }
 
@@ -126,6 +126,13 @@ describe("bitrix_status tool", () => {
       defaultPortal: "acme",
       portals: [{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true }],
     });
+  });
+
+  it("reports whether mutating operations are allowed", async () => {
+    expect((await status([], { mutations: false })).mutations).toBe(false);
+    expect((await status([], { mutations: true })).mutations).toBe(true);
+    // A daemon too old to say.
+    expect((await status([])).mutations).toBeNull();
   });
 
   it("warns when the connected extension is older than the bridge", async () => {

@@ -101,6 +101,13 @@ describe("call_detail", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it("rejects a non-numeric callId before it can reach the path", async () => {
+    const { ctx, call } = fakeCtx({ call: async () => html(callPage) });
+
+    await expect(op("call_detail").execute(ctx, { callId: "../1" })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("keeps a short transcript inline", async () => {
     const dir = tempDir();
     const { ctx } = fakeCtx({ call: async () => html(pageWithTranscript(3)), downloadsDir: dir });
@@ -477,6 +484,23 @@ describe("call_recording", () => {
     expect(callBinary.mock.calls[0][2]).toBe("d");
     expect(payload.path).toBe(join(dir, "Запись звонка N4242.ogg")); // portal name wins over "ajax.php"
     expect(payload.contentType).toBe("audio/ogg");
+  });
+
+  it("refuses a recording link that points at another configured portal", async () => {
+    // userinfo syntax: appended to this portal's origin, the path re-targets the link at portal "e".
+    const audio = "@e.bitrix24.ru/bitrix/services/main/ajax.php?action=call.Track.download&signedParameters=sp.sig";
+    const page = `<div data-call-id="4242"><div data-audio-src="${audio}"></div></div>`;
+    const { ctx, callBinary } = fakeCtx({ call: async () => html(page) });
+
+    await expect(op("call_recording").execute(ctx, { callId: 4242 })).rejects.toThrow(/refusing to download from https:\/\/e\.bitrix24\.ru/);
+    expect(callBinary).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-numeric callId before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("call_recording").execute(ctx, { callId: "1a" })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("reports calls that were never recorded", async () => {

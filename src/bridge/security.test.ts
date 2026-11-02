@@ -179,7 +179,8 @@ describe("daemon accepts only built-in operations", () => {
       });
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(res).toEqual({ type: "result", id: "1", ok: false, error: "unsupported request type call" });
+      expect(res).toMatchObject({ type: "result", id: "1", ok: false });
+      expect(res.error).toStartWith("unsupported request type call — this daemon is ");
       expect(forwarded).toEqual([]);
     } finally {
       ws.close();

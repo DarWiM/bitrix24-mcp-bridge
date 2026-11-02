@@ -8,6 +8,8 @@ import type { OpBudget } from "../ops/operation.js";
 export interface DaemonStatus {
   portals: PortalConnection[];
   version: string;
+  // Absent from daemons that predate the mutation switch.
+  mutations?: boolean;
 }
 
 export interface CallSink {
@@ -190,8 +192,30 @@ export async function stopDaemon(sockPath: string, timeoutMs = 3000): Promise<bo
 // Short, because the handshake runs before the MCP server answers its host.
 const HANDSHAKE_STATUS_TIMEOUT_MS = 3000;
 
+// Semver order, so that two installed versions agree on which daemon wins instead of replacing
+// each other in turn. A version that does not parse ("unknown" from a daemon that predates the
+// handshake) sorts first.
+export function compareVersions(a: string, b: string): number {
+  if (a === b) return 0;
+  const parse = (v: string) => /^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/.exec(v);
+  const pa = parse(a);
+  const pb = parse(b);
+  if (!pa) return -1;
+  if (!pb) return 1;
+  for (let i = 1; i <= 3; i++) {
+    const diff = Number(pa[i]) - Number(pb[i]);
+    if (diff !== 0) return Math.sign(diff);
+  }
+  // A release is newer than its own prereleases.
+  if (pa[4] === undefined) return 1;
+  if (pb[4] === undefined) return -1;
+  return Math.sign(pa[4].localeCompare(pb[4], "en", { numeric: true }));
+}
+
 // A daemon outlives the client that spawned it, so after an upgrade the previous version can still
-// be serving the socket. Dev builds report a sentinel version and must leave the installed daemon alone.
+// be serving the socket. Only an older daemon is replaced: a newer one serves everything this client
+// knows, and replacing it would start a tug of war with that newer client.
+// Dev builds report a sentinel version and must leave the installed daemon alone.
 export async function replaceStaleDaemon(
   client: Pick<UdsClient, "status" | "close" | "connect">,
   opts: {
@@ -213,7 +237,14 @@ export async function replaceStaleDaemon(
   };
 
   const before = await versionOf();
-  if ("version" in before && before.version === opts.version) return;
+  if ("version" in before) {
+    const order = compareVersions(before.version, opts.version);
+    if (order === 0) return;
+    if (order > 0) {
+      opts.log(`[mcp] daemon ${before.version} is newer than this client ${opts.version}; leaving it`);
+      return;
+    }
+  }
   if ("error" in before) opts.log(`[mcp] daemon did not answer the version check (${before.error}); restarting it`);
   // Reconnect whatever the stop reports: a daemon stopped by another client has already taken
   // this connection down, and connect() either reaches a live daemon or spawns a fresh one.

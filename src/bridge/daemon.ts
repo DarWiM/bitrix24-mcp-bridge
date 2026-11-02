@@ -142,15 +142,23 @@ export class Daemon {
             extensionVersion: this.bridge.extensionVersion(p.origin),
           }),
         );
-        reply({ type: "result", id, ok: true, data: { portals, version: PACKAGE_VERSION } });
+        reply({ type: "result", id, ok: true, data: { portals, version: PACKAGE_VERSION, mutations: this.opts.allowMutations } });
         return;
       }
       case "op":
         this.handleOp(id, req, reply);
         return;
       default:
-        // A client waiting on this id would otherwise hang until its own timeout.
-        reply({ type: "result", id, ok: false, error: `unsupported request type ${String(req.type)}` });
+        // A client waiting on this id would otherwise hang until its own timeout. The likely sender
+        // is a client from another version still running in an agent session.
+        reply({
+          type: "result",
+          id,
+          ok: false,
+          error:
+            `unsupported request type ${String(req.type)} — this daemon is ${PACKAGE_VERSION}; ` +
+            "restart the agent session / update the MCP client",
+        });
     }
   }
 

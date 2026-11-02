@@ -51,7 +51,7 @@ function shouldSpill(mode: TranscriptMode, call: CallDetail): boolean {
 const COMMENTS_INLINE_LIMIT = 20_000;
 const COMMENTS_OUTPUT_MODES = ["auto", "inline", "file"] as const;
 
-async function loadCallDetail(ctx: OpContext, callId: number | string, extra: Record<string, unknown> | undefined, transcript: boolean) {
+async function loadCallDetail(ctx: OpContext, callId: number, extra: Record<string, unknown> | undefined, transcript: boolean) {
   // callId goes last: it fills the path template, so agent params must not swap in an unchecked one.
   const raw = await ctx.call({ ...CALL_DETAIL, params: { ...CALL_DETAIL.params, ...(extra ?? {}), callId } });
   const page = textResponse.safeParse(raw);
@@ -110,7 +110,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
     mutating: false,
     budget: "long",
     input: {
-      callId: z.union([z.number(), z.string()]),
+      callId: idArg(),
       transcript: z.enum(TRANSCRIPT_MODES).optional(),
       params: agentParams(),
     },
@@ -241,7 +241,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "если её нет, вернётся понятная ошибка. savePath/overwrite — как в bitrix_file_download.",
     mutating: false,
     budget: "download",
-    input: { callId: z.union([z.number(), z.string()]), savePath: z.string().optional(), overwrite: z.boolean().optional() },
+    input: { callId: idArg(), savePath: z.string().optional(), overwrite: z.boolean().optional() },
     async run(ctx, { callId, savePath, overwrite }) {
       const detail = await loadCallDetail(ctx, callId, undefined, false);
       if (!detail.recording?.url) throw new Error(`call ${callId} has no recording`);

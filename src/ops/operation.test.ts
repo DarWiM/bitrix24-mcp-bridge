@@ -1,5 +1,18 @@
 import { describe, it, expect } from "bun:test";
-import { agentParams } from "./operation.js";
+import { agentParams, idArg } from "./operation.js";
+
+describe("idArg", () => {
+  it("accepts a positive integer as a number or a digit string", () => {
+    expect(idArg().parse(42)).toBe(42);
+    expect(idArg().parse("42")).toBe(42);
+  });
+
+  it("rejects zero, negatives and anything path-like or not purely digits", () => {
+    for (const bad of [0, -1, 1.5, "../1", "1a", "", " 1", "-1"]) {
+      expect(idArg().safeParse(bad).success).toBe(false);
+    }
+  });
+});
 
 describe("agentParams", () => {
   it("accepts an absent or ordinary params object", () => {

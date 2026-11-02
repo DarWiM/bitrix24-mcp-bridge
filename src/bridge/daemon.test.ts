@@ -264,6 +264,23 @@ describe("Daemon", () => {
         { alias: "acme", origin: "https://acme.bitrix24.ru", connected: false, extensionVersion: null },
       ]);
       expect(res.data.version).toBe(PACKAGE_VERSION);
+      expect(res.data.mutations).toBe(true);
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("reports disabled mutations in the status reply", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...relayDefaults("acme"), allowMutations: false,
+    });
+    await d.start();
+    try {
+      const res = await udsCall(sock, { type: "status", id: "1" });
+      expect(res.data.mutations).toBe(false);
     } finally {
       await d.stop();
     }
@@ -431,7 +448,11 @@ describe("Daemon operations", () => {
     await d.start();
     try {
       const res = await udsCall(sock, { type: "foo", id: "1" });
-      expect(res).toEqual({ type: "result", id: "1", ok: false, error: "unsupported request type foo" });
+      // An older client sending a frame this daemon no longer knows learns how to recover.
+      expect(res).toEqual({
+        type: "result", id: "1", ok: false,
+        error: `unsupported request type foo — this daemon is ${PACKAGE_VERSION}; restart the agent session / update the MCP client`,
+      });
     } finally {
       await d.stop();
     }
