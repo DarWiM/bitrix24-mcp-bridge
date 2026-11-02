@@ -84,6 +84,11 @@ describe("interpret", () => {
     expect(r.error).toContain("QUERY_LIMIT_EXCEEDED");
     expect(r.error).toContain("too many");
   });
+  it("reads code and message from a REST 3.0 error object", () => {
+    const r = interpret({ error: { code: "BITRIX_REST_V3_EXCEPTION_ACCESSDENIEDEXCEPTION", message: "Доступ запрещен" } });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("BITRIX_REST_V3_EXCEPTION_ACCESSDENIEDEXCEPTION: Доступ запрещен");
+  });
 });
 
 describe("applyPathParams", () => {
