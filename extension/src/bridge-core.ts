@@ -86,6 +86,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function text(value: unknown): string {
+  if (typeof value === "number") return value ? String(value) : "";
   return typeof value === "string" ? value : "";
 }
 
