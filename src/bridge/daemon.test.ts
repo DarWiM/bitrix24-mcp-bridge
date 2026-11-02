@@ -15,6 +15,16 @@ import { PACKAGE_VERSION } from "../version.js";
 const sockIn = () => join(mkdtempSync(join(tmpdir(), "br24d-")), "bridge.sock");
 const opDefaults = (defaultPortal: string) => ({ defaultPortal, downloadsDir: tmpdir(), allowMutations: true });
 
+// Sends one fixed request to the portal: these tests are about the daemon's routing, not an operation.
+const relayOp = defineOperation({
+  name: "relay",
+  description: "test",
+  mutating: false,
+  input: { bodyType: z.enum(["json", "form"]).optional() },
+  run: (ctx, args) => ctx.call({ endpoint: "/x", action: null, method: "POST", params: {}, ...(args.bodyType ? { bodyType: args.bodyType } : {}) }),
+});
+const relayDefaults = (defaultPortal: string) => ({ ...opDefaults(defaultPortal), registry: createRegistry([relayOp]) });
+
 async function fakeExtension(port: number, origin: string) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { origin } });
   await new Promise((r) => ws.on("open", r));
@@ -37,18 +47,18 @@ function udsCall(sockPath: string, req: object): Promise<any> {
 }
 
 describe("Daemon", () => {
-  it("routes a UDS call to the right portal's extension", async () => {
+  it("routes an operation's request to the right portal's extension", async () => {
     const sock = sockIn();
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     await fakeExtension(d.port, "https://acme.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
 
-    const res = await udsCall(sock, { type: "call", id: "1", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
+    const res = await udsCall(sock, { type: "op", id: "1", portal: "acme", op: "relay", args: {} });
     expect(res).toEqual({ type: "result", id: "1", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
     await d.stop();
   });
@@ -58,7 +68,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     expect(statSync(sock).mode & 0o777).toBe(0o600);
@@ -69,9 +79,9 @@ describe("Daemon", () => {
     // Singleton is gated by the WS port: the loser must reject and must NOT touch
     // the winner's live socket.
     const sock = sockIn();
-    const a = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } }, ...opDefaults("d") });
+    const a = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } }, ...relayDefaults("d") });
     await a.start();
-    const b = new Daemon({ port: a.port, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } }, ...opDefaults("d") });
+    const b = new Daemon({ port: a.port, token: "t", sockPath: sock, portals: { d: { origin: "https://d.bitrix24.ru" } }, ...relayDefaults("d") });
     await expect(b.start()).rejects.toThrow(/already running/i);
 
     // A guarded loser calling stop() must NOT unlink the winner's live socket
@@ -82,7 +92,7 @@ describe("Daemon", () => {
     // Winner's UDS still routes after the loser bailed out and stopped.
     await fakeExtension(a.port, "https://d.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
-    const res = await udsCall(sock, { type: "call", id: "9", portal: "d", endpoint: "/x", action: null, method: "POST", params: {} });
+    const res = await udsCall(sock, { type: "op", id: "9", portal: "d", op: "relay", args: {} });
     expect(res).toEqual({ type: "result", id: "9", ok: true, data: { ok: "https://d.bitrix24.ru" } });
     await a.stop();
   });
@@ -92,7 +102,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock, idleMs: 100,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     expect(existsSync(sock)).toBe(true);
@@ -108,7 +118,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock, idleMs: 100,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     await fakeExtension(d.port, "https://acme.bitrix24.ru");
@@ -118,7 +128,7 @@ describe("Daemon", () => {
     await new Promise((r) => setTimeout(r, 400));
     expect(existsSync(sock)).toBe(true);
 
-    const res = await udsCall(sock, { type: "call", id: "2", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
+    const res = await udsCall(sock, { type: "op", id: "2", portal: "acme", op: "relay", args: {} });
     expect(res).toEqual({ type: "result", id: "2", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
     await d.stop();
   });
@@ -128,7 +138,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     await fakeExtension(d.port, "https://acme.bitrix24.ru");
@@ -143,7 +153,7 @@ describe("Daemon", () => {
     await new Promise((r) => setTimeout(r, 30));
 
     // A fresh, valid call still succeeds → the daemon did not crash.
-    const res = await udsCall(sock, { type: "call", id: "3", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
+    const res = await udsCall(sock, { type: "op", id: "3", portal: "acme", op: "relay", args: {} });
     expect(res).toEqual({ type: "result", id: "3", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
     await d.stop();
   });
@@ -157,7 +167,7 @@ describe("Daemon", () => {
     const a = new Daemon({
       port: 0, token: "t", sockPath: sock, idleMs: 60,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await a.start();
     const port = a.port;
@@ -172,7 +182,7 @@ describe("Daemon", () => {
     const b = new Daemon({
       port, token: "t", sockPath: sock, idleMs: 5_000,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await b.start();
     expect(existsSync(sock)).toBe(true);
@@ -184,7 +194,7 @@ describe("Daemon", () => {
     // And B still routes.
     await fakeExtension(b.port, "https://acme.bitrix24.ru");
     await new Promise((r) => setTimeout(r, 50));
-    const res = await udsCall(sock, { type: "call", id: "7", portal: "acme", endpoint: "/x", action: null, method: "POST", params: {} });
+    const res = await udsCall(sock, { type: "op", id: "7", portal: "acme", op: "relay", args: {} });
     expect(res).toEqual({ type: "result", id: "7", ok: true, data: { ok: "https://acme.bitrix24.ru" } });
     await b.stop();
   });
@@ -206,7 +216,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await expect(d.start()).rejects.toThrow();
 
@@ -216,12 +226,12 @@ describe("Daemon", () => {
     await probe.stop();
   });
 
-  it("forwards bodyType from the UDS call frame to the extension", async () => {
+  it("forwards an operation request's bodyType to the extension", async () => {
     const sock = sockIn();
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     // fake extension that echoes the received bodyType back in the result
@@ -234,10 +244,7 @@ describe("Daemon", () => {
     });
     await new Promise((r) => setTimeout(r, 50));
 
-    const res = await udsCall(sock, {
-      type: "call", id: "1", portal: "acme",
-      endpoint: "/x", action: null, method: "POST", params: {}, bodyType: "json",
-    });
+    const res = await udsCall(sock, { type: "op", id: "1", portal: "acme", op: "relay", args: { bodyType: "json" } });
     expect(res.data).toEqual({ bodyType: "json" });
     await d.stop();
   });
@@ -247,7 +254,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     try {
@@ -267,7 +274,7 @@ describe("Daemon", () => {
     const d = new Daemon({
       port: 0, token: "t", sockPath: sock,
       portals: { acme: { origin: "https://acme.bitrix24.ru" } },
-      ...opDefaults("acme"),
+      ...relayDefaults("acme"),
     });
     await d.start();
     expect(d.port).toBeGreaterThan(0);
@@ -425,6 +432,53 @@ describe("Daemon operations", () => {
     try {
       const res = await udsCall(sock, { type: "foo", id: "1" });
       expect(res).toEqual({ type: "result", id: "1", ok: false, error: "unsupported request type foo" });
+    } finally {
+      await d.stop();
+    }
+  });
+});
+
+describe("Daemon request ids and portals", () => {
+  it("drops a request whose id is not a string without replying, and keeps serving", async () => {
+    const sock = sockIn();
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: twoPortals, ...opDefaults("acme") });
+    await d.start();
+    try {
+      // One connection, two frames: the only reply must belong to the second one.
+      const replies = await new Promise<unknown[]>((resolve, reject) => {
+        const c = connect(sock);
+        const dec = new FrameDecoder();
+        const got: unknown[] = [];
+        c.on("connect", () => {
+          c.write(encodeFrame({ type: "status", id: 1 }));
+          c.write(encodeFrame({ type: "call", id: 2 }));
+          c.write(encodeFrame({ type: "status", id: "3" }));
+        });
+        c.on("data", (chunk) => { got.push(...dec.push(chunk)); });
+        c.on("error", reject);
+        setTimeout(() => { c.end(); resolve(got); }, 150);
+      });
+      expect(replies).toHaveLength(1);
+      expect(replies[0]).toMatchObject({ type: "result", id: "3", ok: true });
+    } finally {
+      await d.stop();
+    }
+  });
+
+  it("treats an empty portal on an op frame as the default portal", async () => {
+    const sock = sockIn();
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock, portals: twoPortals,
+      ...opDefaults("beta"), registry: createRegistry([whereOp]),
+    });
+    await d.start();
+    try {
+      await fakeExtension(d.port, "https://beta.bitrix24.ru");
+      await new Promise((r) => setTimeout(r, 50));
+
+      const res = await udsCall(sock, { type: "op", id: "1", portal: "", op: "where", args: {} });
+      expect(res.ok).toBe(true);
+      expect(res.data.portal).toBe("beta");
     } finally {
       await d.stop();
     }

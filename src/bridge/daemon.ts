@@ -1,6 +1,7 @@
 import { createServer, Server, Socket } from "node:net";
 import { existsSync, mkdirSync, unlinkSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
+import { z } from "zod";
 import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult } from "./protocol.js";
@@ -28,6 +29,10 @@ export interface DaemonOptions {
   allowMutations: boolean;
   registry?: Registry;
 }
+
+// Frames come straight off the socket as untyped JSON: every field is checked where it is used.
+const udsRequest = z.object({ type: z.unknown(), id: z.unknown(), portal: z.unknown(), op: z.unknown(), args: z.unknown() });
+type UdsRequest = z.infer<typeof udsRequest>;
 
 export class DaemonAlreadyRunning extends Error {
   constructor(sock: string) { super(`a daemon is already running on ${sock}`); }
@@ -96,56 +101,11 @@ export class Daemon {
     this.clients.add(sock);
     this.armIdle();
     const dec = new FrameDecoder();
-    const reply = (r: CallResult) => sock.write(encodeFrame(r));
     sock.on("data", (chunk) => {
       // A malformed frame must never crash the daemon (that would kill routing for
       // every portal). Drop the bad data for this connection and keep serving.
       try {
-        for (const msg of dec.push(chunk) as any[]) {
-          if (msg?.type === "shutdown") {
-            // setImmediate alone is not a flush barrier — sequence stop() on the WRITE
-            // CALLBACK so sock.destroy() can never race the buffered ack.
-            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { stopping: true } }), () => {
-              setImmediate(() => void this.stop());
-            });
-            continue;
-          }
-          if (msg?.type === "status") {
-            const connected = this.bridge.connectedOrigins();
-            const portals: PortalConnection[] = Object.entries(this.opts.portals).map(
-              ([alias, p]) => ({
-                alias,
-                origin: p.origin,
-                connected: connected.includes(p.origin),
-                extensionVersion: this.bridge.extensionVersion(p.origin),
-              }),
-            );
-            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { portals, version: PACKAGE_VERSION } }));
-            continue;
-          }
-          if (msg?.type === "op") {
-            this.handleOp(msg, reply);
-            continue;
-          }
-          if (msg?.type !== "call") {
-            // A client waiting on this id would otherwise hang until its own timeout.
-            if (msg?.id !== undefined) reply({ type: "result", id: msg.id, ok: false, error: `unsupported request type ${msg?.type}` });
-            continue;
-          }
-          const origin = this.resolveOrigin(msg.portal);
-          if (!origin) {
-            reply({ type: "result", id: msg.id, ok: false, error: `unknown portal "${msg.portal}"` });
-            continue;
-          }
-          const target = { endpoint: msg.endpoint, action: msg.action, method: msg.method, params: msg.params, bodyType: msg.bodyType, responseType: msg.responseType };
-          // savePath stays daemon-side: the browser has no business knowing local paths.
-          const run = msg.responseType === "binary" && typeof msg.savePath === "string"
-            ? this.bridge.callBinary(origin, target, msg.savePath)
-            : this.bridge.call(origin, target);
-          run
-            .then((data) => reply({ type: "result", id: msg.id, ok: true, data }))
-            .catch((e) => reply({ type: "result", id: msg.id, ok: false, error: e instanceof Error ? e.message : String(e) }));
-        }
+        for (const frame of dec.push(chunk)) this.onRequest(sock, frame);
       } catch (e) {
         console.error(`[daemon] dropping malformed UDS data: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -154,14 +114,52 @@ export class Daemon {
     sock.on("error", () => { this.clients.delete(sock); this.armIdle(); });
   }
 
-  // The frame is untyped JSON straight off the socket, so every field is checked here.
-  private handleOp(frame: { id?: unknown; portal?: unknown; op?: unknown; args?: unknown }, reply: (r: CallResult) => void) {
-    if (typeof frame.id !== "string") return;
-    const id = frame.id;
+  private onRequest(sock: Socket, frame: unknown) {
+    const parsed = udsRequest.safeParse(frame);
+    // Without a string id no client can be waiting on a reply, so there is no one to answer.
+    if (!parsed.success || typeof parsed.data.id !== "string") {
+      console.error("[daemon] dropping UDS request without a string id");
+      return;
+    }
+    const req = parsed.data;
+    const id = parsed.data.id;
+    const reply = (r: CallResult) => sock.write(encodeFrame(r));
+    switch (req.type) {
+      case "shutdown":
+        // setImmediate alone is not a flush barrier — sequence stop() on the WRITE
+        // CALLBACK so sock.destroy() can never race the buffered ack.
+        sock.write(encodeFrame({ type: "result", id, ok: true, data: { stopping: true } }), () => {
+          setImmediate(() => void this.stop());
+        });
+        return;
+      case "status": {
+        const connected = this.bridge.connectedOrigins();
+        const portals: PortalConnection[] = Object.entries(this.opts.portals).map(
+          ([alias, p]) => ({
+            alias,
+            origin: p.origin,
+            connected: connected.includes(p.origin),
+            extensionVersion: this.bridge.extensionVersion(p.origin),
+          }),
+        );
+        reply({ type: "result", id, ok: true, data: { portals, version: PACKAGE_VERSION } });
+        return;
+      }
+      case "op":
+        this.handleOp(id, req, reply);
+        return;
+      default:
+        // A client waiting on this id would otherwise hang until its own timeout.
+        reply({ type: "result", id, ok: false, error: `unsupported request type ${String(req.type)}` });
+    }
+  }
+
+  private handleOp(id: string, frame: UdsRequest, reply: (r: CallResult) => void) {
     const fail = (e: unknown) => reply({ type: "result", id, ok: false, error: e instanceof Error ? e.message : String(e) });
     if (typeof frame.op !== "string") return fail("invalid op request: op must be a string");
     if (frame.portal !== undefined && typeof frame.portal !== "string") return fail("invalid op request: portal must be a string");
-    const alias = frame.portal ?? this.opts.defaultPortal;
+    // An empty portal means "the default", like an absent one.
+    const alias = frame.portal || this.opts.defaultPortal;
     if (!Object.hasOwn(this.origins, alias)) return fail(`unknown portal "${alias}"`);
     runOperation(this.registry, frame.op, frame.args, this.opContext(alias), { allowMutations: this.opts.allowMutations })
       .then((data) => reply({ type: "result", id, ok: true, data }))
@@ -182,12 +180,6 @@ export class Daemon {
       call: async (target, portal = alias) => this.bridge.call(originOf(portal), target),
       callBinary: async (target, destPath, portal = alias) => this.bridge.callBinary(originOf(portal), target, destPath),
     };
-  }
-
-  private resolveOrigin(portal: string | undefined): string | undefined {
-    const entries = Object.entries(this.opts.portals);
-    if (!portal) return entries.length === 1 ? entries[0][1].origin : undefined;
-    return this.opts.portals[portal]?.origin;
   }
 
   private armIdle() {

@@ -6,11 +6,18 @@ import { join } from "node:path";
 import { WebSocket } from "ws";
 import { Daemon } from "./daemon.js";
 import { UdsClient } from "./uds-client.js";
+import { createRegistry } from "../ops/registry.js";
+import { defineOperation } from "../ops/operation.js";
+
+const relayOp = defineOperation({
+  name: "relay", description: "test", mutating: false, input: {},
+  run: (ctx) => ctx.call({ endpoint: "/x", action: null, method: "POST", params: {} }),
+});
 
 describe("multi-instance coexistence", () => {
   it("serves two concurrent clients through one daemon, no EADDRINUSE", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24x-")), "bridge.sock");
-    const d = new Daemon({ port: 39970, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } }, defaultPortal: "acme", downloadsDir: tmpdir(), allowMutations: true });
+    const d = new Daemon({ port: 39970, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } }, defaultPortal: "acme", downloadsDir: tmpdir(), allowMutations: true, registry: createRegistry([relayOp]) });
     await d.start();
     const ws = new WebSocket("ws://127.0.0.1:39970", { headers: { origin: "https://acme.bitrix24.ru" } });
     await new Promise((r) => ws.on("open", r));
@@ -21,8 +28,8 @@ describe("multi-instance coexistence", () => {
     const c1 = new UdsClient({ sockPath: sock }); await c1.connect();
     const c2 = new UdsClient({ sockPath: sock }); await c2.connect();
     const [r1, r2] = await Promise.all([
-      c1.call("acme", { endpoint: "/a", action: null, method: "POST", params: {} }),
-      c2.call("acme", { endpoint: "/b", action: null, method: "POST", params: {} }),
+      c1.op("acme", "relay", {}),
+      c2.op("acme", "relay", {}),
     ]);
     expect(typeof r1).toBe("string");
     expect(typeof r2).toBe("string");

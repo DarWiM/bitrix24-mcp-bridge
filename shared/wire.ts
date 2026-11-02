@@ -22,6 +22,7 @@ export interface AuthMessage {
   version?: string;
 }
 
+// Daemon → extension (WS only). The UDS socket refuses this frame: callers name an operation instead.
 export type CallRequest = CallTarget & { type: "call"; id: string; portal?: string };
 
 // MCP client → daemon (UDS only): run a named domain operation; the daemon builds the calls.

@@ -4,14 +4,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConfig, loadConfigState, PROJECT_ROOT } from "./config.js";
 import { runtimePaths } from "./paths.js";
 import { Daemon } from "./bridge/daemon.js";
-import { UdsClient } from "./bridge/uds-client.js";
-import { loadCatalog } from "./catalog/catalog.js";
+import { UdsClient, replaceStaleDaemon, stopDaemon } from "./bridge/uds-client.js";
 import { syncCatalogWithPackage } from "./catalog/sync.js";
+import { OPERATIONS } from "./ops/index.js";
 import { join } from "node:path";
 import { registerTools } from "./tools/register.js";
 import { registerUnconfiguredTools } from "./tools/unconfigured.js";
 import { runSetup } from "./setup/setup.js";
 import { refreshMaterializedExtension } from "./setup/config-core.js";
+import { PACKAGE_VERSION, isReleaseBuild } from "./version.js";
 
 async function runDaemon() {
   const cfg = loadConfig(process.env);
@@ -61,6 +62,17 @@ async function runMcpClient() {
     },
   });
   await client.connect();
+  // The tools below exist only in this version's daemon, so an upgrade must not keep talking to the old one.
+  try {
+    await replaceStaleDaemon(client, {
+      version: PACKAGE_VERSION,
+      enabled: isReleaseBuild,
+      stopDaemon: () => stopDaemon(sockPath),
+      log: (line) => console.error(line),
+    });
+  } catch (e) {
+    console.error(`[mcp] daemon version check failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   // A package upgrade ships new catalog entries, but the installed catalog is the user's file
   // (and the allowlist), so it is never overwritten — only extended with entries this install
@@ -88,14 +100,11 @@ async function runMcpClient() {
     console.error(`[extension] could not refresh: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const catalog = loadCatalog(cfg.catalogPath);
   registerTools(server, {
     sink: client,
-    catalog,
+    operations: OPERATIONS,
     defaultPortal: cfg.defaultPortal,
     portals: Object.keys(cfg.portals),
-    origins: Object.fromEntries(Object.entries(cfg.portals).map(([alias, p]) => [alias, p.origin])),
-    downloadsDir: runtimePaths(process.env).downloadsDir,
   });
   await server.connect(new StdioServerTransport());
   console.error("[mcp] bitrix24-bridge client running on stdio");

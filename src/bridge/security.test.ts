@@ -119,6 +119,16 @@ describe("bridge enforces allowedOrigin", () => {
   });
 });
 
+function udsRequest(sockPath: string, frame: object): Promise<CallResult> {
+  return new Promise<CallResult>((resolve, reject) => {
+    const c = connect(sockPath);
+    const dec = new FrameDecoder();
+    c.on("connect", () => c.write(encodeFrame(frame)));
+    c.on("data", (chunk) => { const [m] = dec.push(chunk) as CallResult[]; if (m) { resolve(m); c.end(); } });
+    c.on("error", reject);
+  });
+}
+
 describe("daemon enforces the mutation policy", () => {
   it("refuses a mutating op when mutations are disabled, without reaching the portal", async () => {
     let ran = false;
@@ -135,18 +145,44 @@ describe("daemon enforces the mutation policy", () => {
     });
     await d.start();
     try {
-      const res = await new Promise<CallResult>((resolve, reject) => {
-        const c = connect(sock);
-        const dec = new FrameDecoder();
-        c.on("connect", () => c.write(encodeFrame({ type: "op", id: "1", op: "mutate", args: {} })));
-        c.on("data", (chunk) => { const [m] = dec.push(chunk) as CallResult[]; if (m) { resolve(m); c.end(); } });
-        c.on("error", reject);
-      });
+      const res = await udsRequest(sock, { type: "op", id: "1", op: "mutate", args: {} });
       expect(res.id).toBe("1");
       expect(res.ok).toBe(false);
       expect(res.error).toMatch(/mutations/);
       expect(ran).toBe(false);
     } finally {
+      await d.stop();
+    }
+  });
+});
+
+describe("daemon accepts only built-in operations", () => {
+  it("refuses a raw call frame without forwarding anything to the extension", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24s-")), "bridge.sock");
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      defaultPortal: "acme", downloadsDir: tmpdir(), allowMutations: true,
+    });
+    await d.start();
+    const ws = new WebSocket(`ws://127.0.0.1:${d.port}`, { headers: { origin: "https://acme.bitrix24.ru" } });
+    try {
+      await new Promise((r) => ws.on("open", r));
+      ws.send(JSON.stringify({ type: "auth", token: "t" }));
+      const forwarded: unknown[] = [];
+      ws.on("message", (raw) => forwarded.push(raw.toString()));
+      await new Promise((r) => setTimeout(r, 50));
+
+      const res = await udsRequest(sock, {
+        type: "call", id: "1", portal: "acme",
+        endpoint: "/bitrix/services/main/ajax.php", action: "tasks.task.delete", method: "POST", params: { taskId: 1 },
+      });
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(res).toEqual({ type: "result", id: "1", ok: false, error: "unsupported request type call" });
+      expect(forwarded).toEqual([]);
+    } finally {
+      ws.close();
       await d.stop();
     }
   });

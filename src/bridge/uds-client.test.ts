@@ -1,13 +1,13 @@
 // src/bridge/uds-client.test.ts
-import { describe, it, expect } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { describe, it, expect, mock } from "bun:test";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server, type Socket } from "node:net";
 import { WebSocket } from "ws";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import { Daemon } from "./daemon.js";
-import { UdsClient, requestDaemonShutdown } from "./uds-client.js";
+import { UdsClient, replaceStaleDaemon, requestDaemonShutdown, stopDaemon } from "./uds-client.js";
 import { z } from "zod";
 import { createRegistry } from "../ops/registry.js";
 import { defineOperation } from "../ops/operation.js";
@@ -30,28 +30,6 @@ function startFakeUdsServer(
 }
 
 describe("UdsClient", () => {
-  it("connects to a running daemon and proxies a call", async () => {
-    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
-    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } }, ...opDefaults("acme") });
-    await d.start();
-
-    const ws = new WebSocket(`ws://127.0.0.1:${d.port}`, { headers: { origin: "https://acme.bitrix24.ru" } });
-    await new Promise((r) => ws.on("open", r));
-    ws.send(JSON.stringify({ type: "auth", token: "t" }));
-    ws.on("message", (raw) => {
-      const m = JSON.parse(raw.toString());
-      if (m.type === "call") ws.send(JSON.stringify({ type: "result", id: m.id, ok: true, data: 42 }));
-    });
-    await new Promise((r) => setTimeout(r, 50));
-
-    const client = new UdsClient({ sockPath: sock });
-    await client.connect();
-    const res = await client.call("acme", { endpoint: "/x", action: null, method: "POST", params: {} });
-    expect(res).toBe(42);
-    client.close();
-    await d.stop();
-  });
-
   it("op() round-trips an operation through a running daemon", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
     const echo = defineOperation({
@@ -141,7 +119,7 @@ describe("UdsClient", () => {
     }
   });
 
-  it("resolves concurrent call() and status() whose replies arrive out of order", async () => {
+  it("resolves concurrent op() and status() whose replies arrive out of order", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
     const received: any[] = [];
     const server = await startFakeUdsServer(sock, (msg, s) => {
@@ -149,7 +127,7 @@ describe("UdsClient", () => {
       if (received.length === 2) {
         // reply in reverse order: the second request received gets answered first
         for (const m of [received[1], received[0]]) {
-          const data = m.type === "status" ? { portals: [], version: "1.2.3" } : "call-payload";
+          const data = m.type === "status" ? { portals: [], version: "1.2.3" } : "op-payload";
           s.write(encodeFrame({ type: "result", id: m.id, ok: true, data }));
         }
       }
@@ -158,11 +136,11 @@ describe("UdsClient", () => {
     const client = new UdsClient({ sockPath: sock });
     await client.connect();
     try {
-      const callPromise = client.call("acme", { endpoint: "/x", action: null, method: "POST", params: {} });
+      const opPromise = client.op("acme", "task_get", { taskId: 1 });
       const statusPromise = client.status();
 
-      const [callRes, statusRes] = await Promise.all([callPromise, statusPromise]);
-      expect(callRes).toBe("call-payload");
+      const [opRes, statusRes] = await Promise.all([opPromise, statusPromise]);
+      expect(opRes).toBe("op-payload");
       expect(statusRes).toEqual({ portals: [], version: "1.2.3" });
     } finally {
       client.close();
@@ -170,24 +148,24 @@ describe("UdsClient", () => {
     }
   });
 
-  it("rejects both a pending call() and a pending status() when the socket closes", async () => {
+  it("rejects both a pending op() and a pending status() when the socket closes", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
     const server = await startFakeUdsServer(sock, () => { /* never reply */ });
 
     const client = new UdsClient({ sockPath: sock });
     await client.connect();
 
-    const callPromise = client.call("acme", { endpoint: "/x", action: null, method: "POST", params: {} });
+    const opPromise = client.op("acme", "task_get", { taskId: 1 });
     const statusPromise = client.status();
     // Attach catch handlers before close() so a same-tick rejection is never "unhandled".
-    const callCaught = callPromise.catch((e: unknown) => e);
+    const opCaught = opPromise.catch((e: unknown) => e);
     const statusCaught = statusPromise.catch((e: unknown) => e);
 
     client.close(); // destroys the socket -> both pending entries must reject
 
-    const [callErr, statusErr] = await Promise.all([callCaught, statusCaught]);
-    expect(callErr).toBeInstanceOf(Error);
-    expect((callErr as Error).message).toMatch(/daemon connection closed/);
+    const [opErr, statusErr] = await Promise.all([opCaught, statusCaught]);
+    expect(opErr).toBeInstanceOf(Error);
+    expect((opErr as Error).message).toMatch(/daemon connection closed/);
     expect(statusErr).toBeInstanceOf(Error);
     expect((statusErr as Error).message).toMatch(/daemon connection closed/);
 
@@ -278,7 +256,7 @@ describe("UdsClient error resilience", () => {
 
     const client = new UdsClient({ sockPath: sock });
     await client.connect();
-    const callPromise = client.call("acme", { endpoint: "/x", action: null, method: "POST", params: {} }).catch((e) => e);
+    const opPromise = client.op("acme", "task_get", { taskId: 1 }).catch((e) => e);
 
     // Simulate an abrupt daemon death on an already-connected client socket.
     serverSock!.destroy(new Error("simulated ECONNRESET"));
@@ -286,10 +264,109 @@ describe("UdsClient error resilience", () => {
     process.off("uncaughtException", onUncaught);
 
     expect(uncaught).toBeUndefined();
-    const err = await callPromise;
+    const err = await opPromise;
     expect(err).toBeInstanceOf(Error);
 
     client.close();
     server.close();
+  });
+});
+
+describe("stopDaemon", () => {
+  it("resolves true once the daemon has stopped and its socket is gone", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const d = new Daemon({ port: 0, token: "t", sockPath: sock, portals: { acme: { origin: "https://acme.bitrix24.ru" } }, ...opDefaults("acme") });
+    await d.start();
+
+    await expect(stopDaemon(sock)).resolves.toBe(true);
+    expect(existsSync(sock)).toBe(false);
+  });
+
+  it("resolves false when no daemon is listening", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    await expect(stopDaemon(sock, 200)).resolves.toBe(false);
+  });
+});
+
+describe("replaceStaleDaemon", () => {
+  function fakeClient(version: string) {
+    const calls: string[] = [];
+    const client = {
+      status: mock(async () => { calls.push("status"); return { portals: [], version }; }),
+      close: mock(() => { calls.push("close"); }),
+      connect: mock(async () => { calls.push("connect"); }),
+    };
+    return { client, calls };
+  }
+
+  it("stops a daemon of another version and reconnects to a fresh one", async () => {
+    const { client, calls } = fakeClient("0.4.0");
+    const stop = mock(async () => { calls.push("stop"); return true; });
+    const log = mock((_line: string) => {});
+
+    await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: stop, log });
+
+    expect(calls).toEqual(["status", "stop", "close", "connect"]);
+    expect(log).toHaveBeenCalledWith("[mcp] restarted daemon 0.4.0 → 0.5.0");
+  });
+
+  it("keeps a daemon of the same version", async () => {
+    const { client, calls } = fakeClient("0.5.0");
+    const stop = mock(async () => true);
+
+    await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: stop, log: () => {} });
+
+    expect(calls).toEqual(["status"]);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("leaves the daemon alone in a dev build", async () => {
+    const { client, calls } = fakeClient("0.4.0");
+    const stop = mock(async () => true);
+
+    await replaceStaleDaemon(client, { version: "0.0.0-dev", enabled: false, stopDaemon: stop, log: () => {} });
+
+    expect(calls).toEqual([]);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("keeps the current connection and says so when the old daemon does not stop", async () => {
+    const { client, calls } = fakeClient("0.4.0");
+    const log = mock((_line: string) => {});
+
+    await replaceStaleDaemon(client, { version: "0.5.0", enabled: true, stopDaemon: async () => false, log });
+
+    expect(calls).toEqual(["status"]);
+    expect(log).toHaveBeenCalledWith("[mcp] daemon 0.4.0 is stale (expected 0.5.0) but did not stop; using it");
+  });
+
+  it("hands the client over to a daemon respawned on the same port and socket", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const portals = { acme: { origin: "https://acme.bitrix24.ru" } };
+    const old = new Daemon({ port: 0, token: "t", sockPath: sock, portals, ...opDefaults("acme") });
+    await old.start();
+    // Read now: a stopped bridge no longer knows the port it was bound to.
+    const port = old.port;
+    let fresh: Daemon | undefined;
+    const client = new UdsClient({
+      sockPath: sock,
+      spawnDaemon: () => {
+        fresh = new Daemon({ port, token: "t", sockPath: sock, portals, ...opDefaults("acme") });
+        void fresh.start();
+      },
+      connectTimeoutMs: 3000,
+    });
+    await client.connect();
+    try {
+      await replaceStaleDaemon(client, { version: "9.9.9", enabled: true, stopDaemon: () => stopDaemon(sock), log: () => {} });
+
+      expect(fresh?.port).toBe(port);
+      const res = await client.status();
+      expect(res.portals).toHaveLength(1);
+    } finally {
+      client.close();
+      await fresh?.stop();
+      await old.stop();
+    }
   });
 });
