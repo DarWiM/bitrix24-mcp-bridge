@@ -1,11 +1,12 @@
 import type { ServerConfig } from "./config-core.js";
-import { addPortal, removePortal, editPortal, setPort, rotateToken, setDefaultPortal } from "./config-core.js";
+import { addPortal, removePortal, editPortal, setPort, setMutations, rotateToken, setDefaultPortal } from "./config-core.js";
 
 export type SetupCommand =
   | { kind: "add-portal"; alias: string; origin: string; catalog?: string }
   | { kind: "remove-portal"; alias: string }
   | { kind: "edit-portal"; alias: string; origin: string; catalog?: string }
   | { kind: "set-port"; port: number }
+  | { kind: "set-mutations"; on: boolean }
   | { kind: "rotate-token" }
   | { kind: "set-default"; alias: string }
   | { kind: "update-extension" };
@@ -35,6 +36,10 @@ export function applySetupCommand(config: ServerConfig, command: SetupCommand): 
     case "set-port": {
       const next = setPort(config, command.port);
       return { config: next, effects: ["write-config", "materialize-extension", "reopen-tab", "restart-daemon"], message: `port set to ${command.port}` };
+    }
+    case "set-mutations": {
+      const next = setMutations(config, command.on);
+      return { config: next, effects: ["write-config", "restart-daemon"], message: `mutations ${command.on ? "enabled" : "disabled"}` };
     }
     case "rotate-token": {
       const next = rotateToken(config);

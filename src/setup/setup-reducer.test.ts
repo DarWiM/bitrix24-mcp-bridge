@@ -26,6 +26,16 @@ describe("applySetupCommand", () => {
     expect(r.effects).toEqual(["write-config", "materialize-extension", "reopen-tab", "restart-daemon"]);
   });
 
+  it("set-mutations → writes config and restarts the daemon only", () => {
+    const off = applySetupCommand(base(), { kind: "set-mutations", on: false });
+    expect(off.config.mutations).toBe(false);
+    expect(off.effects).toEqual(["write-config", "restart-daemon"]);
+    expect(off.message).toBe("mutations disabled");
+    const on = applySetupCommand(off.config, { kind: "set-mutations", on: true });
+    expect(on.config.mutations).toBe(true);
+    expect(on.message).toBe("mutations enabled");
+  });
+
   it("rotate-token → new token, reopen-tab effect", () => {
     const before = base();
     const r = applySetupCommand(before, { kind: "rotate-token" });

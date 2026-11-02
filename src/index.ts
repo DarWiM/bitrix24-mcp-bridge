@@ -24,7 +24,7 @@ async function runDaemon() {
     sockPath: paths.sock,
     defaultPortal: cfg.defaultPortal,
     downloadsDir: paths.downloadsDir,
-    allowMutations: true,
+    allowMutations: cfg.allowMutations,
   });
   await daemon.start();
   const shutdown = () => daemon.stop().finally(() => process.exit(0));

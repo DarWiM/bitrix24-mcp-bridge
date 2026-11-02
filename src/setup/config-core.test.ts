@@ -11,6 +11,7 @@ import {
   removePortal,
   editPortal,
   setPort,
+  setMutations,
   rotateToken,
   setDefaultPortal,
 } from "./config-core.js";
@@ -154,6 +155,14 @@ describe("mutators (immutable)", () => {
     expect(setPort(base(), 40000).port).toBe(40000);
     expect(() => setPort(base(), 0)).toThrow(/port/i);
     expect(() => setPort(base(), 70000)).toThrow(/port/i);
+  });
+
+  it("setMutations records the flag without touching the rest", () => {
+    const before = base();
+    const off = setMutations(before, false);
+    expect(off.mutations).toBe(false);
+    expect(off.portals).toEqual(before.portals);
+    expect(setMutations(off, true).mutations).toBe(true);
   });
 
   it("rotateToken changes the token, keeps everything else", () => {

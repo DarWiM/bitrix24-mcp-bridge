@@ -72,7 +72,7 @@ function printManualSteps(paths: RuntimePaths): void {
 }
 
 function printState(config: ServerConfig, paths: RuntimePaths): void {
-  stdout.write(`\nConfig: ${paths.configJson}\nPort: ${config.port}   Default portal: ${config.defaultPortal}\nPortals:\n`);
+  stdout.write(`\nConfig: ${paths.configJson}\nPort: ${config.port}   Default portal: ${config.defaultPortal}\nMutations: ${config.mutations === false ? "off" : "on"}\nPortals:\n`);
   for (const [alias, p] of Object.entries(config.portals)) {
     stdout.write(`  - ${alias}: ${p.origin}${alias === config.defaultPortal ? "   (default)" : ""}\n`);
   }
@@ -138,7 +138,7 @@ async function firstRun(ask: Ask, paths: RuntimePaths): Promise<void> {
   printManualSteps(paths);
 }
 
-async function promptCommand(ask: Ask, choice: string): Promise<SetupCommand | null> {
+async function promptCommand(ask: Ask, choice: string, current: ServerConfig): Promise<SetupCommand | null> {
   switch (choice) {
     case "a": {
       const origin = (await ask("New portal origin: ")).trim();
@@ -156,6 +156,8 @@ async function promptCommand(ask: Ask, choice: string): Promise<SetupCommand | n
       return { kind: "set-default", alias: (await ask("Alias to make default: ")).trim() };
     case "p":
       return { kind: "set-port", port: Number((await ask("New port: ")).trim()) };
+    case "m":
+      return { kind: "set-mutations", on: current.mutations === false };
     case "t":
       return { kind: "rotate-token" };
     case "u":
@@ -171,11 +173,11 @@ async function editMenu(ask: Ask, paths: RuntimePaths, initial: ServerConfig): P
     printState(current, paths);
     const choice = (
       await ask(
-        "\n[a]dd portal  [r]emove portal  [e]dit portal  [d]efault portal  [p]ort  [t]oken rotate  [u]pdate extension  [q]uit: ",
+        "\n[a]dd portal  [r]emove portal  [e]dit portal  [d]efault portal  [p]ort  [m]utations on/off  [t]oken rotate  [u]pdate extension  [q]uit: ",
       )
     ).trim().toLowerCase();
     if (choice === "q" || choice === "") break;
-    const command = await promptCommand(ask, choice);
+    const command = await promptCommand(ask, choice, current);
     if (!command) {
       stdout.write("Unknown choice.\n");
       continue;

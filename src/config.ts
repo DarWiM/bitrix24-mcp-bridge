@@ -16,6 +16,7 @@ export interface Config {
   bitrixOrigin: string;
   catalogPath: string;
   allowedOrigins: string[];
+  allowMutations: boolean;
 }
 
 // src/config.ts → ".." is the repo root; independent of process.cwd().
@@ -29,6 +30,15 @@ interface FileConfig {
   defaultPortal?: string;
   portals?: Record<string, PortalConfig>;
   catalog?: string;
+  mutations?: boolean;
+}
+
+function parseMutationsEnv(raw: string | undefined): boolean | undefined {
+  const value = raw?.trim().toLowerCase();
+  if (!value) return undefined;
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new Error(`BITRIX_MCP_MUTATIONS must be "on" or "off", got "${raw}"`);
 }
 
 function readFileConfig(env: NodeJS.ProcessEnv): FileConfig {
@@ -79,6 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     bitrixOrigin: portals[defaultPortal].origin,
     catalogPath,
     allowedOrigins: Object.values(portals).map((p) => p.origin),
+    allowMutations: parseMutationsEnv(env.BITRIX_MCP_MUTATIONS) ?? file.mutations !== false,
   };
 }
 

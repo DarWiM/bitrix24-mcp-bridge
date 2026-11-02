@@ -44,6 +44,38 @@ describe("loadConfig", () => {
     expect(cfg.bitrixOrigin).toBe("https://acme.bitrix24.ru");
   });
 
+  describe("allowMutations", () => {
+    const withFile = (file: object) => {
+      const home = mkdtempSync(join(tmpdir(), "br24-"));
+      writeFileSync(join(home, "config.json"), JSON.stringify({
+        token: "t",
+        portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+        ...file,
+      }));
+      return home;
+    };
+
+    it("defaults to true", () => {
+      expect(loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({}) }).allowMutations).toBe(true);
+    });
+
+    it("file mutations:false disables", () => {
+      expect(loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({ mutations: false }) }).allowMutations).toBe(false);
+    });
+
+    it("env wins over the file in both directions", () => {
+      const off = loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({}), BITRIX_MCP_MUTATIONS: "off" });
+      expect(off.allowMutations).toBe(false);
+      const on = loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({ mutations: false }), BITRIX_MCP_MUTATIONS: "ON" });
+      expect(on.allowMutations).toBe(true);
+    });
+
+    it("rejects an unknown env value, naming the variable", () => {
+      expect(() => loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({}), BITRIX_MCP_MUTATIONS: "maybe" }))
+        .toThrow(/BITRIX_MCP_MUTATIONS/);
+    });
+  });
+
   it("anchors an explicit relative catalog path at the project root", () => {
     const cfg = loadConfig({
       BITRIX_MCP_TOKEN: "secret",

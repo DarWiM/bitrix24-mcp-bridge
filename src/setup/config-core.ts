@@ -12,6 +12,7 @@ export interface ServerConfig {
   defaultPortal: string;
   portals: Record<string, PortalConfig>;
   catalog?: string;
+  mutations?: boolean;
 }
 
 function validateAlias(alias: string): string {
@@ -100,6 +101,10 @@ export function setPort(config: ServerConfig, port: number): ServerConfig {
     throw new Error(`invalid port ${port} (expected 1..65535)`);
   }
   return { ...config, port };
+}
+
+export function setMutations(config: ServerConfig, on: boolean): ServerConfig {
+  return { ...config, mutations: on };
 }
 
 export function rotateToken(config: ServerConfig): ServerConfig {
