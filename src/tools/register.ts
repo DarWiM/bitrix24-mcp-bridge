@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail.js";
 import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
 import { formatComments, parseComments, parseFirstPage, type TaskComment } from "./taskComments.js";
-import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
+import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "../ops/download.js";
 import { PACKAGE_VERSION } from "../version.js";
 
 export interface ToolDeps {

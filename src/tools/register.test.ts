@@ -717,7 +717,7 @@ describe("download tools", () => {
     });
     registerTools(server, deps(call, dir));
 
-    const res = await handlers["bitrix_file_download"]({ url: "https://d.bitrix24.ru/x?action=disk.api.file.download&fileId=1" });
+    const res = await handlers["bitrix_file_download"]({ url: "https://d.bitrix24.ru/bitrix/services/main/ajax.php?action=disk.api.file.download&fileId=1" });
 
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toMatch(/already exists/);
@@ -735,7 +735,7 @@ describe("download tools", () => {
     });
     registerTools(server, deps(call, dir));
 
-    const res = await handlers["bitrix_file_download"]({ url: "https://d.bitrix24.ru/x?action=disk.api.file.download", savePath: join(dir, "chosen.png") });
+    const res = await handlers["bitrix_file_download"]({ url: "https://d.bitrix24.ru/bitrix/services/main/ajax.php?action=disk.api.file.download", savePath: join(dir, "chosen.png") });
 
     expect(call.mock.calls[0][1].savePath).toBe(join(dir, "chosen.png"));
     expect(JSON.parse(res.content[0].text).path).toBe(join(dir, "chosen.png")); // server name ignored on purpose

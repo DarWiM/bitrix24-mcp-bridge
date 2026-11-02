@@ -14,6 +14,19 @@ export interface ResolvedTarget {
   endpoint: string;
 }
 
+// The extension replays the URL as a GET with the session's CSRF token appended, so an
+// unrestricted URL would be a raw authenticated GET to any portal endpoint. Only file links pass.
+const DOWNLOAD_LINKS: ReadonlyArray<{ path: string; actions: ReadonlySet<string> }> = [
+  {
+    path: "/bitrix/services/main/ajax.php",
+    actions: new Set(["disk.api.file.download", "disk.attachedObject.download", "call.Track.download"]),
+  },
+  {
+    path: "/bitrix/tools/disk/uf.php",
+    actions: new Set(["download", "show", "downloadArchiveByEntity"]),
+  },
+];
+
 export function resolvePortalUrl(rawUrl: string, origins: Record<string, string>): ResolvedTarget {
   let url: URL;
   try {
@@ -25,6 +38,11 @@ export function resolvePortalUrl(rawUrl: string, origins: Record<string, string>
   if (!match) {
     const known = Object.values(origins).join(", ") || "none configured";
     throw new Error(`refusing to download from ${url.origin} — not a configured portal (known: ${known})`);
+  }
+  const action = url.searchParams.get("action");
+  const allowed = DOWNLOAD_LINKS.some((link) => link.path === url.pathname && action !== null && link.actions.has(action));
+  if (!allowed) {
+    throw new Error(`refusing to download ${url.pathname}?action=${action ?? "none"} — not a portal file link`);
   }
   return { portal: match[0], endpoint: `${url.pathname}${url.search}` };
 }
