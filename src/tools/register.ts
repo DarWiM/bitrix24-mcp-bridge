@@ -6,9 +6,9 @@ import { HELP } from "./help.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail.js";
-import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
-import { formatComments, parseComments, parseFirstPage, type TaskComment } from "./taskComments.js";
+import { formatTranscript, parseCallDetail, type CallDetail } from "../ops/callDetail.js";
+import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "../ops/chatCalls.js";
+import { formatComments, parseComments, parseFirstPage, type TaskComment } from "../ops/taskComments.js";
 import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "../ops/download.js";
 import { PACKAGE_VERSION } from "../version.js";
 
