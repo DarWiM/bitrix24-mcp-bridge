@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Bitrix24 MCP Bridge",
   "version": "__VERSION__",
-  "description": "Отдаёт текущую сессию Bitrix24 локальному MCP-серверу (чтение и выполнение вызовов из каталога).",
+  "description": "Отдаёт текущую сессию Bitrix24 локальному MCP-серверу для встроенных операций моста.",
   "host_permissions": ["__ORIGIN__/*"],
   "content_scripts": [
     {

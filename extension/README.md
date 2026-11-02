@@ -11,8 +11,10 @@
   прочитать токен, не зная динамический (`use_dynamic_url`) URL ресурса `config.json`.
 - **`sessid-shim.js`** — `world: MAIN`, крошечный. Единственная причина быть в MAIN — доступ к
   `window.BX.bitrix_sessid()`. Отвечает на `postMessage`-запрос коннектора свежим `sessid`.
-  Никакого токена и сокета. В capture-сборке он же ставит перехват трафика страницы и пересылает
-  записи коннектору (тот отправляет их в daemon).
+  Никакого токена и сокета.
+
+Расширение только исполняет запросы, которые строит daemon для встроенных операций моста; само оно
+трафик страницы не перехватывает и не записывает.
 
 ## Откуда берётся расширение
 
@@ -48,7 +50,7 @@ daemon читает серверный `config.json` только на стар�
 
 Исходники (TypeScript) — в `extension/src/`: `bridge-core.ts` (чистые хелперы),
 `bridge-protocol.ts` (чистые: разбор `config.json` + протокол `postMessage`, покрыты
-юнит-тестами), `connector.ts`, `sessid-shim.ts`, `capture.ts`, тесты.
+юнит-тестами), `connector.ts`, `sessid-shim.ts`, тесты.
 `extension/config.example.json` — пример схемы `config.json` (`{ token, port }`).
 
 Типы браузерной среды — в `extension/tsconfig.json` (отдельный от серверного, с `lib: DOM`);

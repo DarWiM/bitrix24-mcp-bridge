@@ -7,22 +7,24 @@
 ([`apidocs.bitrix24.com`](https://apidocs.bitrix24.com); агенту с MCP context7 — библиотека
 `/bitrix24/b24restdocs`). **Внутренние ajax-контроллеры** (`im.v2.*`, `tasks.v2.*`, `ui.entityselector.*`)
 публичных доков не имеют — всё ниже добыто живым реверсом; конверт и регистр полей у них могут
-отличаться от 📖-аналогов. Имена полей стандартны для облачного Bitrix24; на другом портале сверяйся
-реверсом (`docs/reconnaissance.md`).
+отличаться от 📖-аналогов. Имена полей стандартны для облачного Bitrix24; на другом портале ответ
+может отличаться.
 
 ---
 
 ## 1. Как вызывать
 
-- **Типизированные инструменты** (`bitrix_tasks_list`, `bitrix_task_get`, `bitrix_chat_load`, …) —
-  обёртки с разумными дефолтами; их полный список и описания видны среди MCP-инструментов. Точная
-  выборка — опциональным `params`: он мержится **последним** и перекрывает дефолты.
-- **`bitrix_call { name, params }`** — любое имя из каталога (`actions.json`), `params` в нативном
-  формате Bitrix (§3). Полный список имён отдаёт сам `bitrix_call` в своём описании.
-- Каталог может содержать **мутирующие** вызовы: наличие записи = разрешение вызвать. Это не режим
-  «только чтение».
-- У обёрток есть дефолты (напр. `bitrix_tasks_list` сортирует `{"ID":"desc"}`), у `bitrix_call` их нет —
-  один и тот же фильтр даст разные страницы. Сравниваешь выдачи — задавай `order` явно.
+- **Каждый инструмент `bitrix_*` — встроенная операция моста** с типизированными аргументами
+  (`taskId`, `chatId`, `query`, …) и разумными дефолтами; полный список — §3 и описания MCP-инструментов.
+  Вызвать произвольный метод Bitrix по имени нельзя — только эти операции.
+- **`params`** (необязательный, у операций чтения) — объект в **нативном формате Bitrix**
+  (`select`/`filter`/`order`/пагинация, §4). Он мержится **последним** и перекрывает дефолты операции.
+- **`portal`** (необязательный, у всех) — alias портала; по умолчанию — портал по умолчанию из настроек.
+- У операций есть дефолты (напр. `bitrix_tasks_list` сортирует `{"ID":"desc"}`) — сравниваешь выдачи
+  с разными `params`, задавай `order` явно.
+- **Мутирующие** операции (⚠ в §3) меняют данные на портале. Пользователь может выключить их
+  переключателем мутаций — тогда вызов вернёт ошибку `operation <имя> changes data, but mutations are
+  disabled…`; это настройка пользователя, обойти её нельзя — сообщи пользователю. Операции чтения переключатель не трогает.
 - Ответ `invalid_csrf` / `invalid_authentication` = сессия портала протухла → перелогинься в браузере
   на вкладке портала.
 
@@ -44,39 +46,51 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 
 ---
 
-## 3. Каталог: имя → action → params
+## 3. Инструменты: что делает → ключевые аргументы
 
-Форма `params` различается по методу: где-то плоско, где-то вложенно, где-то обёрнуто в `params[…]` —
-колонка «params» показывает точную форму (кодирование тела мост берёт на себя).
+`params` в таблице не повторяется — он есть у всех операций с пометкой «+ `params`» (§1). Форма
+`params` различается по методу: где-то плоско, где-то вложенно, где-то обёрнуто в `params[…]` — колонка
+«params / пагинация» показывает точную форму (кодирование тела мост берёт на себя).
 
-| Имя (`bitrix_call`) | action / endpoint | params | Пагинация |
+| Инструмент | Что делает | Ключевые аргументы | params / пагинация |
 |---|---|---|---|
-| `tasks.list` | `tasks.task.list` | верхний уровень: `filter{RESPONSIBLE_ID,REAL_STATUS,GROUP_ID,…}`, `select[]`, `order{}` | **`PAGEN_1`** — номер страницы (1, 2, 3…), страница = 20 задач; `start` **не работает** (вернёт ту же первую страницу) |
-| `task.get` | `tasks.task.get` | верхний уровень: `taskId`, `select[]` | — |
-| `task.v2.get` | `tasks.v2.Task.get` | вложенно: `{"task":{"id":N}}` | — |
-| `task.scrum.info` | `tasks.v2.Scrum.getTaskInfo` | `{"taskId":N}` | — |
-| `task.files` | `tasks.v2.File.listObjects` | `{"ids":[N,…]}` | — |
-| `task.views.count` | `tasks.v2.Task.View.User.count` | вложенно: `{"task":{"id":N}}` | — |
-| `task.subtasks` | `tasks.v2.Task.Relation.Child.list` | `{"taskId":N,"withIds":true,"navigation":{"size":N}}` | `navigation` |
-| `task.related` | `tasks.v2.Task.Relation.Related.list` | как `task.subtasks` | `navigation` |
-| `projects.list` | `socialnetwork.api.workgroup.list` | верхний уровень: `select[]`, `order{}`, `filter{}` | `start` (шаг 50; `start=(N-1)*50`, `-1` — ответ без `total`) 📖 |
-| `projects.get` | `socialnetwork.api.workgroup.get` | **обёрнуто**: `params[groupId]`, `params[select][]` | — |
-| `chats.recent` | `/rest/im.recent.list.json` | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY` | `LIMIT` |
-| `recent.load` | `im.v2.Recent.load` | плоско: `limit`, `filter[recentSection]` (`tasksTask`/`collab`/…), `filter[unread]`, `filter[parentId]` | `recent.tail` |
-| `recent.tail` | `im.v2.Recent.tail` | плоско: `limit`, `filter[lastMessageDate]` (курсор), `filter[recentSection]` | `filter[lastMessageDate]` |
-| `chat.load` | `im.v2.Chat.load` | плоско: `dialogId`\|`chatId`, `messageLimit` | — |
-| `chat.dialogId` | `im.v2.Chat.getDialogId` | плоско: `externalId` (напр. `"sg"+groupId`) | — |
-| `chat.messages` | `im.v2.Chat.Message.list` | плоско: `chatId`, `limit` | только последняя страница — назад **не листает**, используй `chat.messages.tail` |
-| `chat.messages.tail` | `im.v2.Chat.Message.tail` | плоско: `chatId`, `limit`, `filter[lastId]`, `order[id]` | `filter[lastId]` (§5.1) |
-| `chat.message.read` | `im.v2.Chat.Message.read` | плоско: `chatId`, `ids[]`, `actionUuid` | ⚠ мутирующий |
-| `chat.read.all` | `im.v2.Chat.readAll` | без параметров | ⚠ мутирующий |
-| `im.user.get` | `/rest/im.user.get.json` | плоско: `ID` | — |
-| `im.chat.get` | `/rest/im.chat.get.json` | плоско: `ENTITY_TYPE`, `ENTITY_ID` (напр. `TASKS_TASK`+taskId) | — |
-| `entityselector.load` | `ui.entityselector.load` | `{"dialog":{entities,preselectedItems,…}}` | — |
-| `entityselector.search` | `ui.entityselector.doSearch` | `{"dialog":{…},"searchQuery":{"query":"…","queryWords":["…"]}}` | — |
-| `call.detail` | `GET /call/detail/{callId}` | `callId` (подставляется в путь), `IFRAME=Y`, `IFRAME_TYPE=SIDE_SLIDER` → HTML | см. §5.4 |
-| `task.comments.page` | `GET /task/comments/{taskId}/` | `taskId` (в путь), `IFRAME=Y`, `IFRAME_TYPE=SIDE_SLIDER` → HTML старых комментариев | см. §5.6 |
-| `task.comments.navigate` | `bitrix:forum.comments` → `navigateComment` | форма: `ENTITY_XML_ID=TASK_<id>`, `EXEMPLAR_ID`, `signedParameters` (оба — из HTML первой страницы), `FILTER[<ID]` | `FILTER[<ID]` — курсор; проще `bitrix_task_comments` (§5.6) |
+| `bitrix_help` | эта справка | — | — |
+| `bitrix_status` | какие порталы сконфигурированы и подключены, версии моста и расширения | — | — |
+| *Задачи* | | | |
+| `bitrix_tasks_list` | список задач | + `params` | верхний уровень: `filter{RESPONSIBLE_ID,REAL_STATUS,GROUP_ID,…}`, `select[]`, `order{}`; **`PAGEN_1`** — номер страницы (1, 2, 3…), страница = 20 задач; `start` **не работает** (вернёт ту же первую страницу) |
+| `bitrix_task_get` | карточка задачи (в т.ч. `CHAT_ID`) | `taskId` + `params` | верхний уровень: `select[]` |
+| `bitrix_task_get_v2` | карточка задачи через v2-подсистему | `taskId` + `params` | — |
+| `bitrix_task_scrum_info` | спринт / эпик / story points задачи | `taskId` + `params` | — |
+| `bitrix_task_files` | файлы задачи (ссылки для скачивания) | `ids[]` — id **прикреплённых объектов** (§4), не задач + `params` | `downloadUrl` в ответе относительный — допиши origin портала |
+| `bitrix_task_views_count` | сколько пользователей просмотрели задачу | `taskId` + `params` | — |
+| `bitrix_task_subtasks` / `bitrix_task_related` | подзадачи / связанные задачи | `taskId` + `params` | `navigation{size}` (дефолт 10) |
+| `bitrix_task_comments` | старые комментарии задачи (форум), §5.6 | `taskId`, `limit?`, `maxPages?`, `beforeId?`, `output?` | `beforeId` — курсор |
+| *Проекты* | | | |
+| `bitrix_projects_list` | рабочие группы / проекты | + `params` | верхний уровень: `select[]`, `order{}`, `filter{}`; `start` (шаг 50; `start=(N-1)*50`, `-1` — ответ без `total`) 📖 |
+| `bitrix_project_get` | карточка группы (участники, `CHAT_ID`) | `groupId` + `params` | **обёрнуто**: `params[groupId]`, `params[select][]` |
+| *Чаты* | | | |
+| `bitrix_chats_recent` | недавние диалоги (без чатов задач) | + `params` | плоско: `LIMIT`, `SKIP_OPENLINES`, `UNREAD_ONLY` |
+| `bitrix_recent_load` | недавние по секции (`tasksTask` — чаты задач) | `section?`, `limit?`, `unread?`, `parentId?` + `params` | дальше — `bitrix_recent_tail` |
+| `bitrix_recent_tail` | листать недавние вглубь | `lastMessageDate` (курсор), `section?`, `limit?`, `unread?` + `params` | `lastMessageDate` |
+| `bitrix_chat_load` | открыть чат, первые сообщения, числовой `chatId` | `dialogId` \| `chatId`, `messageLimit?` + `params` | — |
+| `bitrix_chat_get_dialog_id` | `externalId` → `dialogId` (напр. `"sg"+groupId`) | `externalId` + `params` | — |
+| `bitrix_chat_messages` | последние сообщения чата | `chatId`, `limit?` + `params` | только последняя страница — назад **не листает**, используй `bitrix_chat_history` |
+| `bitrix_chat_history` | листать историю чата вглубь | `chatId`, `beforeId?`, `limit?` + `params` | `beforeId` (§5.1) |
+| `bitrix_chat_mark_read` ⚠ | пометить сообщения прочитанными | `chatId`, `ids[]`, `actionUuid?` + `params` | — |
+| `bitrix_chat_read_all` ⚠ | пометить **все** чаты прочитанными | + `params` | — |
+| *Люди / поиск* | | | |
+| `bitrix_user_get` | карточка пользователя мессенджера | `userId` + `params` | — |
+| `bitrix_entity_search` | текстовый поиск чатов / людей | `query`, `section?`, `dialog?` + `params` | — |
+| `bitrix_entity_selector` | загрузка entityselector со своим `dialog` | `dialog` + `params` | `{"dialog":{entities,preselectedItems,…}}` |
+| `bitrix_entity_chat` | `chatId` чата, привязанного к объекту | `entityType`, `entityId` + `params` | — |
+| *Созвоны и файлы* | | | |
+| `bitrix_chat_calls` | звонки в чате (`callId` + резюме), §5.4 | `chatId`, `limit?`, `maxPages?`, `beforeId?` + `params` | `beforeId` — курсор |
+| `bitrix_call_detail` | всё по звонку, §5.4 | `callId`, `transcript?` + `params` | — |
+| `bitrix_call_recording` | скачать аудиозапись звонка, §5.5 | `callId`, `savePath?`, `overwrite?` | — |
+| `bitrix_file_download` | скачать файл портала на диск, §5.5 | `url`, `savePath?`, `overwrite?` | — |
+
+⚠ — мутирующие; их может выключить пользователь (§1). `bitrix_task_comments` ничего не помечает
+прочитанным и мутирующим не считается.
 
 ---
 
@@ -85,7 +99,9 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 **Задача** (`tasks.task.*`) — поля для `select`/`filter` в UPPER_CASE: `ID`, `TITLE`, `DESCRIPTION`,
 `STATUS`, `REAL_STATUS`, `RESPONSIBLE_ID`, `CREATED_BY`, `CREATED_DATE`, `CHANGED_DATE`, `DEADLINE`,
 `CLOSED_DATE`, `PRIORITY`, `GROUP_ID`, `TAGS`, `TIME_ESTIMATE`, **`CHAT_ID`** (id чата-обсуждения
-задачи — прямой резолвер `taskId → chatId`, §5.2), `UF_*`. Ответ подкладывает объекты `group`,
+задачи — прямой резолвер `taskId → chatId`, §5.2), `COMMENTS_COUNT` (§5.6), **`UF_TASK_WEBDAV_FILES`**
+(id **прикреплённых объектов** — именно их ждёт `bitrix_task_files`; с id задачи он вернёт пустой
+список без ошибки), `UF_*`. Ответ подкладывает объекты `group`,
 `responsible`, `creator`, `action`.
 📖 (`tasks.task.get`/`list`) — сверх этого: `parentId`, `stageId`, `sprintId`, `backlogId`,
 `commentsCount`, `timeSpentInLogs`, `favorite`, `flowId`, `mark`, `accomplices[]`, `auditors[]`,
@@ -117,7 +133,7 @@ WITH_PARSED_DESCRIPTION}`.
 > **Scrum-задачи (спринты).** Поле `SPRINT_ID` задачи и жёсткий `filter[SPRINT_ID]` могут расходиться:
 > задача числится за спринтом по своему полю, но не попадает в выборку по фильтру (возвращена в бэклог
 > или в иной stage). Если по фильтру «маловато» — перепроверь без него и отфильтруй по
-> `SPRINT_ID`/`STAGE_ID` у себя. Метода «колонки scrum-доски» (`STAGE_ID` → имя колонки) в каталоге нет.
+> `SPRINT_ID`/`STAGE_ID` у себя. Инструмента «колонки scrum-доски» (`STAGE_ID` → имя колонки) пока нет.
 
 **Группа/проект — список** (`workgroup.list`): `ID`, `NAME`, `DESCRIPTION`, `NUMBER_OF_MEMBERS`,
 `OWNER_ID`, `DATE_CREATE`, `PROJECT` (Y=проект/N=группа), `TYPE`; **без `select` вернётся только `ID`**.
@@ -148,12 +164,13 @@ WITH_PARSED_DESCRIPTION}`.
 ```jsonc
 // открытые задачи ответственного 55, по дедлайну, вторая страница
 bitrix_tasks_list { "params": { "filter": {"RESPONSIBLE_ID":55,"REAL_STATUS":2},
-                                "order": {"DEADLINE":"asc"}, "start": 50 } }
+                                "order": {"DEADLINE":"asc"}, "PAGEN_1": 2 } }
 
 // карточка задачи с расширенным набором полей; v2-подсистема; файлы, просмотры, связи
 bitrix_task_get    { "taskId": 4229, "params": { "select": ["ID","TITLE","DESCRIPTION","TAGS"] } }
 bitrix_task_get_v2 { "taskId": 4229 }                       // → { "task": { "id": 4229 } }
-bitrix_call { "name": "task.files", "params": { "ids": [4229] } }
+bitrix_task_get   { "taskId": 4229, "params": { "select": ["ID","UF_TASK_WEBDAV_FILES"] } }
+bitrix_task_files { "ids": [<id из UF_TASK_WEBDAV_FILES>] }   // НЕ id задачи
 bitrix_task_subtasks { "taskId": 4229 }
 bitrix_task_related  { "taskId": 4229 }
 
@@ -304,7 +321,7 @@ bitrix_call_detail { "callId": 4242, "transcript": "file" }      // всегда
 **Расшифровка длинного звонка не приходит в ответе.** У часовой встречи она даёт ~70 КБ из 80 КБ, поэтому
 свыше ~20 КБ (режим `"auto"` = умолчание) пишется на диск, а в ответе остаются `transcript: []`,
 `transcriptCount` и **`files`**: `files.transcript` — `call-<id>-transcript.txt`, где строка = реплика
-(`[11:10—11:24] Генрих Богацкий: …`), её удобно **грепать** (найденная строка сама несёт таймкод и
+(`[11:10—11:24] Имя Фамилия: …`), её удобно **грепать** (найденная строка сама несёт таймкод и
 спикера); `files.json` — полный ответ с расшифровкой. Оба файла — кеш звонка, перезаписываются.
 
 Тонкости:
@@ -330,7 +347,11 @@ bitrix_file_download { "url": "…", "savePath": "/tmp/photo.png", "overwrite": 
 трактуется как имя внутри этой папки. Потолок — 512 МБ.
 
 Тонкости:
-- **Граница безопасности — origin**: скачивается только с origin сконфигурированного портала.
+- **Только ссылки на файлы** сконфигурированного портала: `/bitrix/services/main/ajax.php` с `action`
+  `disk.api.file.download` / `disk.attachedObject.download` / `call.Track.download` или
+  `/bitrix/tools/disk/uf.php` с `action` `download` / `show` / `downloadArchiveByEntity`. Чужой origin
+  → `not a configured portal`; другой путь, другой, повторённый или `action[]` → `not a portal file
+  link`. Бери ссылки из ответов моста, не собирай их сам.
 - **Имя даёт портал** (`Content-Disposition`), поэтому без `savePath` угадывать его не нужно.
 - **Повторное скачивание** того же файла падает с `already exists` — передай `overwrite: true`.
 
@@ -368,5 +389,5 @@ system, files[] }`, плюс `total`, `oldestId`, `scannedPages` и **`reachedHi
 
 ---
 
-Расширение каталога новыми методами, транспорт (`bodyType`, `responseType`, path-параметры) и
-доставка правок в живой daemon — `docs/reconnaissance.md`.
+Не хватает инструмента под нужное действие — скажи пользователю: новые операции добавляет
+мейнтейнер моста (процесс — `docs/reconnaissance.md` в репозитории моста).

@@ -143,7 +143,7 @@ export function buildManifest(config: ServerConfig): ExtensionManifest {
     manifest_version: 3,
     name: "Bitrix24 MCP Bridge",
     version: EXT_VERSION,
-    description: "Отдаёт текущую сессию Bitrix24 локальному MCP-серверу (чтение и выполнение вызовов из каталога).",
+    description: "Отдаёт текущую сессию Bitrix24 локальному MCP-серверу для встроенных операций моста.",
     host_permissions: matches,
     content_scripts: [
       { matches, js: ["connector.js"], world: "ISOLATED", run_at: "document_idle" },
