@@ -6,6 +6,7 @@ import { createRegistry, runOperation } from "./registry.js";
 const ctx: OpContext = {
   portal: "main",
   origin: "https://example.bitrix24.test",
+  origins: { main: "https://example.bitrix24.test" },
   downloadsDir: "/tmp/downloads",
   call: async () => ({}),
   callBinary: async () => ({ path: "/tmp/x", bytes: 0, contentType: "", fileName: null }),
@@ -27,7 +28,7 @@ function makeOp(mutating: boolean) {
     name: mutating ? "task.write" : "task.read",
     description: "test op",
     mutating,
-    input: { taskId: idArg },
+    input: { taskId: idArg() },
     async run(_ctx, args) {
       calls.push(args);
       return { ok: true };
@@ -82,6 +83,11 @@ describe("operation registry", () => {
     const err = await rejection(runOperation(reg, "nope", {}, ctx, { allowMutations: true }));
     expect(err).toBeInstanceOf(OpRefusedError);
     expect(err.message).toContain("unknown operation");
+  });
+
+  it("hands out a fresh id schema per field", () => {
+    // A shared instance would surface as a `$ref` in the tool's JSON Schema.
+    expect(idArg()).not.toBe(idArg());
   });
 
   it("throws on duplicate operation names", () => {

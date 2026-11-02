@@ -4,9 +4,12 @@ import type { CallTarget, DownloadResult } from "../../shared/wire.js";
 export interface OpContext {
   portal: string;
   origin: string;
+  // alias → origin of every configured portal: a portal-minted link may belong to another portal.
+  origins: Record<string, string>;
   downloadsDir: string;
-  call(target: CallTarget): Promise<unknown>;
-  callBinary(target: CallTarget, destPath: string): Promise<DownloadResult>;
+  // `portal` sends this one request to another configured portal instead of ctx.portal.
+  call(target: CallTarget, portal?: string): Promise<unknown>;
+  callBinary(target: CallTarget, destPath: string, portal?: string): Promise<DownloadResult>;
 }
 
 export interface Operation {
@@ -21,7 +24,9 @@ export class OpInputError extends Error {}
 export class OpRefusedError extends Error {}
 
 // Digits only: ids also end up in file names, so anything path-like must not get through.
-export const idArg = z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]).transform(Number);
+// A factory, because zod-to-json-schema turns a schema instance reused within one input into a
+// `$ref` to the first field, and tool schemas should stay plain.
+export const idArg = () => z.union([z.number().int().positive(), z.string().regex(/^\d+$/)]).transform(Number);
 
 export function defineOperation<S extends z.ZodRawShape>(def: {
   name: string;

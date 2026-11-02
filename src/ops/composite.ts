@@ -59,14 +59,15 @@ async function loadCallDetail(ctx: OpContext, callId: number | string, agentPara
 }
 
 // The portal mints signed, single-file URLs, so downloads take a URL and check it instead of
-// naming a request. The body never enters the agent's context: it is streamed to disk.
-async function downloadToDisk(ctx: OpContext, args: {
+// naming a request. The body never enters the agent's context: it is streamed to disk. The
+// download runs through the portal the link belongs to, chosen among `origins`.
+async function downloadToDisk(ctx: OpContext, origins: Record<string, string>, args: {
   url: string;
   savePath?: string;
   overwrite?: boolean;
   fallbackName: string;
 }): Promise<DownloadResult> {
-  const target = resolvePortalUrl(args.url, { [ctx.portal]: ctx.origin });
+  const target = resolvePortalUrl(args.url, origins);
   // With no savePath the final name is unknown until the portal answers, so the body lands
   // in a temp file and is moved into place afterwards (see finalizeDownload).
   const explicitPath = args.savePath !== undefined
@@ -75,6 +76,7 @@ async function downloadToDisk(ctx: OpContext, args: {
   const done = await ctx.callBinary(
     { endpoint: target.endpoint, action: null, method: "GET", params: {}, responseType: "binary" },
     explicitPath ?? tempDownloadPath(ctx.downloadsDir),
+    target.portal,
   );
   if (explicitPath) return done;
   return {
@@ -144,10 +146,10 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "output: \"inline\" — всегда в ответе, \"file\" — всегда в файл, \"auto\" (умолчание) — по размеру.",
     mutating: false,
     input: {
-      taskId: idArg,
+      taskId: idArg(),
       limit: z.number().int().positive().optional(),
       maxPages: z.number().int().positive().optional(),
-      beforeId: idArg.optional(),
+      beforeId: idArg().optional(),
       output: z.enum(COMMENTS_OUTPUT_MODES).optional(),
     },
     async run(ctx, { taskId, limit, maxPages, beforeId, output }) {
@@ -225,7 +227,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "внутри папки загрузок), overwrite: true — перезаписать существующий.",
     mutating: false,
     input: { url: z.string(), savePath: z.string().optional(), overwrite: z.boolean().optional() },
-    run: (ctx, a) => downloadToDisk(ctx, { ...a, fallbackName: "bitrix-file" }),
+    run: (ctx, a) => downloadToDisk(ctx, ctx.origins, { ...a, fallbackName: "bitrix-file" }),
   }),
   defineOperation({
     name: "call_recording",
@@ -238,7 +240,8 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
     async run(ctx, { callId, savePath, overwrite }) {
       const detail = await loadCallDetail(ctx, callId, undefined, false);
       if (!detail.recording?.url) throw new Error(`call ${callId} has no recording`);
-      return downloadToDisk(ctx, { url: detail.recording.url, savePath, overwrite, fallbackName: `call-${detail.id}.mp3` });
+      // The link comes from this portal's own page, so it must point back at this portal.
+      return downloadToDisk(ctx, { [ctx.portal]: ctx.origin }, { url: detail.recording.url, savePath, overwrite, fallbackName: `call-${detail.id}.mp3` });
     },
   }),
   defineOperation({

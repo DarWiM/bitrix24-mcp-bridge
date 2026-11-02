@@ -10,7 +10,14 @@ function fakeCtx(result: unknown = { ok: true }) {
   const callBinary = mock(async (_target: CallTarget, _dest: string): Promise<DownloadResult> => {
     throw new Error("unexpected download");
   });
-  const ctx: OpContext = { portal: "d", origin: "https://d.bitrix24.ru", downloadsDir: "/tmp/br24-unused", call, callBinary };
+  const ctx: OpContext = {
+    portal: "d",
+    origin: "https://d.bitrix24.ru",
+    origins: { d: "https://d.bitrix24.ru" },
+    downloadsDir: "/tmp/br24-unused",
+    call,
+    callBinary,
+  };
   return { ctx, call, callBinary };
 }
 

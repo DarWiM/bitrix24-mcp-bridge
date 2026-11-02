@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
+import { z } from "zod";
 import { OpInputError, type OpContext, type Operation } from "./operation.js";
 import { OPERATIONS } from "./index.js";
 
@@ -17,13 +18,20 @@ function tempDir(): string {
   return dir;
 }
 
-type CallFn = (target: CallTarget) => Promise<unknown>;
-type BinaryFn = (target: CallTarget, dest: string) => Promise<DownloadResult>;
+type CallFn = (target: CallTarget, portal?: string) => Promise<unknown>;
+type BinaryFn = (target: CallTarget, dest: string, portal?: string) => Promise<DownloadResult>;
 
 function fakeCtx(opts: { call?: CallFn; callBinary?: BinaryFn; downloadsDir?: string } = {}) {
   const call = mock(opts.call ?? (async (): Promise<unknown> => ({})));
   const callBinary = mock(opts.callBinary ?? (async (): Promise<DownloadResult> => { throw new Error("unexpected download"); }));
-  const ctx: OpContext = { portal: "d", origin: "https://d.bitrix24.ru", downloadsDir: opts.downloadsDir ?? tempDir(), call, callBinary };
+  const ctx: OpContext = {
+    portal: "d",
+    origin: "https://d.bitrix24.ru",
+    origins: { d: "https://d.bitrix24.ru", e: "https://e.bitrix24.ru" },
+    downloadsDir: opts.downloadsDir ?? tempDir(),
+    call,
+    callBinary,
+  };
   return { ctx, call, callBinary };
 }
 
@@ -316,6 +324,12 @@ describe("task_comments", () => {
     expect(payload).toMatchObject({ total: 2, reachedHistoryStart: false, oldestId: 31 });
   });
 
+  it("gives taskId and beforeId separate schemas, so the tool schema has no $ref", () => {
+    const { taskId, beforeId } = op("task_comments").input;
+    expect(beforeId).toBeInstanceOf(z.ZodOptional);
+    if (beforeId instanceof z.ZodOptional) expect(beforeId.unwrap()).not.toBe(taskId);
+  });
+
   it("rejects a non-numeric taskId or cursor before it can name a file or reach the portal", async () => {
     const { ctx, call } = fakeCtx();
 
@@ -350,8 +364,9 @@ describe("file_download", () => {
 
     const payload = await run("file_download", ctx, { url: `https://d.bitrix24.ru${endpoint}` });
 
-    const [target, dest] = callBinary.mock.calls[0];
+    const [target, dest, portal] = callBinary.mock.calls[0];
     expect(target).toEqual({ endpoint, action: null, method: "GET", params: {}, responseType: "binary" });
+    expect(portal).toBe("d");
     expect(dest.endsWith(".part")).toBe(true); // never the guessed final name
     expect(payload.path).toBe(join(dir, "image (29).png"));
     expect(payload.bytes).toBe(245320);
@@ -389,7 +404,23 @@ describe("file_download", () => {
     expect(payload.path).toBe(join(dir, "chosen.png")); // server name ignored on purpose
   });
 
-  it("refuses a URL outside the portal", async () => {
+  it("downloads a link from another configured portal through that portal", async () => {
+    const dir = tempDir();
+    const { ctx, callBinary } = fakeCtx({
+      callBinary: downloads({ bytes: 3, contentType: "application/pdf", fileName: "spec.pdf" }),
+      downloadsDir: dir,
+    });
+
+    const payload = await run("file_download", ctx, {
+      url: "https://e.bitrix24.ru/bitrix/tools/disk/uf.php?attachedId=77&action=download&ncc=1",
+    });
+
+    expect(callBinary.mock.calls[0][0].endpoint).toBe("/bitrix/tools/disk/uf.php?attachedId=77&action=download&ncc=1");
+    expect(callBinary.mock.calls[0][2]).toBe("e"); // ctx.portal is "d"
+    expect(payload.path).toBe(join(dir, "spec.pdf"));
+  });
+
+  it("refuses a URL outside the configured portals", async () => {
     const { ctx, call, callBinary } = fakeCtx();
 
     await expect(op("file_download").execute(ctx, { url: "https://evil.example/payload.exe" })).rejects.toThrow(/not a configured portal/);
@@ -413,6 +444,7 @@ describe("call_recording", () => {
 
     expect(call.mock.calls[0][0].endpoint).toBe("/call/detail/{callId}"); // detail first
     expect(callBinary.mock.calls[0][0]).toMatchObject({ endpoint: audio, method: "GET", responseType: "binary" });
+    expect(callBinary.mock.calls[0][2]).toBe("d");
     expect(payload.path).toBe(join(dir, "Запись звонка N4242.ogg")); // portal name wins over "ajax.php"
     expect(payload.contentType).toBe("audio/ogg");
   });
