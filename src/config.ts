@@ -30,7 +30,7 @@ interface FileConfig {
   mutations?: unknown;
 }
 
-function parseMutationsEnv(raw: string | undefined): boolean | undefined {
+export function parseMutationsEnv(raw: string | undefined): boolean | undefined {
   const value = raw?.trim().toLowerCase();
   if (!value) return undefined;
   if (value === "on") return true;
