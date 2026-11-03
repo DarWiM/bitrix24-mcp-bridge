@@ -249,8 +249,7 @@ describe("read operations", () => {
     const params = call.mock.calls[0][0].params;
     expect(params.chatId).toBe(40271);
     expect(params.ids).toEqual([1884131]);
-    expect(typeof params.actionUuid).toBe("string");
-    expect(String(params.actionUuid).length).toBeGreaterThan(10);
+    expect(params.actionUuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
   it("refuses agent params that would replace the operation's controller or token, before any request", async () => {

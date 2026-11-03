@@ -33,7 +33,11 @@ function makePaths(sock: string): RuntimePaths {
 function captureStdout(): { text: () => string; restore: () => void } {
   const original = process.stdout.write.bind(process.stdout);
   let buf = "";
-  (process.stdout.write as unknown) = (chunk: any) => { buf += chunk.toString(); return true; };
+  const capture: typeof process.stdout.write = (chunk: string | Uint8Array) => {
+    buf += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString();
+    return true;
+  };
+  process.stdout.write = capture;
   return { text: () => buf, restore: () => { process.stdout.write = original; } };
 }
 

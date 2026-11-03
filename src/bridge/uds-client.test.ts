@@ -7,7 +7,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { WebSocket } from "ws";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import { Daemon } from "./daemon.js";
-import { UdsClient, compareVersions, replaceStaleDaemon, requestDaemonShutdown, stopDaemon } from "./uds-client.js";
+import { UdsClient, budgetTimeoutMs, compareVersions, replaceStaleDaemon, requestDaemonShutdown, stopDaemon } from "./uds-client.js";
 import { z } from "zod";
 import { createRegistry } from "../ops/registry.js";
 import { defineOperation } from "../ops/operation.js";
@@ -85,6 +85,15 @@ describe("UdsClient", () => {
       client.close();
       server.close();
     }
+  });
+
+  it("gives each budget its exact client-side timeout", () => {
+    expect(budgetTimeoutMs("call")).toBe(35_000);
+    expect(budgetTimeoutMs("call", 50)).toBe(50);
+    expect(budgetTimeoutMs("download")).toBe(11 * 60_000);
+    expect(budgetTimeoutMs("download", 50)).toBe(11 * 60_000);
+    expect(budgetTimeoutMs("long")).toBe(5 * 60_000 + 5_000);
+    expect(budgetTimeoutMs("long", 50)).toBe(5 * 60_000 + 5_000);
   });
 
   it("reconnects to a restarted daemon on the next request", async () => {

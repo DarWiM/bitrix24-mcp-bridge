@@ -14,7 +14,7 @@ import {
   validateOrigin,
 } from "./config-core.js";
 import type { ServerConfig } from "./config-core.js";
-import { applySetupCommand } from "./setup-reducer.js";
+import { applySetupCommand, toggleMutations } from "./setup-reducer.js";
 import type { SetupCommand, SetupResult } from "./setup-reducer.js";
 import { stopDaemon } from "../bridge/uds-client.js";
 
@@ -161,7 +161,7 @@ async function promptCommand(ask: Ask, choice: string, current: ServerConfig): P
     case "p":
       return { kind: "set-port", port: Number((await ask("New port: ")).trim()) };
     case "m":
-      return { kind: "set-mutations", on: current.mutations === false };
+      return toggleMutations(current);
     case "t":
       return { kind: "rotate-token" };
     case "u":

@@ -19,6 +19,11 @@ export interface SetupResult {
   message: string;
 }
 
+// config.json has no "mutations" key until the first toggle, and absent means on.
+export function toggleMutations(config: ServerConfig): SetupCommand {
+  return { kind: "set-mutations", on: config.mutations === false };
+}
+
 export function applySetupCommand(config: ServerConfig, command: SetupCommand): SetupResult {
   switch (command.kind) {
     case "add-portal": {

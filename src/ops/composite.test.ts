@@ -50,7 +50,8 @@ function op(name: string): Operation {
   return found;
 }
 
-// Composite results are plain JSON objects; reading them back through JSON keeps the tests typed.
+// The agent receives a result as JSON, so the tests read it back the same way. JSON.parse gives
+// `any`, which lets them reach into fields without a result type per operation.
 async function run(name: string, ctx: OpContext, args: Record<string, unknown>) {
   return JSON.parse(JSON.stringify(await op(name).execute(ctx, args)));
 }

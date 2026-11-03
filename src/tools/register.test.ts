@@ -103,6 +103,15 @@ describe("registerTools", () => {
     expect(op).toHaveBeenCalledWith(undefined, "scan", {}, "long");
   });
 
+  it("serves the usage guide as the bitrix-api-guide resource", async () => {
+    const client = await connect(deps());
+    const { resources } = await client.listResources();
+
+    expect(resources).toEqual([
+      expect.objectContaining({ uri: "bitrix://api-notes", name: "bitrix-api-guide", mimeType: "text/markdown" }),
+    ]);
+  });
+
   it("returns a daemon error as an error result", async () => {
     const op = mock().mockRejectedValue(new Error('unknown portal "nope"'));
     const client = await connect(deps({ sink: { op, status: noStatus }, operations: [echoOp] }));

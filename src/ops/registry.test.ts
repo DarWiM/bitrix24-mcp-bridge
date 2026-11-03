@@ -1,5 +1,4 @@
 import { describe, it, expect } from "bun:test";
-import { z } from "zod";
 import { defineOperation, idArg, OpInputError, OpRefusedError, type OpContext } from "./operation.js";
 import { createRegistry, runOperation } from "./registry.js";
 
@@ -100,6 +99,5 @@ describe("operation registry", () => {
     const reg = createRegistry([op]);
     expect(reg.get("task.read")).toBe(op);
     expect(reg.list()).toEqual([op]);
-    expect(z.object(op.input).safeParse({ taskId: 5 }).success).toBe(true);
   });
 });

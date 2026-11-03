@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { createInitialConfig, addPortal } from "./config-core.js";
-import { applySetupCommand } from "./setup-reducer.js";
+import { applySetupCommand, toggleMutations } from "./setup-reducer.js";
 
 const base = () => createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" });
 
@@ -34,6 +34,12 @@ describe("applySetupCommand", () => {
     const on = applySetupCommand(off.config, { kind: "set-mutations", on: true });
     expect(on.config.mutations).toBe(true);
     expect(on.message).toBe("mutations enabled");
+  });
+
+  it("the [m] toggle turns mutations off from the default and back on", () => {
+    expect(toggleMutations(base())).toEqual({ kind: "set-mutations", on: false });
+    expect(toggleMutations({ ...base(), mutations: true })).toEqual({ kind: "set-mutations", on: false });
+    expect(toggleMutations({ ...base(), mutations: false })).toEqual({ kind: "set-mutations", on: true });
   });
 
   it("rotate-token → new token, reopen-tab effect", () => {

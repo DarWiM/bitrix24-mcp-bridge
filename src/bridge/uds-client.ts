@@ -33,6 +33,10 @@ const BUDGET_TIMEOUT_MS: Record<Exclude<OpBudget, "call">, number> = {
   long: 5 * 60_000 + 5_000,
 };
 
+export function budgetTimeoutMs(budget: OpBudget, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): number {
+  return budget === "call" ? requestTimeoutMs : BUDGET_TIMEOUT_MS[budget];
+}
+
 export class UdsClient implements CallSink {
   private sock?: Socket;
   private connecting?: Promise<void>;
@@ -142,9 +146,8 @@ export class UdsClient implements CallSink {
   }
 
   op(portal: string | undefined, name: string, args: unknown, budget: OpBudget = "call"): Promise<unknown> {
-    const timeoutMs = budget === "call" ? undefined : BUDGET_TIMEOUT_MS[budget];
     const frame: Omit<OpRequest, "id"> = { type: "op", portal, op: name, args };
-    return this.request("op", frame, timeoutMs);
+    return this.request("op", frame, budgetTimeoutMs(budget, this.opts.requestTimeoutMs));
   }
 
   status(timeoutMs?: number): Promise<DaemonStatus> {
