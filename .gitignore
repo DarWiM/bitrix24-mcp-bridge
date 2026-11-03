@@ -84,7 +84,6 @@ dist
 .bitrix24-mcp
 .env
 extension/dist/
-extension/dev/
 
 # OS / editor junk
 .DS_Store

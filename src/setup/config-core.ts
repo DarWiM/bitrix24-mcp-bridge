@@ -137,12 +137,12 @@ export interface ExtensionManifest {
   }>;
 }
 
-export function buildManifest(config: ServerConfig): ExtensionManifest {
+export function buildManifest(config: ServerConfig, version = EXT_VERSION): ExtensionManifest {
   const matches = Object.values(config.portals).map((p) => `${p.origin}/*`);
   return {
     manifest_version: 3,
     name: "Bitrix24 MCP Bridge",
-    version: EXT_VERSION,
+    version,
     description: "Отдаёт текущую сессию Bitrix24 локальному MCP-серверу для встроенных операций моста.",
     host_permissions: matches,
     content_scripts: [
@@ -158,7 +158,7 @@ export function buildManifest(config: ServerConfig): ExtensionManifest {
 const STATIC_BUNDLES = ["connector.js", "sessid-shim.js"];
 const BUNDLE_MAPS = ["connector.js.map", "sessid-shim.js.map"];
 
-export function materializeExtension(args: { home: string; config: ServerConfig; staticExtDir: string }): string {
+export function materializeExtension(args: { home: string; config: ServerConfig; staticExtDir: string; version?: string }): string {
   const destDir = join(args.home, "extension");
   mkdirSync(destDir, { recursive: true });
   for (const name of STATIC_BUNDLES) {
@@ -178,7 +178,7 @@ export function materializeExtension(args: { home: string; config: ServerConfig;
   );
   writeFileSync(
     join(destDir, "manifest.json"),
-    JSON.stringify(buildManifest(args.config), null, 2) + "\n",
+    JSON.stringify(buildManifest(args.config, args.version), null, 2) + "\n",
   );
   return destDir;
 }
@@ -209,4 +209,18 @@ export function refreshMaterializedExtension(args: { home: string; config: Serve
   if (!existsSync(join(args.home, "extension"))) return null; // never set up here — leave it to setup
   materializeExtension(args);
   return PACKAGE_VERSION;
+}
+
+/**
+ * The maintainer's `sync:runtime`: refreshes the materialized extension from the checkout, so it
+ * runs for dev builds too, unlike the upgrade refresh. Running unbundled, it would stamp the dev
+ * sentinel, which Chrome rejects as a manifest version, so the caller passes package.json's.
+ * Returns the extension directory, or null when there is no set-up extension (or config.json) to
+ * refresh: creating one stays the job of `setup`.
+ */
+export function syncMaterializedExtension(args: { home: string; staticExtDir: string; version: string }): string | null {
+  if (!existsSync(join(args.home, "extension"))) return null;
+  const config = readServerConfig(args.home);
+  if (!config) return null;
+  return materializeExtension({ ...args, config });
 }

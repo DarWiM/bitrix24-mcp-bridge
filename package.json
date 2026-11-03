@@ -22,7 +22,6 @@
     "dev": "bun run src/index.ts",
     "typecheck": "bunx tsc --noEmit && bunx tsc -p extension/tsconfig.json",
     "build:dist": "node scripts/build-dist.mjs",
-    "build:ext": "bun run scripts/build-extension.ts",
     "build:ext:static": "node scripts/build-ext-static.mjs",
     "prepare": "node scripts/build-dist.mjs && node scripts/build-ext-static.mjs",
     "sync:runtime": "bun run scripts/sync-runtime.ts"
