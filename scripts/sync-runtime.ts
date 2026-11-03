@@ -8,10 +8,10 @@
 //
 // Run: `bun run sync:runtime`
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { runtimePaths } from "../src/paths.js";
-import { requestDaemonShutdown } from "../src/bridge/uds-client.js";
+import { stopDaemon } from "../src/bridge/uds-client.js";
 import { PROJECT_ROOT } from "../src/config.js";
 import { syncMaterializedExtension } from "../src/setup/config-core.js";
 
@@ -30,13 +30,15 @@ console.error(
     : `[sync:runtime] no extension set up in ${paths.home} — skipped (run \`bitrix24-bridge setup\` to create it)`,
 );
 
-// 3) stop the daemon; the next agent call respawns it with the fresh bundle.
-const stopped = await requestDaemonShutdown(paths.sock);
-console.error(
-  stopped
-    ? "[sync:runtime] daemon stopped — respawns with fresh code on the next agent call"
-    : "[sync:runtime] no running daemon — next agent call starts fresh anyway",
-);
+// 3) stop the daemon; the next agent call respawns it with the fresh bundle. Success is the socket
+// going away, which also covers a daemon another client was already stopping.
+if (!existsSync(paths.sock)) {
+  console.error("[sync:runtime] no running daemon — next agent call starts fresh anyway");
+} else if (await stopDaemon(paths.sock)) {
+  console.error("[sync:runtime] daemon stopped — respawns with fresh code on the next agent call");
+} else {
+  console.error(`[sync:runtime] daemon did not stop (socket ${paths.sock} is still there) — stop it by hand: pkill -f -- --daemon`);
+}
 if (extensionDir) {
   console.error("[sync:runtime] reload the extension at chrome://extensions, then reload the portal tab");
 }

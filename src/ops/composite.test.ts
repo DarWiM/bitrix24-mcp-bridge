@@ -214,12 +214,12 @@ describe("chat_calls", () => {
     expect(payload.scannedPages).toBe(2);
   });
 
-  it("lets agent params override the request defaults but not the paging", async () => {
+  it("passes extra agent params through but keeps the order and page size for paging back", async () => {
     const { ctx, call } = fakeCtx({ call: async () => ({ data: { messages: [], hasNextPage: false } }) });
 
-    await run("chat_calls", ctx, { chatId: 999, params: { limit: 20, "order[id]": "ASC" } });
+    await run("chat_calls", ctx, { chatId: 999, params: { limit: 20, "order[id]": "ASC", "filter[authorId]": 7 } });
 
-    expect(call.mock.calls[0][0].params).toEqual({ "order[id]": "ASC", chatId: 999, limit: 50 });
+    expect(call.mock.calls[0][0].params).toEqual({ "order[id]": "DESC", chatId: 999, limit: 50, "filter[authorId]": 7 });
   });
 
   it("keeps the chat and the cursor under its own control", async () => {
