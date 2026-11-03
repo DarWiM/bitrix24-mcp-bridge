@@ -31,6 +31,10 @@ const TASK_COMMENTS_NAVIGATE = callTarget({
   params: { AJAX_POST: "Y", MODE: "LIST", PAGEN_1: 1, scope: "web", IFRAME: "Y", IFRAME_TYPE: "SIDE_SLIDER" },
 });
 
+// One call waits up to 5 min 5 s ("long") and the daemon gives each page up to 30 s: past ten
+// pages a scan could outlive its caller. Deeper history is read in further calls with beforeId.
+const MAX_PAGES = 10;
+
 const textResponse = z.object({ text: z.string() });
 const navigateResponse = z.object({ messageList: z.string(), navigation: z.string().optional() });
 
@@ -141,7 +145,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "ранее оставили…». Отдаёт комментарии по порядку (старые → новые): { id, authorId, author, date, " +
       "dateIso, text, isNew, system, files[] }; system: true — служебные (смена срока, «назначены " +
       "исполнителем», пинги); files[].url — ссылка для bitrix_file_download. НИЧЕГО не помечает " +
-      "прочитанным. Сам листает до начала истории (maxPages, по умолчанию 10); если в ответе " +
+      "прочитанным. Сам листает до начала истории (maxPages, по умолчанию и не больше 10); если в ответе " +
       "reachedHistoryStart:false — продолжи с beforeId: <oldestId>. limit — вернуть только N последних. " +
       "ДЛИННОЕ обсуждение по умолчанию сохраняется на диск: тогда comments пуст, а пути в files — " +
       "files.text (строка = комментарий с id, датой и автором — удобно грепать) и files.json. " +
@@ -151,7 +155,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
     input: {
       taskId: idArg(),
       limit: z.number().int().positive().optional(),
-      maxPages: z.number().int().positive().optional(),
+      maxPages: z.number().int().positive().max(MAX_PAGES).optional(),
       beforeId: idArg().optional(),
       output: z.enum(COMMENTS_OUTPUT_MODES).optional(),
     },
@@ -168,7 +172,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       let cursor = before ?? (first.comments[0]?.id ?? null);
       let reachedHistoryStart = before === null && !first.hasOlder;
       let scannedPages = 0;
-      while (!reachedHistoryStart && cursor !== null && scannedPages < (maxPages ?? 10)) {
+      while (!reachedHistoryStart && cursor !== null && scannedPages < (maxPages ?? MAX_PAGES)) {
         if (limit !== undefined && byId.size >= limit) break;
         const rawNav = await ctx.call({
           ...TASK_COMMENTS_NAVIGATE,
@@ -256,15 +260,15 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       "звонок №N» вместе с привязанным резюме BitrixGPT. Отдаёт callId — их скармливай " +
       "bitrix_call_detail. Поиска звонков по порталу целиком нет, поэтому ищи в конкретном чате: " +
       "chatId проекта — bitrix_project_get → CHAT_ID, чат задачи — CHAT_ID из bitrix_task_get. " +
-      "Просматривает maxPages страниц по 50 сообщений (по умолчанию 6 ≈ 300 сообщений); если в " +
-      "ответе reachedHistoryStart:false, история НЕ дочитана до конца — продолжай с " +
-      "beforeId: <oldestScannedMessageId> или увеличь maxPages.",
+      "Просматривает maxPages страниц по 50 сообщений (по умолчанию 6 ≈ 300 сообщений, не больше " +
+      "10); если в ответе reachedHistoryStart:false, история НЕ дочитана до конца — продолжай с " +
+      "beforeId: <oldestScannedMessageId>.",
     mutating: false,
     budget: "long",
     input: {
       chatId: z.union([z.number(), z.string()]),
       limit: z.number().optional(),
-      maxPages: z.number().optional(),
+      maxPages: z.number().int().positive().max(MAX_PAGES).optional(),
       beforeId: z.union([z.number(), z.string()]).optional(),
       params: agentParams(),
     },

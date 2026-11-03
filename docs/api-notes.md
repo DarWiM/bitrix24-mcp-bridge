@@ -293,7 +293,7 @@ AI-анализ звонка (BitrixGPT Follow-Up) живёт на сервер�
 
 ```jsonc
 bitrix_chat_calls { "chatId": 9876 }                                      // чат проекта: bitrix_project_get → CHAT_ID
-bitrix_chat_calls { "chatId": 9876, "maxPages": 20, "beforeId": 5001 }    // продолжить вглубь
+bitrix_chat_calls { "chatId": 9876, "maxPages": 10, "beforeId": 5001 }    // продолжить вглубь (maxPages ≤ 10)
 ```
 
 Ответ: `calls[] { callId, startedAt, startedBy, startMessageId, events[], summaryMessageId }` плюс
@@ -373,7 +373,7 @@ bitrix_task_comments { "taskId": 1234, "beforeId": 5678 }        // продол
 
 Ответ: `comments[]` по порядку (старые → новые) — `{ id, authorId, author, date, dateIso, text, isNew,
 system, files[] }`, плюс `total`, `oldestId`, `scannedPages` и **`reachedHistoryStart`**: если он
-`false` (упёрлись в `maxPages`, умолчание 10, или в `limit`), продолжай с `beforeId: <oldestId>`.
+`false` (упёрлись в `maxPages` — умолчание и максимум 10 — или в `limit`), продолжай с `beforeId: <oldestId>`.
 
 - **`system: true`** — служебные записи («вы назначены исполнителем», смена срока, пинги), не слова людей.
 - **`date`** — как на портале («9 марта 2024 08:15»), **`dateIso`** — то же в `2024-03-09T08:15`

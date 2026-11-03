@@ -235,6 +235,12 @@ describe("chat_calls", () => {
     expect(call.mock.calls[1][0].params).toEqual({ "order[id]": "DESC", chatId: 42, limit: 50, "filter[lastId]": 5002 });
   });
 
+  it("caps maxPages at 10 before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("chat_calls").execute(ctx, { chatId: 999, maxPages: 11 })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
 
   it("rejects a reserved params key before any request", async () => {
     const { ctx, call } = fakeCtx();
@@ -390,6 +396,12 @@ describe("task_comments", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it("caps maxPages at 10 before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("task_comments").execute(ctx, { taskId: 42, maxPages: 11 })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
 
   it("surfaces a login page as an error instead of an empty discussion", async () => {
     const { ctx } = fakeCtx({ call: replies(html("<form id='auth'></form>")) });
