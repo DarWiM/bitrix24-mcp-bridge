@@ -36,7 +36,12 @@ const BUDGET_TIMEOUT_MS: Record<Exclude<OpBudget, "call">, number> = {
 export class UdsClient implements CallSink {
   private sock?: Socket;
   private connecting?: Promise<void>;
-  private pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pending = new Map<string, {
+    resolve: (v: unknown) => void;
+    reject: (e: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+    sock: Socket;
+  }>();
   private seq = 0;
 
   constructor(private opts: UdsClientOptions) {}
@@ -55,6 +60,9 @@ export class UdsClient implements CallSink {
         await new Promise((r) => setTimeout(r, 100));
       }
     }
+    // A replaced socket may never report its close (half-closed, still draining), and nothing
+    // sent on it will be answered on the new one.
+    if (this.sock && this.sock !== sock) this.drop(this.sock);
     this.sock = sock;
     // Per connection: a reconnect must not inherit a half-read frame from the old socket.
     const dec = new FrameDecoder();
@@ -69,15 +77,23 @@ export class UdsClient implements CallSink {
       }
     });
     sock.on("close", () => {
+      this.drop(sock);
       // The socket of a replaced connection can report its close after the reconnect.
-      if (this.sock !== sock) return;
-      for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error("daemon connection closed")); }
-      this.pending.clear();
-      this.sock = undefined;
+      if (this.sock === sock) this.sock = undefined;
     });
     // 'close' follows and rejects pending (above); swallow the error here to avoid
     // an uncaught exception when the daemon dies abruptly (e.g. ECONNRESET).
     sock.on("error", () => {});
+  }
+
+  private drop(sock: Socket): void {
+    for (const [id, p] of this.pending) {
+      if (p.sock !== sock) continue;
+      this.pending.delete(id);
+      clearTimeout(p.timer);
+      p.reject(new Error("daemon connection closed"));
+    }
+    sock.destroy();
   }
 
   private tryConnect(): Promise<Socket> {
@@ -120,7 +136,7 @@ export class UdsClient implements CallSink {
         this.pending.delete(id);
         reject(new Error(`daemon did not respond to ${kind} in ${timeoutMs}ms`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer, sock });
       sock.write(encodeFrame({ id, ...frame }));
     });
   }

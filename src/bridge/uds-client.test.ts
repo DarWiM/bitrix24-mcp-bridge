@@ -204,6 +204,39 @@ describe("UdsClient", () => {
     server.close();
   });
 
+  it("fails a request stranded on a half-closed socket as soon as the client reconnects", async () => {
+    const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
+    const server = await startFakeUdsServer(sock, (msg, s) => {
+      if (msg.type === "status") s.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { portals: [], version: "1.0.0" } }));
+    });
+
+    const client = new UdsClient({ sockPath: sock, requestTimeoutMs: 5000 });
+    await client.connect();
+    try {
+      const stranded = client.op("acme", "task_get", { taskId: 1 }).catch((e: unknown) => e);
+      await new Promise((r) => setTimeout(r, 20));
+      // Node keeps a half-closed socket open a while after it stops being writable; hold its
+      // 'close' back to reproduce one that arrives only after the reconnect.
+      const old = client["sock"]!;
+      const lateClose = old.listeners("close");
+      old.removeAllListeners("close");
+      old.end();
+
+      const started = Date.now();
+      expect((await client.status()).version).toBe("1.0.0");
+      const err = await stranded;
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/daemon connection closed/);
+
+      for (const handler of lateClose) handler.call(old, false);
+      expect((await client.status()).version).toBe("1.0.0");
+    } finally {
+      client.close();
+      server.close();
+    }
+  });
+
   it("rejects status() via its timeout when the daemon never replies", async () => {
     const sock = join(mkdtempSync(join(tmpdir(), "br24c-")), "bridge.sock");
     const server = await startFakeUdsServer(sock, () => { /* accepts but never answers */ });
