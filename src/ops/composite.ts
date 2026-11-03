@@ -269,6 +269,9 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       params: agentParams(),
     },
     async run(ctx, { chatId, limit, maxPages, beforeId, params }) {
+      // The scan owns the chat, the page size and the cursor: agent params cannot redirect or
+      // desync it. Continuing a scan is what beforeId is for.
+      const { "filter[lastId]": _agentCursor, ...extra } = params ?? {};
       const wanted = limit ?? 20;
       const pageBudget = maxPages ?? 6;
       const found = new Map<number, ChatCall>();
@@ -281,10 +284,10 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
           ...CHAT_MESSAGES_TAIL,
           params: {
             ...CHAT_MESSAGES_TAIL.params,
+            ...extra,
             chatId,
             limit: 50,
             ...(cursor !== null ? { "filter[lastId]": cursor } : {}),
-            ...(params ?? {}),
           },
         });
         const page = readMessagePage(raw);

@@ -213,13 +213,28 @@ describe("chat_calls", () => {
     expect(payload.scannedPages).toBe(2);
   });
 
-  it("lets agent params override the defaults", async () => {
+  it("lets agent params override the request defaults but not the paging", async () => {
     const { ctx, call } = fakeCtx({ call: async () => ({ data: { messages: [], hasNextPage: false } }) });
 
     await run("chat_calls", ctx, { chatId: 999, params: { limit: 20, "order[id]": "ASC" } });
 
-    expect(call.mock.calls[0][0].params).toEqual({ "order[id]": "ASC", chatId: 999, limit: 20 });
+    expect(call.mock.calls[0][0].params).toEqual({ "order[id]": "ASC", chatId: 999, limit: 50 });
   });
+
+  it("keeps the chat and the cursor under its own control", async () => {
+    const { ctx, call } = fakeCtx({
+      call: replies(
+        { data: { messages: [callMessage(5002, 4243, "START")], hasNextPage: true } },
+        { data: { messages: [], hasNextPage: false } },
+      ),
+    });
+
+    await run("chat_calls", ctx, { chatId: 42, params: { chatId: 999, "filter[lastId]": 1 } });
+
+    expect(call.mock.calls[0][0].params).toEqual({ "order[id]": "DESC", chatId: 42, limit: 50 });
+    expect(call.mock.calls[1][0].params).toEqual({ "order[id]": "DESC", chatId: 42, limit: 50, "filter[lastId]": 5002 });
+  });
+
 
   it("rejects a reserved params key before any request", async () => {
     const { ctx, call } = fakeCtx();
@@ -374,6 +389,7 @@ describe("task_comments", () => {
     await expect(op("task_comments").execute(ctx, { taskId: 42, beforeId: "abc" })).rejects.toThrow(OpInputError);
     expect(call).not.toHaveBeenCalled();
   });
+
 
   it("surfaces a login page as an error instead of an empty discussion", async () => {
     const { ctx } = fakeCtx({ call: replies(html("<form id='auth'></form>")) });
