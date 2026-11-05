@@ -13,14 +13,49 @@
   `bitrix_recent_tail`, `bitrix_chat_load`, `bitrix_chat_get_dialog_id`, `bitrix_chat_messages`,
   `bitrix_chat_history`, `bitrix_user_get`, `bitrix_entity_search`, `bitrix_entity_selector`,
   `bitrix_entity_chat`, `bitrix_chat_calls`, `bitrix_call_detail`, `bitrix_call_recording`,
-  `bitrix_file_download`, `bitrix_sprint_columns`; мутирующие — на тестовой задаче / тестовом чате:
-  `bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`, `bitrix_task_description_set`,
-  `bitrix_task_description_append`, `bitrix_task_result_add`, `bitrix_task_move`.
-- [ ] Пакетные `bitrix_task_move` / `bitrix_task_result_add` с двумя `taskIds`, одна из которых заведомо
-  не подходит (напр. задача в бэклоге для переноса) → `results` в порядке `taskIds`, у неподходящей
-  `ok: false` и `error`, вторая выполнена.
+  `bitrix_file_download`, `bitrix_sprint_columns`, `bitrix_user_find`, `bitrix_task_checklist`,
+  `bitrix_task_reminders`. Мутирующие — только в разделе «Запись» ниже.
 - [ ] `bitrix_chat_messages { chatId }` → последние сообщения; `bitrix_chat_history { chatId, beforeId }` листает вглубь.
 - [ ] Инструмента `bitrix_call` в списке нет.
+
+Запись (мутирующие операции):
+
+> **Только на тестовых сущностях**: заранее заведённая тестовая задача (и вторая — для пакетов и
+> связей), тестовый чат, тестовый scrum-проект с активным спринтом. **Никогда на рабочих задачах и в
+> рабочих чатах** — изменения и уведомления видят живые люди. Участники для делегирования,
+> соисполнителей, наблюдателей и упоминаний `[user=ID]` — только из заранее согласованного тестового
+> набора (например, неактивные пользователи из `bitrix_user_find`: их уведомления никто не прочтёт).
+> Имена, id задач и людей в этот файл не записывай. Всё созданное (задачи, файлы на Диске) после
+> проверки удали в интерфейсе — мост ничего не удаляет.
+
+- [ ] **Каждая мутирующая операция** один раз без ошибки: `bitrix_task_description_set`,
+  `bitrix_task_description_append`, `bitrix_task_description_replace`, `bitrix_task_tags`,
+  `bitrix_task_checklist_edit`, `bitrix_task_plan`, `bitrix_task_priority`, `bitrix_task_deadline`,
+  `bitrix_task_close`, `bitrix_task_reopen`, `bitrix_task_result_add`, `bitrix_task_file_attach`,
+  `bitrix_task_mute`, `bitrix_task_reminder_set`, `bitrix_task_reminder_delete`, `bitrix_task_delegate`,
+  `bitrix_task_accomplices`, `bitrix_task_auditors`, `bitrix_task_related_edit`, `bitrix_task_parent`,
+  `bitrix_task_gantt_link`, `bitrix_task_move`, `bitrix_task_to_sprint`, `bitrix_task_to_backlog`,
+  `bitrix_task_create`, `bitrix_chat_send`, `bitrix_chat_message_edit`, `bitrix_chat_reaction`,
+  `bitrix_task_chat_post`, `bitrix_chat_mark_read`, `bitrix_chat_read_all`.
+- [ ] Пакеты: `bitrix_task_move` / `bitrix_task_result_add` с двумя `taskIds`, одна из которых заведомо
+  не подходит (напр. задача в бэклоге для переноса) → `results` в порядке `taskIds`, у неподходящей
+  `ok: false` и `error`, вторая выполнена. Один и тот же id дважды → `invalid arguments…`, ничего не сделано.
+- [ ] Списки: `bitrix_task_accomplices` / `bitrix_task_auditors` / `bitrix_task_tags` с `add` → в ответе
+  прежний список плюс новый (сверь с `bitrix_task_get` / `bitrix_task_get_v2`); тот же `add` ещё раз →
+  `changed: false`; `remove` последнего → пустой список.
+- [ ] Scrum: задача из бэклога → `bitrix_task_to_sprint` → `fromBacklog: true`, колонка `NEW`;
+  `bitrix_task_move` в другую колонку; `bitrix_task_to_backlog` → `changed: true`, повтор → `changed: false`.
+  `bitrix_task_create` → задача на доске в колонке `NEW`.
+- [ ] DoD: `bitrix_task_close { taskId }` в scrum-проекте с DoD → `needsConfirmation: true`, задача **не**
+  закрыта; `{ taskId, typeId, confirmItems: true }` → `status: 5`; `bitrix_task_reopen` → снова открыта.
+- [ ] Файл: `bitrix_task_file_attach` с маленьким файлом по абсолютному пути → вложение в
+  `bitrix_task_files`; относительный путь → ошибка, ничего не загружено.
+- [ ] Напоминания: `bitrix_task_reminder_set` без `reminderId` → в `bitrix_task_reminders` с `mine: true`;
+  правка с `reminderId`; `bitrix_task_reminder_delete` → пропало. `at` в прошлом → ошибка аргументов.
+- [ ] Связи: `bitrix_task_related_edit` add / remove, `bitrix_task_parent` с id и с `null`,
+  `bitrix_task_gantt_link` добавить / `remove: true`; прочие связи задачи не изменились.
+- [ ] Чат: `bitrix_chat_send` с `replyTo` → показан ответом; `bitrix_chat_message_edit` своего сообщения;
+  `bitrix_chat_reaction { reaction: "like" }`; `bitrix_task_chat_post` по двум тестовым задачам.
 
 Безопасность / границы:
 - [ ] Мутации выключены (`setup` → `[m]` или `BITRIX_MCP_MUTATIONS=off`) → `bitrix_chat_mark_read` →

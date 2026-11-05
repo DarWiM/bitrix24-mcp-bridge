@@ -48,6 +48,11 @@
   `callTarget({ action, method, bodyType? })`, дефолты и `params` агента мержатся в `send(...)`.
 - **Несколько запросов или разбор HTML** — `COMPOSITE_OPERATIONS` (`src/ops/composite.ts`), разбор —
   в отдельном модуле рядом (`callDetail.ts`, `taskComments.ts`, `chatCalls.ts`).
+- **Запись** — в модуле своей области: `write.ts` (описание, люди, scrum-доска, создание, результат),
+  `content.ts` (фрагмент описания, теги, чек-лист, даты), `relations.ts`, `chat.ts`, `lifecycle.ts`
+  (закрытие / возобновление), `attributes.ts` (важность, срок, свои уведомления и напоминания), `files.ts`;
+  общие хелперы — `board.ts`, `calls.ts`, `batch.ts`. Без `params` агента; пакет по задачам —
+  `taskIdsArg()` + `forEachTask()` с бюджетом `"long"`; после записи — перечитать (ловушки ниже).
 - `defineOperation({ name, description, mutating, budget?, input, run })`: `name` без префикса (`bitrix_`
   добавляет регистрация), `description` — на русском, для агента: что делает, откуда брать id, ловушки.
   `mutating: true` для всего, что меняет данные — такие операции блокирует переключатель мутаций.
@@ -111,10 +116,77 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
 | `file_download` | `GET <ссылка портала>` (бинарно) | allowlist путей и `action` — `src/ops/download.ts` |
 | `task_description_set` ⚠ | `/rest/tasks.task.update.json` | `taskId`, `fields[DESCRIPTION]` |
 | `task_description_append` ⚠ | ajax `tasks.v2.Task.get` → `/rest/tasks.task.update.json` | читает сырой BBCode из `data.description`, дописывает через `\n\n` |
-| `chat_send` ⚠ | `/rest/im.message.add.json` | `DIALOG_ID` (`chatId` → `"chat"+id`), `MESSAGE`; ответ `result` = id сообщения |
+| `task_description_replace` ⚠ | ajax `tasks.v2.Task.get` → `/rest/tasks.task.update.json` | точная подстрока сырого `data.description`; замена через `split`/`join`, чтобы `$&` в тексте агента остался буквальным |
+| `task_tags` ⚠ | ajax `tasks.v2.Task.get` → ajax `tasks.v2.Task.update` → `tasks.v2.Task.get` | json `{"task":{id, tags:[{name}]}}` — заменяет список целиком, `[]` очищает; классический `fields[TAGS]` не годится (ниже) |
+| `task_checklist` | `/rest/task.checklistitem.getlist.json` | `TASKID`; поля UPPER_CASE `ID, PARENT_ID, TITLE, IS_COMPLETE` |
+| `task_checklist_edit` ⚠ | `getlist` → `/rest/task.checklistitem.{add,update,complete,renew,delete}.json` по одному на действие → `getlist` | `add {TASKID, FIELDS{TITLE}}` → `result` = id (в пустой чек-лист Bitrix сам добавляет группу «BX_CHECKLIST_1»); `update {TASKID, ITEMID, FIELDS{TITLE}}` отвечает `null`; `complete`/`renew`/`delete {TASKID, ITEMID}` → `true`; удаление группы уносит её пункты |
+| `task_plan` ⚠ | (ajax `tasks.v2.Task.get` →) ajax `tasks.v2.Task.Plan.update` → `tasks.v2.Task.get` | json `{"task":{id, startPlanTs, endPlanTs, matchesWorkTime:false, matchesSubTasksTime:false}}`, unix-секунды, `0` — нет даты; пишутся обе даты, поэтому непереданная читается заранее |
+| `task_priority` ⚠ | ajax `tasks.v2.Task.update` → `tasks.v2.Task.get` | json `{"task":{id, priority}}`; в записи UI только `high` / `average` |
+| `task_deadline` ⚠ | ajax `tasks.v2.Task.Deadline.update` → `tasks.v2.Task.get` | json `{"task":{id, deadlineTs, deadlineChangeReason}}`, `0` — без срока |
+| `task_mute` ⚠ | `/rest/user.current.json` → ajax `tasks.v2.Task.Attention.mute` \| `.unmute` → `tasks.v2.Task.get` | json `{taskId}`; перечитывает `data.inMute` (id тех, кто выключил уведомления) |
+| `task_reminders` | `user.current` → ajax `tasks.v2.Task.Reminder.list` | json `{taskId}` → `[{id, userId, nextRemindTs, remindBy, remindVia, recipient, …}]`; `mine` = `userId` текущего |
+| `task_reminder_set` ⚠ | новое: `user.current` → `Reminder.add` → `Reminder.list`; с `reminderId`: `user.current` → `Reminder.list` → `Reminder.update` → `Reminder.list` | json `{"reminder":{id:"tmp<ms>", taskId, userId, nextRemindTs, remindBy:"date", remindVia, recipient:"myself", before:0}}` → `data.id`; `update` пишет напоминание целиком (`userId`, `recipient` — прежние) |
+| `task_reminder_delete` ⚠ | `user.current` → `Reminder.list` → ajax `tasks.v2.Task.Reminder.delete` → `Reminder.list` | json `{"reminder":{id}}`; id напоминаний сквозные по порталу — сначала проверка, что оно у этой задачи и своё |
+| `task_close` ⚠ | `/rest/tasks.task.get.json` → ajax `socialnetwork.api.workgroup.get` (`TYPE`) → ajax `bitrix:tasks.scrum.doD.*` → ajax `tasks.v2.Task.Status.complete` → `tasks.task.get` | DoD — ниже; закрытие json `{"task":{id}, "completeWithChecklist":true}` |
+| `task_reopen` ⚠ | `tasks.task.get` → ajax `tasks.v2.Task.Status.renew` → `tasks.task.get` | json `{"task":{id}}`; перечитывает `STATUS` |
+| `task_delegate` ⚠ | `/rest/tasks.task.delegate.json` → `/rest/tasks.task.get.json` | `{taskId, userId}`; перечитывает `RESPONSIBLE_ID`. Новый ответственный остаётся соисполнителем, если им был |
+| `task_accomplices` / `task_auditors` ⚠ | `tasks.task.get` → `/rest/tasks.task.update.json` → `tasks.task.get` | `fields[ACCOMPLICES]` / `fields[AUDITORS]` заменяют список целиком; пустой — `""` (ниже) |
+| `user_find` | `/rest/user.get.json` | `FILTER{LAST_NAME}`; находит и неактивных (а фильтр `ACTIVE:false` не находит никого) |
+| `task_related_edit` ⚠ | ajax `tasks.v2.Task.Relation.Related.list` → `.Related.add` / `.Related.delete` → `list` | json `{taskId, tasks:[{id}], noOverride:false}` (у `delete` без `noOverride`); `list` — `withSubTasks:false`, `navigation{size:100}`; полная страница → отказ (список мог обрезаться) |
+| `task_parent` ⚠ | `tasks.task.get` (`PARENT_ID`) → ajax `tasks.v2.Task.Relation.Child.delete` у старого родителя → `.Child.add` у нового → `tasks.task.get` | json `{taskId: <родитель>, tasks:[{id: <задача>}]}`, у `add` ещё `noOverride:false, relationKind:"parent"` |
+| `task_gantt_link` ⚠ | ajax `tasks.v2.Task.Gantt.Dependence.check` → `.add`; или `.delete` | json `{"ganttLink":{taskId, dependentId}}` (+ `type:"finish_start"` у `add`); успех — только `data: true`, читающего метода нет |
+| `chat_send` ⚠ | `/rest/im.message.add.json` | `DIALOG_ID` (`chatId` → `"chat"+id`), `MESSAGE`, `REPLY_ID?`; ответ `result` = id сообщения |
+| `chat_message_edit` ⚠ | `/rest/im.message.update.json` | `{MESSAGE_ID, MESSAGE}` → `result: true`; пустой текст удалил бы сообщение — мост такой не пропускает |
+| `chat_reaction` ⚠ | ajax `im.v2.Chat.Message.Reaction.add` | форма `{messageId, reaction}` → `data.result`; REST-метода реакций через сессию нет |
+| `task_chat_post` ⚠ | `tasks.task.get` (`CHAT_ID`) → `/rest/im.message.add.json` | `DIALOG_ID: "chat"+CHAT_ID` |
 | `sprint_columns` | `/rest/tasks.api.scrum.sprint.list.json` → `/rest/tasks.api.scrum.kanban.getStages.json` | `filter{GROUP_ID, STATUS:"active"}`, затем `sprintId`; не `task.stages.get` — он про канбан группы |
 | `task_move` ⚠ | `/rest/tasks.task.get.json` → `sprint_columns` → `/rest/task.stages.movetask.json` → `/rest/tasks.task.get.json` | `movetask {id, stageId}`; перечитывает `STAGE_ID` — пустой `true` для задачи вне доски спринта → ошибка |
+| `task_to_sprint` ⚠ | `/rest/tasks.api.scrum.task.get.json` → `tasks.api.scrum.backlog.get` → `sprint_columns` → из бэклога: `tasks.api.scrum.task.update` → `tasks.api.scrum.kanban.addTask` → `scrum.task.get`; затем `task.stages.movetask` → `tasks.task.get` | `task.update {id, fields{entityId: sprintId}}` меняет только контейнер; `addTask {sprintId, taskId, stageId}` ставит на доску, но колонку не меняет — без него `movetask` отвечает пустым `true` |
+| `task_to_backlog` ⚠ | `scrum.task.get` → `backlog.get` → `scrum.task.update` → `scrum.task.get` | `{id, fields{entityId: backlogId}}`; `backlog.get {id: groupId}` |
+| `task_create` ⚠ | `sprint_columns` → `user.current` → ajax `bitrix:tasks.kanban` `addTask` | что шлёт «+» доски; endpoint `/bitrix/services/main/ajax.php?mode=class&c=bitrix%3Atasks.kanban&action=addTask`, форма `{taskName, columnId, parentTaskId:0, beforeItemId:0, params{USER_ID, GROUP_ID, GROUP_ID_FORCED:0, SPRINT_ID, IS_COMPLETED_SPRINT:"N", PERSONAL:"N", TIMELINE_MODE:"N"}, personal:"N"}` → `data{id, columnId}` |
 | `task_result_add` ⚠ | ajax `tasks.v2.Task.Result.add` | json `{"results":[{taskId,text}]}`; ответ `data[0].id`. Официальный `tasks.task.result.add` — только REST 3.0, через сессию отказ |
+| `task_file_attach` ⚠ | `tasks.task.get` → `user.current` → `/rest/disk.storage.getlist.json` → `/rest/disk.folder.uploadfile.json` → `/rest/tasks.task.files.attach.json` → `tasks.task.get` | Диск — ниже |
+
+`ajax` с json-телом — все `tasks.v2.*` и `ui.entityselector.*`; `bitrix:tasks.scrum.doD.*`,
+`bitrix:tasks.kanban` и `im.v2.*` — форма.
+
+### Ловушки записи
+
+- **Пустой массив исчезает из формы.** Кодировщик формы разворачивает массив в `key[0]=…`, и у пустого не
+  остаётся ни одного ключа: `fields[AUDITORS]=[]` превращается в «Could not find value for parameter
+  {fields}». Очистить списочное поле классического `tasks.task.update` — `""` (проверено на `AUDITORS`,
+  так же для `ACCOMPLICES`). Теги так **не** очищаются: `fields[TAGS]=""` их оставляет — теги пишет json
+  `tasks.v2.Task.update`, где `tags: []` очищает. `null` и `undefined` в форме тоже пропадают, булевы
+  уходят строками `"true"` / `"false"`.
+- **Список целиком.** `ACCOMPLICES`, `AUDITORS`, теги и `DESCRIPTION` Bitrix заменяет целиком (UI тоже шлёт
+  весь список) — операция читает текущее значение, меняет его и записывает; не прочитала — не пишет.
+- **Пустой `true`.** `task.stages.movetask` для задачи, которой нет на доске спринта, и
+  `kanban.addTask` (в части колонки) отвечают `true`, ничего не изменив, — каждое перемещение перечитывает
+  положение и считает «ничего не изменилось» ошибкой. Перечитывать стоит после любой записи: Bitrix
+  может ответить успехом и оставить своё (отказать в участнике, сохранить чужой список).
+- **Колонки спринта** — `tasks.api.scrum.kanban.getStages {sprintId}`; `task.stages.get {entityId}`
+  отдаёт старый канбан группы. Активный спринт — `tasks.api.scrum.sprint.list` по `STATUS:"active"`, не по
+  датам. Для задачи не на доске `tasks.task.get` показывает стадию канбана группы.
+- **DoD.** Нужен ли он — `doD.isNecessary {groupId, taskId}` (строгий `data: boolean`), и только в группе
+  с `TYPE: "scrum"` (`workgroup.get`); неизвестный `TYPE` или ответ `tasks.task.get` без поля проекта —
+  отказ, а не закрытие без DoD (без DoD закрывается только задача с проектом `0` / `null`). Типы — `doD.getSettings {groupId, taskId, saveRequest:"N"}` → `types[{id, name, dodRequired}]`.
+  Критерии — `doD.getList {groupId, taskId, typeId}` → `data.html`, внутри скрипта страницы JSON-дерево
+  `Object.assign(renderTo, {…"items":{"DESCENDANTS":[…]}})` с `FIELDS.{COPIED_ID, PARENT_ID, TITLE,
+  SORT_INDEX, IS_IMPORTANT}`. Отметка — `doD.saveList {typeId, taskId, groupId, items[i][NODE_ID|
+  PARENT_NODE_ID|COPIED_ID|PARENT_ID|TITLE|SORT_INDEX|IS_COMPLETE|IS_IMPORTANT]}`: всё дерево, родитель
+  раньше детей, `NODE_ID` — случайная строка клиента, у детей `PARENT_NODE_ID` = `NODE_ID` родителя. Затем
+  `tasks.v2.Task.Status.complete`. Официальный `tasks.task.complete` не используется: он может закрыть
+  задачу мимо DoD.
+- **Диск через сессию.** Хранилище пользователя — `disk.storage.getlist {filter{ENTITY_TYPE:"user",
+  ENTITY_ID: <user.current>}}` → `ROOT_OBJECT_ID`; загрузка — `disk.folder.uploadfile {id: <корень>,
+  data{NAME}, fileContent:[имя, base64], generateUniqueName:true}` формой (10 МБ файла ≈ 13 МБ тела; этому
+  запросу мост даёт до 4 мин, урезая до остатка бюджета операции); прикрепление —
+  `tasks.task.files.attach {taskId, fileId}` → `attachmentId`, его ищут в `UF_TASK_WEBDAV_FILES`
+  перечитанной задачи. Ответ загрузки разбирается по полям (`ID`, `NAME`, `SIZE`): его `DOWNLOAD_URL` несёт
+  `sessid` и наружу не отдаётся. UI грузит иначе (`ui.fileuploader.upload` + `tasks.v2.File.attach`).
+- **Неидемпотентные записи** (сообщение, результат, задача, загрузка, вложение, напоминание): таймаут или
+  нераспознанный ответ не значит, что портал ничего не сделал, — ошибка таких операций говорит «могло
+  уйти / могло создаться / мог загрузиться», чтобы агент проверил перед повтором.
 
 ---
 

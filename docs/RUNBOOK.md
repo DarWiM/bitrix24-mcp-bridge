@@ -123,10 +123,22 @@ bitrix24-mcp-bridge`. Для другого MCP-клиента — та же к�
 
 ## Переключатель мутаций
 
-Мутирующие операции (`bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`,
-`bitrix_task_description_set`, `bitrix_task_description_append`, `bitrix_task_result_add`,
-`bitrix_task_move`) по умолчанию разрешены.
-Выключить (побеждает верхний способ):
+Мутирующие операции по умолчанию разрешены:
+
+- задачи: `bitrix_task_description_set`, `bitrix_task_description_append`,
+  `bitrix_task_description_replace`, `bitrix_task_tags`, `bitrix_task_checklist_edit`, `bitrix_task_plan`,
+  `bitrix_task_priority`, `bitrix_task_deadline`, `bitrix_task_close`, `bitrix_task_reopen`,
+  `bitrix_task_result_add`, `bitrix_task_file_attach`, `bitrix_task_mute`, `bitrix_task_reminder_set`,
+  `bitrix_task_reminder_delete`;
+- участники и связи: `bitrix_task_delegate`, `bitrix_task_accomplices`, `bitrix_task_auditors`,
+  `bitrix_task_related_edit`, `bitrix_task_parent`, `bitrix_task_gantt_link`;
+- scrum: `bitrix_task_move`, `bitrix_task_to_sprint`, `bitrix_task_to_backlog`, `bitrix_task_create`;
+- чаты: `bitrix_chat_send`, `bitrix_chat_message_edit`, `bitrix_chat_reaction`, `bitrix_task_chat_post`,
+  `bitrix_chat_mark_read`, `bitrix_chat_read_all`.
+
+Они действуют от твоего имени: участники задач и чатов видят изменения и получают уведомления
+Bitrix24, `bitrix_task_file_attach` отправляет локальный файл на твой Диск Битрикс24. Если агенту достаточно
+чтения, выключи их (побеждает верхний способ):
 
 1. env `BITRIX_MCP_MUTATIONS=off` (`on` — включить) у процесса daemon;
 2. `"mutations": false` в `~/.bitrix24-mcp-bridge/config.json`;
@@ -217,7 +229,9 @@ bitrix24-mcp-bridge`. Для другого MCP-клиента — та же к�
 изменения `src/ops/`, `src/tools/register.ts` или `extension/src/` выполни **`bun run sync:runtime`**:
 пересборка бандла и статичных бандлов расширения, обновление развёрнутого расширения (если `setup`
 его ещё не создавал — шаг пропускается) и гашение daemon (следующий вызов агента поднимет свежий).
-Затем перезагрузи расширение на `chrome://extensions` и вкладку портала.
+Затем перезагрузи расширение на `chrome://extensions` и вкладку портала. Новые инструменты агент видит
+только в новой сессии: уже открытые сессии держат прежний список. Мутации, добавленные так, сразу
+подчиняются переключателю выше — отдельно включать их не нужно.
 
 ---
 

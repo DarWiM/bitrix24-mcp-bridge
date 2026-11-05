@@ -90,7 +90,11 @@ daemon после любой правки, затрагивающей конфи
 daemon. Набор операций фиксирован в коде; произвольного вызова Bitrix-метода по имени нет. У
 большинства операций (пометка «+ `params`» в [`docs/api-notes.md`](docs/api-notes.md) §3) есть
 необязательный `params` в нативном формате Bitrix (мержится последним, перекрывает дефолты). Каждый инструмент принимает необязательный `portal` (alias; по умолчанию —
-из `config.json`). Мутирующие помечены ⚠.
+из `config.json`). Мутирующие помечены ⚠: они **включены по умолчанию** и выключаются одним
+переключателем (см. «Переключатель мутаций»). Мутирующие операции, кроме отметки прочитанным
+(`bitrix_chat_mark_read` / `bitrix_chat_read_all`), не принимают `params`; изменения задач они,
+где это возможно, перечитывают после записи, а списочные поля (соисполнители, наблюдатели, теги) правят поверх
+текущего значения задачи.
 
 | Инструмент | Назначение |
 |---|---|
@@ -105,10 +109,26 @@ daemon. Набор операций фиксирован в коде; произ
 | `bitrix_task_subtasks` / `bitrix_task_related` | подзадачи / связанные задачи |
 | `bitrix_task_comments` | старые комментарии задачи (форум, до чатов задач) |
 | `bitrix_task_description_set` ⚠ / `bitrix_task_description_append` ⚠ | заменить описание задачи / дописать в его конец |
+| `bitrix_task_description_replace` ⚠ | точечная правка фрагмента описания |
+| `bitrix_task_tags` ⚠ | добавить / убрать теги (пакетно) |
+| `bitrix_task_checklist` / `bitrix_task_checklist_edit` ⚠ | чек-лист задачи / его правка |
+| `bitrix_task_plan` ⚠ | планируемые даты начала и завершения |
+| `bitrix_task_priority` ⚠ / `bitrix_task_deadline` ⚠ | важность / крайний срок (пакетно) |
+| `bitrix_task_close` ⚠ / `bitrix_task_reopen` ⚠ | закрыть задачу (через Definition of Done, в два шага) / возобновить (пакетно) |
 | `bitrix_task_result_add` ⚠ | добавить результат задачам (пакетно, `taskIds`) |
+| `bitrix_task_file_attach` ⚠ | прикрепить локальный файл (через Диск пользователя) |
+| `bitrix_task_mute` ⚠ | выключить / включить свои уведомления по задаче |
+| `bitrix_task_reminders` / `bitrix_task_reminder_set` ⚠ / `bitrix_task_reminder_delete` ⚠ | свои напоминания по задаче |
+| *Участники и связи задач* | |
+| `bitrix_task_delegate` ⚠ | сменить ответственного (пакетно) |
+| `bitrix_task_accomplices` ⚠ / `bitrix_task_auditors` ⚠ | добавить / убрать соисполнителей / наблюдателей (пакетно) |
+| `bitrix_user_find` | найти пользователей по фамилии |
+| `bitrix_task_related_edit` ⚠ / `bitrix_task_parent` ⚠ / `bitrix_task_gantt_link` ⚠ | связанные задачи / родительская задача / связь на диаграмме Ганта |
 | *Scrum* | |
 | `bitrix_sprint_columns` | колонки доски активного спринта проекта |
 | `bitrix_task_move` ⚠ | перенести задачи в колонку спринта (пакетно, `taskIds`) |
+| `bitrix_task_to_sprint` ⚠ / `bitrix_task_to_backlog` ⚠ | поставить задачи на доску активного спринта / вернуть в бэклог (пакетно) |
+| `bitrix_task_create` ⚠ | создать задачу на доске активного спринта |
 | *Проекты* | |
 | `bitrix_projects_list` / `bitrix_project_get` | рабочие группы / проекты |
 | *Чаты* | |
@@ -119,7 +139,9 @@ daemon. Набор операций фиксирован в коде; произ
 | `bitrix_chat_history` | листать историю вглубь |
 | `bitrix_chat_get_dialog_id` | резолв dialogId по externalId |
 | `bitrix_chat_mark_read` ⚠ / `bitrix_chat_read_all` ⚠ | пометить сообщения / все чаты прочитанными |
-| `bitrix_chat_send` ⚠ | отправить сообщение в чат |
+| `bitrix_chat_send` ⚠ | отправить сообщение в чат (в т.ч. ответом на сообщение) |
+| `bitrix_chat_message_edit` ⚠ / `bitrix_chat_reaction` ⚠ | изменить своё сообщение / поставить реакцию |
+| `bitrix_task_chat_post` ⚠ | написать в чаты задач (пакетно) |
 | *Люди / поиск* | |
 | `bitrix_user_get` | карточка пользователя |
 | `bitrix_entity_selector` / `bitrix_entity_search` | загрузка селектора / текстовый поиск сущностей |
@@ -135,10 +157,18 @@ daemon. Набор операций фиксирован в коде; произ
 
 ### Переключатель мутаций
 
-Мутирующие операции (`bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`,
-`bitrix_task_description_set`, `bitrix_task_description_append`, `bitrix_task_result_add`,
-`bitrix_task_move`) по умолчанию
-**разрешены**. Запретить их можно тремя способами (побеждает верхний):
+Мутирующие операции — все помеченные ⚠ в таблице выше: `bitrix_task_description_set`,
+`bitrix_task_description_append`, `bitrix_task_description_replace`, `bitrix_task_tags`,
+`bitrix_task_checklist_edit`, `bitrix_task_plan`, `bitrix_task_priority`, `bitrix_task_deadline`,
+`bitrix_task_close`, `bitrix_task_reopen`, `bitrix_task_result_add`, `bitrix_task_file_attach`,
+`bitrix_task_mute`, `bitrix_task_reminder_set`, `bitrix_task_reminder_delete`, `bitrix_task_delegate`,
+`bitrix_task_accomplices`, `bitrix_task_auditors`, `bitrix_task_related_edit`, `bitrix_task_parent`,
+`bitrix_task_gantt_link`, `bitrix_task_move`, `bitrix_task_to_sprint`, `bitrix_task_to_backlog`,
+`bitrix_task_create`, `bitrix_chat_send`, `bitrix_chat_message_edit`, `bitrix_chat_reaction`,
+`bitrix_task_chat_post`, `bitrix_chat_mark_read`, `bitrix_chat_read_all` — по умолчанию
+**разрешены**. Они действуют от имени пользователя: другие участники видят изменения и получают
+уведомления Bitrix24 (кто именно — в `docs/api-notes.md` §3). Запретить их можно тремя способами
+(побеждает верхний):
 
 1. env `BITRIX_MCP_MUTATIONS=off` (или `on`) у процесса daemon;
 2. `"mutations": false` в `~/.bitrix24-mcp-bridge/config.json`;
