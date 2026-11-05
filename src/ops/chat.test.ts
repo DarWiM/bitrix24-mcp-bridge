@@ -143,6 +143,14 @@ describe("chat_send", () => {
     expect(err.message).toBe(`extension disconnected — ${MAY_HAVE_GONE}`);
   });
 
+  it("warns that the message may have gone when the answer is not recognised", async () => {
+    const { ctx } = fakeCtx(async () => ({ result: { id: 5 } }));
+
+    const err = await rejection(op("chat_send").execute(ctx, { chatId: 1, text: "x" }));
+
+    expect(err.message).toBe(`im.message.add returned an unexpected shape — ${MAY_HAVE_GONE}`);
+  });
+
   it("names both addressing fields when the choice is wrong", async () => {
     const { ctx } = fakeCtx();
 
@@ -180,6 +188,7 @@ describe("chat_message_edit", () => {
   for (const [title, args] of [
     ["an empty text", { messageId: 1, text: "" }],
     ["a whitespace-only text", { messageId: 1, text: " \n " }],
+    ["a text of invisible characters only", { messageId: 1, text: "\u200B \u200C\u200D\u2060\uFEFF" }],
     ["a text over 20 000 characters", { messageId: 1, text: "a".repeat(20_001) }],
     ["a non-numeric messageId", { messageId: "1a", text: "x" }],
   ] as const) {
@@ -302,6 +311,16 @@ describe("task_chat_post", () => {
         { taskId: 42, ok: false, error: `timeout — ${MAY_HAVE_GONE}` },
         { taskId: 43, ok: true, chatId: 2, messageId: 10 },
       ],
+    });
+  });
+
+  it("warns that the message may have gone when the post answer is not recognised", async () => {
+    const { ctx } = fakeCtx(replies(taskChat(42, 1), { result: null }));
+
+    const result = await op("task_chat_post").execute(ctx, { taskIds: [42], text: "x" });
+
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: `im.message.add returned an unexpected shape — ${MAY_HAVE_GONE}` }],
     });
   });
 

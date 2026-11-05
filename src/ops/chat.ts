@@ -35,15 +35,19 @@ const SEND_MAY_HAVE_GONE = "сообщение могло уйти, провер
 const KNOWN_REACTIONS = ["like", "whiteHeavyCheckMark"];
 
 const messageText = () => z.string().min(1).max(MESSAGE_MAX);
+// Zero-width spaces, joiners and the word joiner are not in \s but leave a message just as empty.
+const INVISIBLE = /[\s\u200B-\u200D\u2060\uFEFF]/g;
 
 async function postMessage(ctx: OpContext, dialogId: string, text: string, replyTo?: number) {
   const params = { DIALOG_ID: dialogId, MESSAGE: text, ...(replyTo !== undefined ? { REPLY_ID: replyTo } : {}) };
-  // A timeout or a lost extension does not mean the portal did not post it: a blind retry would
-  // post it twice.
+  // Neither a timeout, a lost extension nor an unrecognised answer means the portal did not post
+  // it: a blind retry would post it twice.
   const raw = await ctx.call({ ...MESSAGE_ADD, params }).catch((e: unknown) => {
     throw new Error(`${errorMessage(e)} — ${SEND_MAY_HAVE_GONE}`);
   });
-  return parseResponse(messageResponse, raw, "im.message.add").result;
+  const parsed = messageResponse.safeParse(raw);
+  if (!parsed.success) throw new Error(`im.message.add returned an unexpected shape — ${SEND_MAY_HAVE_GONE}`);
+  return parsed.data.result;
 }
 
 async function readTaskChat(ctx: OpContext, taskId: number) {
@@ -90,7 +94,7 @@ export const CHAT_OPERATIONS: Operation[] = [
     input: {
       messageId: idArg(),
       // Bitrix deletes a message updated to an empty text.
-      text: messageText().refine((t) => t.trim().length > 0, "text must not be blank"),
+      text: messageText().refine((t) => t.replace(INVISIBLE, "").length > 0, "text must not be blank"),
     },
     run: async (ctx, a) => {
       const raw = await ctx.call({ ...MESSAGE_UPDATE, params: { MESSAGE_ID: a.messageId, MESSAGE: a.text } });
