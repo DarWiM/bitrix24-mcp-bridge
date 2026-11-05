@@ -138,7 +138,11 @@ describe("task_description_replace", () => {
   });
 });
 
-const tags = (...names: string[]) => ({ status: "success", data: { id: 42, tags: names.map((name, i) => ({ id: i + 1, name })) } });
+// The recorded v2 shape: each tag carries its owner, group and task besides the name.
+const tags = (...names: string[]) => ({
+  status: "success",
+  data: { id: 42, tags: names.map((name, i) => ({ id: i + 1, name, owner: null, group: { id: 15 }, task: { id: 42 } })) },
+});
 
 describe("task_tags", () => {
   it("reads each task's tags, writes the edited list through the v2 update and re-reads it", async () => {
@@ -353,6 +357,16 @@ describe("task_plan", () => {
     expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.get", { task: { id: 42 } }));
     expect(call.mock.calls[1][0]).toEqual(json(PLAN, plan("2026-11-01T00:00:00Z", "2026-11-20T00:00:00Z")));
     expect(result).toEqual({ taskId: 42, start: "2026-11-01T00:00:00.000Z", end: "2026-11-20T00:00:00.000Z" });
+  });
+
+  it("treats stored null dates as unset on a partial update", async () => {
+    const current = { status: "success", data: { id: 42, startPlanTs: null, endPlanTs: null, deadlineTs: null } };
+    const { ctx, call } = fakeCtx(replies(current, { status: "success" }));
+
+    const result = await op("task_plan").execute(ctx, { taskId: 42, start: "2026-11-10T00:00:00Z" });
+
+    expect(call.mock.calls[1][0]).toEqual(json(PLAN, plan("2026-11-10T00:00:00Z", null)));
+    expect(result).toEqual({ taskId: 42, start: "2026-11-10T00:00:00.000Z", end: null });
   });
 
   it("does not write when the current dates cannot be read", async () => {
