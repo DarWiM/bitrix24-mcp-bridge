@@ -21,12 +21,12 @@ const STATUS_RENEW = v2("tasks.v2.Task.Status.renew");
 
 const CLOSED = 5;
 
-// Required: a group of unknown type is not taken for a non-scrum one, which would skip DoD.
-const groupTypeResponse = z.object({ data: z.object({ TYPE: z.string() }) });
+// Only the known types: a group of any other is not taken for a non-scrum one, which would skip DoD.
+const groupTypeResponse = z.object({ data: z.object({ TYPE: z.enum(["scrum", "project", "group"]) }) });
 // A strict boolean: an unexpected answer read as "not needed" would close past DoD.
 const necessaryResponse = z.object({ data: z.boolean() });
 const settingsResponse = z.object({
-  data: z.object({ types: z.array(z.object({ id: numeric, name: z.string(), dodRequired: z.string() })) }),
+  data: z.object({ types: z.array(z.object({ id: numeric, name: z.string(), dodRequired: z.enum(["Y", "N"]) })) }),
 });
 const listResponse = z.object({ data: z.object({ html: z.string() }) });
 
@@ -157,7 +157,7 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
       "участники получают уведомление. Ответ: { taskId, status, changed, typeId? } (status 5 — завершена). " +
       "Возобновить — bitrix_task_reopen.",
     mutating: true,
-    // Up to seven requests in a row.
+    // Step 1: four requests plus one per DoD type; step 2: seven.
     budget: "long",
     input: { taskId: idArg(), typeId: idArg().optional(), confirmItems: z.literal(true).optional() },
     run: async (ctx, a) => {
@@ -169,6 +169,8 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
       const { taskId } = a;
       const before = await readTaskStage(ctx, taskId);
       if (before.status === CLOSED) return { taskId, status: CLOSED, changed: false };
+      // Only an explicit 0 / null means "no project"; a missing field must not let the task past DoD.
+      if (before.groupId === undefined) throw new Error("tasks.task.get не вернул проект задачи — закрытие не выполнено");
       const groupId = before.groupId && (await isScrumGroup(ctx, before.groupId)) ? before.groupId : null;
 
       if (a.typeId === undefined) {

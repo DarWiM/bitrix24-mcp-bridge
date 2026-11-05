@@ -159,6 +159,33 @@ describe("task_close — step 1", () => {
     expect(call).toHaveBeenCalledTimes(2);
   });
 
+  it("fails without closing when the task's project is not in the answer", async () => {
+    const { ctx, call } = fakeCtx(replies({ result: { task: { id: "31981", status: "2" } } }));
+    await expect(op("task_close").execute(ctx, { taskId: 31981 })).rejects.toThrow(/проект задачи/);
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails without closing on a project type it does not know", async () => {
+    for (const type of ["SCRUM", "", "kanban"]) {
+      const { ctx, call } = fakeCtx(replies(task("2"), group(type)));
+      await expect(op("task_close").execute(ctx, { taskId: 31981 })).rejects.toThrow(/workgroup\.get/);
+      expect(call).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("closes a task of a plain group without asking about DoD", async () => {
+    const { ctx, call } = fakeCtx(replies(task("2"), group("group"), ajaxOk({ id: 31981 }), task("5")));
+    await op("task_close").execute(ctx, { taskId: 31981 });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([taskGet(31981), groupGet(17), complete(31981), taskGet(31981)]);
+  });
+
+  it("fails without closing when a type's DoD requirement is not Y or N", async () => {
+    const settings = ajaxOk({ types: [{ id: 1, name: "Продуктовая задача", dodRequired: "maybe" }], activeTypeId: 0 });
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(true), settings));
+    await expect(op("task_close").execute(ctx, { taskId: 31981 })).rejects.toThrow(/getSettings/);
+    expect(call).toHaveBeenCalledTimes(4);
+  });
+
   it("does not close when DoD is needed and returns every type with its criteria", async () => {
     const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(true), SETTINGS, listPage(CRITERIA), listPage([])));
     const out = await op("task_close").execute(ctx, { taskId: 31981 });
@@ -280,6 +307,13 @@ describe("task_close — step 2", () => {
     const { ctx, call } = fakeCtx(replies(task("2"), group("project")));
     await expect(op("task_close").execute(ctx, { taskId: 31981, typeId: 1, confirmItems: true })).rejects.toThrow(/не в scrum-проекте/);
     expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not close when marking the criteria fails", async () => {
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, SETTINGS, listPage(CRITERIA), new Error("DOD_SAVE_FAILED")));
+    await expect(op("task_close").execute(ctx, { taskId: 31981, typeId: 1, confirmItems: true })).rejects.toThrow(/DOD_SAVE_FAILED/);
+    expect(call).toHaveBeenCalledTimes(5);
+    expect(call.mock.calls.map((c) => c[0].action)).not.toContain("tasks.v2.Task.Status.complete");
   });
 
   it("says the criteria are already marked when closing then fails", async () => {
