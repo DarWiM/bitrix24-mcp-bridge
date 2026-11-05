@@ -3,7 +3,7 @@
 // says it does.
 
 import { z } from "zod";
-import { forEachTask, taskIdsArg } from "./batch.js";
+import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
 import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { callTarget } from "./read.js";
@@ -30,13 +30,19 @@ const CHAT_FORMAT =
   "или блок между двумя строками из дефисов; список — строки, начинающиеся с «• ». " +
   "В чате НЕ рендерятся: [quote], [list], [spoiler], таблицы и Markdown.";
 
+const SEND_MAY_HAVE_GONE = "сообщение могло уйти, проверь чат (bitrix_chat_messages) перед повтором";
+
 const KNOWN_REACTIONS = ["like", "whiteHeavyCheckMark"];
 
 const messageText = () => z.string().min(1).max(MESSAGE_MAX);
 
 async function postMessage(ctx: OpContext, dialogId: string, text: string, replyTo?: number) {
   const params = { DIALOG_ID: dialogId, MESSAGE: text, ...(replyTo !== undefined ? { REPLY_ID: replyTo } : {}) };
-  const raw = await ctx.call({ ...MESSAGE_ADD, params });
+  // A timeout or a lost extension does not mean the portal did not post it: a blind retry would
+  // post it twice.
+  const raw = await ctx.call({ ...MESSAGE_ADD, params }).catch((e: unknown) => {
+    throw new Error(`${errorMessage(e)} — ${SEND_MAY_HAVE_GONE}`);
+  });
   return parseResponse(messageResponse, raw, "im.message.add").result;
 }
 

@@ -56,6 +56,8 @@ const rest = (endpoint: string, params: Record<string, unknown>): CallTarget =>
 const form = (action: string, params: Record<string, unknown>): CallTarget =>
   ({ endpoint: AJAX, action, method: "POST", bodyType: "form", responseType: "json", params });
 
+const MAY_HAVE_GONE = "сообщение могло уйти, проверь чат (bitrix_chat_messages) перед повтором";
+
 const MUTATING = ["chat_send", "chat_message_edit", "chat_reaction", "task_chat_post"];
 
 describe("chat operations in OPERATIONS", () => {
@@ -130,6 +132,16 @@ describe("chat_send", () => {
       expect(call).not.toHaveBeenCalled();
     });
   }
+
+  it("warns that the message may have gone when the send fails", async () => {
+    const { ctx } = fakeCtx(async () => {
+      throw new Error("extension disconnected");
+    });
+
+    const err = await rejection(op("chat_send").execute(ctx, { chatId: 1, text: "x" }));
+
+    expect(err.message).toBe(`extension disconnected — ${MAY_HAVE_GONE}`);
+  });
 
   it("names both addressing fields when the choice is wrong", async () => {
     const { ctx } = fakeCtx();
@@ -280,14 +292,14 @@ describe("task_chat_post", () => {
     expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: "tasks.task.get returned an unexpected shape" }] });
   });
 
-  it("keeps going after a failed post", async () => {
-    const { ctx } = fakeCtx(replies(taskChat(42, 1), new Error("ACCESS_DENIED"), taskChat(43, 2), { result: 10 }));
+  it("keeps going after a failed post and warns that the message may have gone", async () => {
+    const { ctx } = fakeCtx(replies(taskChat(42, 1), new Error("timeout"), taskChat(43, 2), { result: 10 }));
 
     const result = await op("task_chat_post").execute(ctx, { taskIds: [42, 43], text: "x" });
 
     expect(result).toEqual({
       results: [
-        { taskId: 42, ok: false, error: "ACCESS_DENIED" },
+        { taskId: 42, ok: false, error: `timeout — ${MAY_HAVE_GONE}` },
         { taskId: 43, ok: true, chatId: 2, messageId: 10 },
       ],
     });
