@@ -3,13 +3,15 @@
 // says it does.
 
 import { z } from "zod";
+import { forEachTask, taskIdsArg } from "./batch.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
 const restMethod = (method: string) => callTarget({ endpoint: `/rest/${method}.json`, method: "POST" });
 
 const TASK_UPDATE = restMethod("tasks.task.update");
-const TASK_GET = restMethod("tasks.task.get");
+// read.ts has an ajax TASK_GET of its own.
+const REST_TASK_GET = restMethod("tasks.task.get");
 const MESSAGE_ADD = restMethod("im.message.add");
 const SPRINT_LIST = restMethod("tasks.api.scrum.sprint.list");
 const SPRINT_STAGES = restMethod("tasks.api.scrum.kanban.getStages");
@@ -78,7 +80,7 @@ async function activeSprintColumns(ctx: OpContext, groupId: number): Promise<{ s
 }
 
 async function readTaskStage(ctx: OpContext, taskId: number) {
-  const raw = await ctx.call({ ...TASK_GET, params: { taskId, select: TASK_STAGE_SELECT } });
+  const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: TASK_STAGE_SELECT } });
   return parseResponse(taskResponse, raw, "tasks.task.get").result.task;
 }
 
@@ -161,44 +163,60 @@ export const WRITE_OPERATIONS: Operation[] = [
   defineOperation({
     name: "task_move",
     description:
-      "⚠ МУТИРУЮЩИЙ. Перенести задачу в колонку доски активного спринта её проекта. column — id " +
-      "колонки или её название (без учёта регистра); список колонок — bitrix_sprint_columns. " +
-      "Работает только для задачи, которая уже на доске спринта (не в бэклоге). Перенос может " +
-      "переоткрыть закрытую задачу — смотри status в ответе. Ответ: { taskId, stageId, column, status }.",
+      "⚠ МУТИРУЮЩИЙ. Перенести задачи (taskIds — до 50) в колонку доски активного спринта их проекта. " +
+      "column — id колонки или её название (без учёта регистра); список колонок — bitrix_sprint_columns. " +
+      "Работает только для задач, которые уже на доске спринта (не в бэклоге). Перенос может " +
+      "переоткрыть закрытую задачу — смотри status в ответе. Задачи переносятся по очереди; ошибка одной " +
+      "не останавливает остальные. Ответ: { results: [{ taskId, ok, error?, stageId, column, status }] }.",
     mutating: true,
-    // Up to five requests in a row.
+    // Up to five requests per task.
     budget: "long",
-    input: { taskId: idArg(), column: z.union([z.number().int().positive(), z.string().min(1)]) },
+    input: { taskIds: taskIdsArg(), column: z.union([z.number().int().positive(), z.string().min(1)]) },
     run: async (ctx, a) => {
-      const task = await readTaskStage(ctx, a.taskId);
-      if (!task.groupId) throw new Error(`задача ${a.taskId} не в проекте — колонки спринта есть только у задач scrum-проекта`);
-      const { columns } = await activeSprintColumns(ctx, task.groupId);
-      const target = findColumn(columns, a.column);
-      if (!target) {
-        throw new Error(
-          `колонки ${JSON.stringify(a.column)} нет на доске активного спринта; есть: ${columns.map((c) => `«${c.name}» (${c.id})`).join(", ")}`,
-        );
-      }
-      await ctx.call({ ...STAGE_MOVE, params: { id: a.taskId, stageId: target.id } });
-      const moved = await readTaskStage(ctx, a.taskId);
-      // movetask answers true and does nothing for a task that is not on the sprint board.
-      if (moved.stageId !== target.id) {
-        throw new Error("Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта");
-      }
-      return { taskId: a.taskId, stageId: target.id, column: target.name, status: moved.status ?? null };
+      // A hand-off usually moves tasks of one project: its columns are looked up once per batch.
+      const columnsByGroup = new Map<number, Promise<SprintColumn[]>>();
+      return forEachTask(a.taskIds, async (taskId) => {
+        const task = await readTaskStage(ctx, taskId);
+        if (!task.groupId) throw new Error(`задача ${taskId} не в проекте — колонки спринта есть только у задач scrum-проекта`);
+        let columnsLookup = columnsByGroup.get(task.groupId);
+        if (!columnsLookup) {
+          columnsLookup = activeSprintColumns(ctx, task.groupId).then((s) => s.columns);
+          columnsByGroup.set(task.groupId, columnsLookup);
+        }
+        const columns = await columnsLookup;
+        const target = findColumn(columns, a.column);
+        if (!target) {
+          throw new Error(
+            `колонки ${JSON.stringify(a.column)} нет на доске активного спринта; есть: ${columns.map((c) => `«${c.name}» (${c.id})`).join(", ")}`,
+          );
+        }
+        await ctx.call({ ...STAGE_MOVE, params: { id: taskId, stageId: target.id } });
+        const moved = await readTaskStage(ctx, taskId).catch(() => {
+          throw new Error("перенос отправлен, но перечитать задачу не удалось — проверь её колонку через bitrix_task_get");
+        });
+        // movetask answers true and does nothing for a task that is not on the sprint board.
+        if (moved.stageId !== target.id) {
+          throw new Error("Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта");
+        }
+        return { stageId: target.id, column: target.name, status: moved.status ?? null };
+      });
     },
   }),
   defineOperation({
     name: "task_result_add",
     description:
-      "⚠ МУТИРУЮЩИЙ. Добавить РЕЗУЛЬТАТ задачи: он закрепляется в карточке задачи и объявляется в " +
-      "чате задачи (его видят все участники). Формат — BBCode, как в описании задачи (как он выглядит " +
-      `в карточке в чате, не проверено). До ${RESULT_MAX} символов. Ответ: { taskId, resultId }.`,
+      "⚠ МУТИРУЮЩИЙ. Добавить один и тот же РЕЗУЛЬТАТ задачам (taskIds — до 50): он закрепляется в " +
+      "карточке каждой задачи и объявляется в её чате (его видят все участники). Формат — BBCode, как в " +
+      `описании задачи (как он выглядит в карточке в чате, не проверено). До ${RESULT_MAX} символов. ` +
+      "Задачи обрабатываются по очереди; ошибка одной не останавливает остальные. " +
+      "Ответ: { results: [{ taskId, ok, error?, resultId }] }.",
     mutating: true,
-    input: { taskId: idArg(), text: z.string().min(1).max(RESULT_MAX) },
-    run: async (ctx, a) => {
-      const raw = await ctx.call({ ...RESULT_ADD, params: { results: [{ taskId: a.taskId, text: a.text }] } });
-      return { taskId: a.taskId, resultId: parseResponse(resultAddResponse, raw, "tasks.v2.Task.Result.add").data[0].id };
-    },
+    budget: "long",
+    input: { taskIds: taskIdsArg(), text: z.string().min(1).max(RESULT_MAX) },
+    run: (ctx, a) =>
+      forEachTask(a.taskIds, async (taskId) => {
+        const raw = await ctx.call({ ...RESULT_ADD, params: { results: [{ taskId, text: a.text }] } });
+        return { resultId: parseResponse(resultAddResponse, raw, "tasks.v2.Task.Result.add").data[0].id };
+      }),
   }),
 ];

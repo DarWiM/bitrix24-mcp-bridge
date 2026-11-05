@@ -93,8 +93,8 @@ describe("write operations in OPERATIONS", () => {
       ["task_description_set", { taskId: 1, text: "x" }],
       ["task_description_append", { taskId: 1, text: "x" }],
       ["chat_send", { chatId: 1, text: "x" }],
-      ["task_move", { taskId: 1, column: "Готово" }],
-      ["task_result_add", { taskId: 1, text: "x" }],
+      ["task_move", { taskIds: [1], column: "Готово" }],
+      ["task_result_add", { taskIds: [1], text: "x" }],
     ];
     for (const [name, args] of calls) {
       const err = await rejection(runOperation(reg, name, args, ctx, { allowMutations: false }));
@@ -233,80 +233,144 @@ describe("sprint_columns", () => {
   });
 });
 
+
 describe("task_move", () => {
+  const getTask = (taskId: number) => rest("/rest/tasks.task.get.json", { taskId, select: TASK_STAGE_SELECT });
+  const sprintList = rest("/rest/tasks.api.scrum.sprint.list.json", { filter: { GROUP_ID: 15, STATUS: "active" } });
+  const stagesList = rest("/rest/tasks.api.scrum.kanban.getStages.json", { sprintId: 7 });
+  const move = (id: number, stageId: number) => rest("/rest/task.stages.movetask.json", { id, stageId });
+
   it("resolves the column by name ignoring case, moves the task and returns the re-read stage and status", async () => {
     const { ctx, call } = fakeCtx(replies(taskReply("59"), activeSprint, sprintStages, { result: true }, taskReply("60", "5")));
 
-    const result = await op("task_move").execute(ctx, { taskId: 42, column: "  готово " });
+    const result = await op("task_move").execute(ctx, { taskIds: [42], column: "  готово " });
 
-    const getTask = rest("/rest/tasks.task.get.json", { taskId: 42, select: TASK_STAGE_SELECT });
-    expect(call.mock.calls.map((c) => c[0])).toEqual([
-      getTask,
-      rest("/rest/tasks.api.scrum.sprint.list.json", { filter: { GROUP_ID: 15, STATUS: "active" } }),
-      rest("/rest/tasks.api.scrum.kanban.getStages.json", { sprintId: 7 }),
-      rest("/rest/task.stages.movetask.json", { id: 42, stageId: 60 }),
-      getTask,
-    ]);
-    expect(result).toEqual({ taskId: 42, stageId: 60, column: "Готово", status: 5 });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([getTask(42), sprintList, stagesList, move(42, 60), getTask(42)]);
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, stageId: 60, column: "Готово", status: 5 }] });
   });
 
   it("resolves the column by id", async () => {
     const { ctx, call } = fakeCtx(replies(taskReply("58"), activeSprint, sprintStages, { result: true }, taskReply("61")));
 
-    const result = await op("task_move").execute(ctx, { taskId: 42, column: 61 });
+    const result = await op("task_move").execute(ctx, { taskIds: ["42"], column: 61 });
 
     expect(call.mock.calls[3][0].params).toEqual({ id: 42, stageId: 61 });
-    expect(result).toEqual({ taskId: 42, stageId: 61, column: "Testing", status: 2 });
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, stageId: 61, column: "Testing", status: 2 }] });
   });
 
   it("takes a digit string as a column id when no column has that name", async () => {
     const { ctx, call } = fakeCtx(replies(taskReply("58"), activeSprint, sprintStages, { result: true }, taskReply("59")));
 
-    const result = await op("task_move").execute(ctx, { taskId: 42, column: "59" });
+    const result = await op("task_move").execute(ctx, { taskIds: [42], column: "59" });
 
     expect(call.mock.calls[3][0].params).toEqual({ id: 42, stageId: 59 });
-    expect(result).toEqual({ taskId: 42, stageId: 59, column: "В работе", status: 2 });
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, stageId: 59, column: "В работе", status: 2 }] });
+  });
+
+  it("moves a batch in order, looks the sprint columns up once per project and keeps going past a failed task", async () => {
+    const { ctx, call } = fakeCtx(
+      replies(
+        taskReply("58"), activeSprint, sprintStages, { result: true }, taskReply("61"),
+        taskReply("58"), { result: true }, taskReply("58"),
+        taskReply("59"), { result: true }, taskReply("61", "5"),
+      ),
+    );
+
+    const result = await op("task_move").execute(ctx, { taskIds: [42, 43, 44], column: "Testing" });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      getTask(42), sprintList, stagesList, move(42, 61), getTask(42),
+      getTask(43), move(43, 61), getTask(43),
+      getTask(44), move(44, 61), getTask(44),
+    ]);
+    expect(result).toEqual({
+      results: [
+        { taskId: 42, ok: true, stageId: 61, column: "Testing", status: 2 },
+        { taskId: 43, ok: false, error: "Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта" },
+        { taskId: 44, ok: true, stageId: 61, column: "Testing", status: 5 },
+      ],
+    });
   });
 
   it("lists the available columns for an unknown name, without moving", async () => {
     const { ctx, call } = fakeCtx(replies(taskReply("58"), activeSprint, sprintStages));
 
-    const err = await rejection(op("task_move").execute(ctx, { taskId: 42, column: "Ревью" }));
+    const result = await op("task_move").execute(ctx, { taskIds: [42], column: "Ревью" });
 
-    expect(err.message).toContain("«Новые» (58), «В работе» (59), «Testing» (61), «Готово» (60)");
+    expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error: 'колонки "Ревью" нет на доске активного спринта; есть: «Новые» (58), «В работе» (59), «Testing» (61), «Готово» (60)',
+        },
+      ],
+    });
     expect(call).toHaveBeenCalledTimes(3);
-  });
-
-  it("fails when movetask answers true but the stage did not change", async () => {
-    const { ctx } = fakeCtx(replies(taskReply("58"), activeSprint, sprintStages, { result: true }, taskReply("58")));
-
-    await expect(op("task_move").execute(ctx, { taskId: 42, column: "Готово" })).rejects.toThrow(
-      "Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта",
-    );
   });
 
   it("refuses a task outside any project before resolving columns", async () => {
     const { ctx, call } = fakeCtx(replies(taskReply("0", "2", "0")));
 
-    await expect(op("task_move").execute(ctx, { taskId: 42, column: "Готово" })).rejects.toThrow("не в проекте");
+    const result = await op("task_move").execute(ctx, { taskIds: [42], column: "Готово" });
+
+    expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: expect.stringContaining("не в проекте") }] });
     expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  for (const [title, reread] of [
+    ["comes back in an unexpected shape", async () => ({ result: [] })],
+    ["fails", async () => {
+      throw new Error("extension not connected");
+    }],
+  ] as const) {
+    it(`says the move was sent when the re-read ${title}`, async () => {
+      const first = replies(taskReply("58"), activeSprint, sprintStages, { result: true });
+      let n = 0;
+      const { ctx } = fakeCtx(async (target) => (n++ < 4 ? first(target) : reread()));
+
+      const result = await op("task_move").execute(ctx, { taskIds: [42], column: "Готово" });
+
+      expect(result).toEqual({
+        results: [{ taskId: 42, ok: false, error: expect.stringContaining("перенос отправлен, но перечитать задачу не удалось") }],
+      });
+    });
+  }
+
+  it("rejects an empty taskIds list before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("task_move").execute(ctx, { taskIds: [], column: "Готово" })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
   });
 });
 
 describe("task_result_add", () => {
-  it("sends tasks.v2.Task.Result.add as json and returns the new result id", async () => {
-    const { ctx, call } = fakeCtx(async () => ({ status: "success", data: [{ id: 913, taskId: 42, text: "Готово" }], errors: [] }));
+  it("sends tasks.v2.Task.Result.add as json per task and returns each new result id", async () => {
+    const { ctx, call } = fakeCtx(
+      replies(
+        { status: "success", data: [{ id: 913, taskId: 42, text: "Готово" }], errors: [] },
+        { status: "success", data: [], errors: [] },
+        { status: "success", data: [{ id: 915, taskId: 44, text: "Готово" }], errors: [] },
+      ),
+    );
 
-    const result = await op("task_result_add").execute(ctx, { taskId: 42, text: "Готово" });
+    const result = await op("task_result_add").execute(ctx, { taskIds: [42, 43, 44], text: "Готово" });
 
-    expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.Result.add", { results: [{ taskId: 42, text: "Готово" }] }));
-    expect(result).toEqual({ taskId: 42, resultId: 913 });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([42, 43, 44].map((taskId) => json("tasks.v2.Task.Result.add", { results: [{ taskId, text: "Готово" }] })));
+    expect(result).toEqual({
+      results: [
+        { taskId: 42, ok: true, resultId: 913 },
+        { taskId: 43, ok: false, error: "tasks.v2.Task.Result.add returned an unexpected shape" },
+        { taskId: 44, ok: true, resultId: 915 },
+      ],
+    });
   });
 
   it("rejects a text over 20 000 characters before any request", async () => {
     const { ctx, call } = fakeCtx();
 
-    await expect(op("task_result_add").execute(ctx, { taskId: 42, text: "a".repeat(20_001) })).rejects.toThrow(OpInputError);
+    await expect(op("task_result_add").execute(ctx, { taskIds: [42], text: "a".repeat(20_001) })).rejects.toThrow(OpInputError);
     expect(call).not.toHaveBeenCalled();
   });
 });
