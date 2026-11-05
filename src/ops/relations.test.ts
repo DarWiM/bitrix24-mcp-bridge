@@ -1,0 +1,312 @@
+import { describe, it, expect, mock } from "bun:test";
+import type { CallTarget, DownloadResult } from "../../shared/wire.js";
+import { OpInputError, OpRefusedError, type OpContext, type Operation } from "./operation.js";
+import { createRegistry, runOperation } from "./registry.js";
+import { OPERATIONS } from "./index.js";
+
+const AJAX = "/bitrix/services/main/ajax.php";
+
+type CallFn = (target: CallTarget, portal?: string) => Promise<unknown>;
+
+function fakeCtx(callFn: CallFn = async () => ({ result: true })) {
+  const call = mock(callFn);
+  const callBinary = mock(async (_target: CallTarget, _dest: string): Promise<DownloadResult> => {
+    throw new Error("unexpected download");
+  });
+  const ctx: OpContext = {
+    portal: "d",
+    origin: "https://d.bitrix24.ru",
+    origins: { d: "https://d.bitrix24.ru" },
+    downloadsDir: "/tmp/br24-unused",
+    call,
+    callBinary,
+  };
+  return { ctx, call };
+}
+
+// Replies in order, one per request — the shape of a multi-request operation's conversation.
+function replies(...pages: unknown[]): CallFn {
+  let i = 0;
+  return async () => {
+    if (i >= pages.length) throw new Error("no more replies");
+    const page = pages[i++];
+    if (page instanceof Error) throw page;
+    return page;
+  };
+}
+
+function op(name: string): Operation {
+  const found = OPERATIONS.find((o) => o.name === name);
+  if (!found) throw new Error(`no operation ${name}`);
+  return found;
+}
+
+const rest = (endpoint: string, params: Record<string, unknown>): CallTarget =>
+  ({ endpoint, action: null, method: "POST", bodyType: "form", responseType: "json", params });
+const json = (action: string, params: Record<string, unknown>): CallTarget =>
+  ({ endpoint: AJAX, action, method: "POST", bodyType: "json", responseType: "json", params });
+
+const MUTATING = ["task_related_edit", "task_parent", "task_gantt_link"];
+
+describe("relation operations in OPERATIONS", () => {
+  it("registers them as mutating, under the long budget, none taking agent params", () => {
+    for (const name of MUTATING) {
+      expect(op(name).mutating).toBe(true);
+      expect(op(name).budget).toBe("long");
+      expect(Object.keys(op(name).input)).not.toContain("params");
+    }
+  });
+
+  it("refuses every one before any request when mutations are off", async () => {
+    const { ctx, call } = fakeCtx();
+    const reg = createRegistry(OPERATIONS);
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["task_related_edit", { taskId: 1, add: [2] }],
+      ["task_parent", { taskId: 1, parentId: null }],
+      ["task_gantt_link", { taskId: 1, dependentId: 2 }],
+    ];
+    for (const [name, args] of calls) {
+      await expect(runOperation(reg, name, args, ctx, { allowMutations: false })).rejects.toThrow(OpRefusedError);
+    }
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+const related = (...ids: number[]) => ({
+  status: "success",
+  data: { tasks: ids.map((id) => ({ id, title: `Задача ${id}` })), ids, statuses: {} },
+});
+const relatedList = (taskId: number) =>
+  json("tasks.v2.Task.Relation.Related.list", { taskId, withIds: true, withCompleted: true, withSubTasks: false, navigation: { size: 100 } });
+const done = (...ids: number[]) => ({ status: "success", data: Object.fromEntries(ids.map((id) => [String(id), true])) });
+
+describe("task_related_edit", () => {
+  it("adds only the missing tasks, removes only the related ones, and re-reads the list", async () => {
+    const { ctx, call } = fakeCtx(replies(related(5, 6), done(7), done(6), related(5, 7)));
+
+    const result = await op("task_related_edit").execute(ctx, { taskId: "42", add: [5, "7"], remove: [6, 8] });
+
+    expect(call).toHaveBeenCalledTimes(4);
+    expect(call.mock.calls[0][0]).toEqual(relatedList(42));
+    expect(call.mock.calls[1][0]).toEqual(json("tasks.v2.Task.Relation.Related.add", { taskId: 42, tasks: [{ id: 7 }], noOverride: false }));
+    expect(call.mock.calls[2][0]).toEqual(json("tasks.v2.Task.Relation.Related.delete", { taskId: 42, tasks: [{ id: 6 }] }));
+    expect(call.mock.calls[3][0]).toEqual(relatedList(42));
+    expect(result).toEqual({ taskId: 42, related: [5, 7], changed: true });
+  });
+
+  it("only removes when nothing is to be added", async () => {
+    const { ctx, call } = fakeCtx(replies(related(5), done(5), related()));
+
+    const result = await op("task_related_edit").execute(ctx, { taskId: 42, remove: [5] });
+
+    expect(call.mock.calls[1][0]).toEqual(json("tasks.v2.Task.Relation.Related.delete", { taskId: 42, tasks: [{ id: 5 }] }));
+    expect(result).toEqual({ taskId: 42, related: [], changed: true });
+  });
+
+  it("writes nothing when every task is already where it was asked to be", async () => {
+    const { ctx, call } = fakeCtx(replies(related(5)));
+
+    const result = await op("task_related_edit").execute(ctx, { taskId: 42, add: [5], remove: [6] });
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ taskId: 42, related: [5], changed: false });
+  });
+
+  it("does not write when the list cannot be read or comes back in an unexpected shape", async () => {
+    for (const reply of [new Error("timeout"), { status: "success", data: { tasks: [] } }]) {
+      const { ctx, call } = fakeCtx(replies(reply));
+
+      await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5] })).rejects.toThrow();
+      expect(call).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("fails when the re-read list shows Bitrix did not apply a change", async () => {
+    const { ctx } = fakeCtx(replies(related(6), done(5), done(6), related(6)));
+
+    await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5], remove: [6] })).rejects.toThrow(
+      /Bitrix не применил: добавить 5; убрать 6/,
+    );
+  });
+
+  it("says the additions went through when the removal then fails", async () => {
+    const { ctx, call } = fakeCtx(replies(related(6), done(5), new Error("ACCESS_DENIED")));
+
+    await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5], remove: [6] })).rejects.toThrow(
+      /добавлены 5.*ACCESS_DENIED/,
+    );
+    expect(call).toHaveBeenCalledTimes(3);
+  });
+
+  it("says the write was sent when the re-read fails", async () => {
+    const { ctx } = fakeCtx(replies(related(), done(5), new Error("timeout")));
+
+    await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5] })).rejects.toThrow(/отправлен.*timeout/);
+  });
+
+  it("rejects no changes, a task in both lists or the task itself before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    for (const args of [{ taskId: 42 }, { taskId: 42, add: [] }, { taskId: 42, add: [5], remove: ["5"] }, { taskId: 42, add: [42] }, { taskId: 42, remove: [42] }]) {
+      await expect(op("task_related_edit").execute(ctx, args)).rejects.toThrow(OpInputError);
+    }
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+const parent = (parentId: string | null) => ({ result: { task: { id: "42", parentId } } });
+const parentGet = rest("/rest/tasks.task.get.json", { taskId: 42, select: ["ID", "PARENT_ID"] });
+const childAdd = (parentId: number) =>
+  json("tasks.v2.Task.Relation.Child.add", { taskId: parentId, tasks: [{ id: 42 }], noOverride: false, relationKind: "parent" });
+const childDelete = (parentId: number) => json("tasks.v2.Task.Relation.Child.delete", { taskId: parentId, tasks: [{ id: 42 }] });
+
+describe("task_parent", () => {
+  it("detaches the task from its current parent, attaches it to the new one and re-reads", async () => {
+    const { ctx, call } = fakeCtx(replies(parent("7"), { status: "success", data: { 42: true } }, done(42), parent("9")));
+
+    const result = await op("task_parent").execute(ctx, { taskId: 42, parentId: "9" });
+
+    expect(call).toHaveBeenCalledTimes(4);
+    expect(call.mock.calls[0][0]).toEqual(parentGet);
+    expect(call.mock.calls[1][0]).toEqual(childDelete(7));
+    expect(call.mock.calls[2][0]).toEqual(childAdd(9));
+    expect(call.mock.calls[3][0]).toEqual(parentGet);
+    expect(result).toEqual({ taskId: 42, parentId: 9, previousParentId: 7, changed: true });
+  });
+
+  it("attaches a task without a parent without detaching anything", async () => {
+    const { ctx, call } = fakeCtx(replies(parent(null), done(42), parent("9")));
+
+    const result = await op("task_parent").execute(ctx, { taskId: 42, parentId: 9 });
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(call.mock.calls[1][0]).toEqual(childAdd(9));
+    expect(result).toEqual({ taskId: 42, parentId: 9, previousParentId: null, changed: true });
+  });
+
+  it("clears the parent with null", async () => {
+    const { ctx, call } = fakeCtx(replies(parent("7"), done(42), parent(null)));
+
+    const result = await op("task_parent").execute(ctx, { taskId: 42, parentId: null });
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(call.mock.calls[1][0]).toEqual(childDelete(7));
+    expect(result).toEqual({ taskId: 42, parentId: null, previousParentId: 7, changed: true });
+  });
+
+  it("reads parent \"0\" as no parent", async () => {
+    const { ctx, call } = fakeCtx(replies(parent("0")));
+
+    const result = await op("task_parent").execute(ctx, { taskId: 42, parentId: null });
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ taskId: 42, parentId: null, previousParentId: null, changed: false });
+  });
+
+  it("writes nothing when the parent is already the asked one", async () => {
+    const { ctx, call } = fakeCtx(replies(parent("9")));
+
+    const result = await op("task_parent").execute(ctx, { taskId: 42, parentId: 9 });
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ taskId: 42, parentId: 9, previousParentId: 9, changed: false });
+  });
+
+  it("does not write when the parent cannot be read or comes back in an unexpected shape", async () => {
+    for (const reply of [new Error("timeout"), { result: { task: { id: "42" } } }]) {
+      const { ctx, call } = fakeCtx(replies(reply));
+
+      await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: 9 })).rejects.toThrow();
+      expect(call).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("names the old parent to restore when the attach fails after the detach", async () => {
+    const { ctx } = fakeCtx(replies(parent("7"), done(42), new Error("TASKS_ERROR")));
+
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: 9 })).rejects.toThrow(
+      /отвязана от родителя 7.*TASKS_ERROR.*parentId: 7/,
+    );
+  });
+
+  it("fails when the re-read parent is not the asked one", async () => {
+    const { ctx } = fakeCtx(replies(parent(null), done(42), parent(null)));
+
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: 9 })).rejects.toThrow(/Bitrix не применил.*нет/);
+  });
+
+  it("says the write was sent when the re-read fails", async () => {
+    const { ctx } = fakeCtx(replies(parent("7"), done(42), new Error("timeout")));
+
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: null })).rejects.toThrow(/отправлен.*timeout/);
+  });
+
+  it("rejects the task as its own parent or a missing parentId before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    for (const args of [{ taskId: 42, parentId: 42 }, { taskId: 42 }]) {
+      await expect(op("task_parent").execute(ctx, args)).rejects.toThrow(OpInputError);
+    }
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+const ok = { status: "success", data: true };
+const link = (extra: Record<string, unknown> = {}) => ({ ganttLink: { taskId: 42, dependentId: 43, ...extra } });
+
+describe("task_gantt_link", () => {
+  it("checks the link first and then adds it as finish → start", async () => {
+    const { ctx, call } = fakeCtx(replies(ok, ok));
+
+    const result = await op("task_gantt_link").execute(ctx, { taskId: "42", dependentId: "43" });
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.Gantt.Dependence.check", link()));
+    expect(call.mock.calls[1][0]).toEqual(json("tasks.v2.Task.Gantt.Dependence.add", link({ type: "finish_start" })));
+    expect(result).toEqual({ taskId: 42, dependentId: 43, linked: true });
+  });
+
+  it("does not add a link the check refuses", async () => {
+    for (const reply of [{ status: "success", data: false }, { status: "success", data: null }]) {
+      const { ctx, call } = fakeCtx(replies(reply));
+
+      await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/ничего не записано/);
+      expect(call).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("fails when the add is not confirmed", async () => {
+    const { ctx } = fakeCtx(replies(ok, { status: "success", data: false }));
+
+    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/не подтвердил/);
+  });
+
+  it("removes the link without a check", async () => {
+    const { ctx, call } = fakeCtx(replies(ok));
+
+    const result = await op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43, remove: true });
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.Gantt.Dependence.delete", link()));
+    expect(result).toEqual({ taskId: 42, dependentId: 43, linked: false });
+  });
+
+  it("fails when the removal is not confirmed", async () => {
+    const { ctx } = fakeCtx(replies({ status: "success", data: false }));
+
+    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43, remove: true })).rejects.toThrow(/не подтвердил/);
+  });
+
+  it("rejects a self-link, an unknown type or a type on removal before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    for (const args of [
+      { taskId: 42, dependentId: 42 },
+      { taskId: 42, dependentId: 43, type: "start_start" },
+      { taskId: 42, dependentId: 43, remove: true, type: "finish_start" },
+    ]) {
+      await expect(op("task_gantt_link").execute(ctx, args)).rejects.toThrow(OpInputError);
+    }
+    expect(call).not.toHaveBeenCalled();
+  });
+});
