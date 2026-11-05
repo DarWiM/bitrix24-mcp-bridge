@@ -367,6 +367,16 @@ describe("task_result_add", () => {
     });
   });
 
+  it("rejects a duplicated task id before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    const err = await rejection(op("task_result_add").execute(ctx, { taskIds: [42, 42], text: "Готово" }));
+
+    expect(err).toBeInstanceOf(OpInputError);
+    expect(err.message).toContain("taskIds: task 42 is listed more than once");
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("rejects a text over 20 000 characters before any request", async () => {
     const { ctx, call } = fakeCtx();
 

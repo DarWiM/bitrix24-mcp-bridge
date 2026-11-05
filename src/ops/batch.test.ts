@@ -70,6 +70,13 @@ describe("taskIdsArg", () => {
     });
   }
 
+  it("rejects a duplicated id, also when one copy is a digit string, and names it", () => {
+    const parsed = schema.safeParse({ taskIds: [42, 7, "42"] });
+
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((i) => i.message)).toEqual(["task 42 is listed more than once"]);
+  });
+
   it(`accepts exactly ${MAX_BATCH} ids`, () => {
     expect(schema.safeParse({ taskIds: Array.from({ length: MAX_BATCH }, (_, i) => i + 1) }).success).toBe(true);
   });

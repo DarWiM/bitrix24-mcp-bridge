@@ -6,8 +6,23 @@ import { idArg } from "./operation.js";
 
 export const MAX_BATCH = 50;
 
-// A factory for the same `$ref` reason as idArg.
-export const taskIdsArg = () => z.array(idArg()).min(1).max(MAX_BATCH);
+// A factory for the same `$ref` reason as idArg. Duplicates are refused: the same task twice
+// would get two results or two notifications. Checked after the transform, so 42 and "42" clash.
+export const taskIdsArg = () =>
+  z
+    .array(idArg())
+    .min(1)
+    .max(MAX_BATCH)
+    .superRefine((ids, ctx) => {
+      const seen = new Set<number>();
+      for (const id of ids) {
+        if (seen.has(id)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `task ${id} is listed more than once` });
+          return;
+        }
+        seen.add(id);
+      }
+    });
 
 export type TaskOutcome<T extends object> = ({ taskId: number; ok: true } & T) | { taskId: number; ok: false; error: string };
 
