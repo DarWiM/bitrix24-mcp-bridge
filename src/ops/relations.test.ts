@@ -125,15 +125,39 @@ describe("task_related_edit", () => {
     const { ctx } = fakeCtx(replies(related(6), done(5), done(6), related(6)));
 
     await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5], remove: [6] })).rejects.toThrow(
-      /Bitrix не применил: добавить 5; убрать 6/,
+      /не добавлены 5; не убраны 6/,
     );
+  });
+
+  it("fails when links the agent did not ask to remove are gone after the write", async () => {
+    const { ctx } = fakeCtx(replies(related(5, 6), done(7), related(7)));
+
+    await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [7] })).rejects.toThrow(
+      /пропали без запроса 5, 6 \(до правки: 5, 6; сейчас: 7\)/,
+    );
+  });
+
+  it("refuses a list as long as the page, which may be cut, without writing", async () => {
+    const { ctx, call } = fakeCtx(replies(related(...Array.from({ length: 100 }, (_, i) => i + 100))));
+
+    await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5] })).rejects.toThrow(/100 или больше связанных/);
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the state is unknown when the add request fails", async () => {
+    const { ctx, call } = fakeCtx(replies(related(6), new Error("timeout")));
+
+    await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5], remove: [6] })).rejects.toThrow(
+      /добавить 5 не удалось: timeout — состояние связей неизвестно.*bitrix_task_related/,
+    );
+    expect(call).toHaveBeenCalledTimes(2);
   });
 
   it("says the additions went through when the removal then fails", async () => {
     const { ctx, call } = fakeCtx(replies(related(6), done(5), new Error("ACCESS_DENIED")));
 
     await expect(op("task_related_edit").execute(ctx, { taskId: 42, add: [5], remove: [6] })).rejects.toThrow(
-      /добавлены 5.*ACCESS_DENIED/,
+      /добавлены 5.*ACCESS_DENIED — состояние связей неизвестно.*bitrix_task_related/,
     );
     expect(call).toHaveBeenCalledTimes(3);
   });
@@ -232,13 +256,38 @@ describe("task_parent", () => {
   it("fails when the re-read parent is not the asked one", async () => {
     const { ctx } = fakeCtx(replies(parent(null), done(42), parent(null)));
 
-    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: 9 })).rejects.toThrow(/Bitrix не применил.*нет/);
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: 9 })).rejects.toThrow(/Bitrix не применил.*нет\)$/);
   });
 
-  it("says the write was sent when the re-read fails", async () => {
+  it("names the old parent to restore when the re-read shows neither the old nor the new one", async () => {
+    const { ctx } = fakeCtx(replies(parent("7"), done(42), done(42), parent(null)));
+
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: 9 })).rejects.toThrow(
+      /сейчас родитель: нет\).*прежний родитель 7.*bitrix_task_parent \{ taskId: 42, parentId: 7 \}/,
+    );
+  });
+
+  it("offers no restore when the task still has its old parent", async () => {
+    const { ctx } = fakeCtx(replies(parent("7"), done(42), parent("7")));
+
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: null })).rejects.toThrow(/сейчас родитель: 7\)$/);
+  });
+
+  it("says the write was sent and names the old parent when the re-read fails", async () => {
     const { ctx } = fakeCtx(replies(parent("7"), done(42), new Error("timeout")));
 
-    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: null })).rejects.toThrow(/отправлен.*timeout/);
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: null })).rejects.toThrow(
+      /отправлен.*timeout.*bitrix_task_parent \{ taskId: 42, parentId: 7 \}/,
+    );
+  });
+
+  it("names the old parent to restore when the detach request fails", async () => {
+    const { ctx, call } = fakeCtx(replies(parent("7"), new Error("timeout")));
+
+    await expect(op("task_parent").execute(ctx, { taskId: 42, parentId: 9 })).rejects.toThrow(
+      /отвязать от родителя 7 не удалось: timeout.*parentId: 7/,
+    );
+    expect(call).toHaveBeenCalledTimes(2);
   });
 
   it("rejects the task as its own parent or a missing parentId before any request", async () => {

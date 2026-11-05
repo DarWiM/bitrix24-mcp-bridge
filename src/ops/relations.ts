@@ -27,11 +27,17 @@ const parentResponse = z.object({
 // There is no read for Gantt links, so only this answer tells a done write from an ignored one.
 const confirmedResponse = z.object({ data: z.literal(true) });
 
+const RELATED_PAGE = 100;
+const RELATED_RECHECK = "состояние связей неизвестно — перечитай их через bitrix_task_related перед повтором";
+
 async function readRelated(ctx: OpContext, taskId: number) {
   // Subtasks of the related tasks are not links of this task.
-  const params = { taskId, withIds: true, withCompleted: true, withSubTasks: false, navigation: { size: 100 } };
+  const params = { taskId, withIds: true, withCompleted: true, withSubTasks: false, navigation: { size: RELATED_PAGE } };
   const raw = await ctx.call({ ...TASK_RELATED, params });
-  return parseResponse(relatedResponse, raw, "tasks.v2.Task.Relation.Related.list").data.ids;
+  const ids = parseResponse(relatedResponse, raw, "tasks.v2.Task.Relation.Related.list").data.ids;
+  // A full page may be a cut one: a removal or the loss check would then work on part of the list.
+  if (ids.length >= RELATED_PAGE) throw new Error(`у задачи ${RELATED_PAGE} или больше связанных — правка недоступна`);
+  return ids;
 }
 
 async function readParent(ctx: OpContext, taskId: number) {
@@ -51,7 +57,8 @@ export const RELATION_OPERATIONS: Operation[] = [
       "массивы id задач; нужен хотя бы один непустой. Связи задачи читаются заново: добавляются только те, " +
       "которых нет, убираются только те, что есть; остальные связи не трогаются; если менять нечего, запись " +
       "не делается (changed: false). После записи список перечитывается; если Bitrix применил не всё — ошибка " +
-      "с перечнем. Связи видят все, кто видит задачу. Текущий список — bitrix_task_related. " +
+      "с перечнем, в т.ч. если пропали связи, которых не было в remove. Задачи со 100 и более связанными не " +
+      "правятся (список не читается целиком). Связи видят все, кто видит задачу. Текущий список — bitrix_task_related. " +
       "Ответ: { taskId, related, changed } — related — id связанных задач после записи.",
     mutating: true,
     // Up to four requests in a row.
@@ -71,13 +78,16 @@ export const RELATION_OPERATIONS: Operation[] = [
       const toRemove = [...new Set(remove)].filter((id) => current.includes(id));
       if (toAdd.length === 0 && toRemove.length === 0) return { taskId: a.taskId, related: current, changed: false };
 
+      // A failed request may still have been applied, wholly or for some of the ids.
       if (toAdd.length > 0) {
-        await ctx.call({ ...RELATED_ADD, params: { taskId: a.taskId, tasks: taskList(toAdd), noOverride: false } });
+        await ctx.call({ ...RELATED_ADD, params: { taskId: a.taskId, tasks: taskList(toAdd), noOverride: false } }).catch((e: unknown) => {
+          throw new Error(`добавить ${toAdd.join(", ")} не удалось: ${errorMessage(e)} — ${RELATED_RECHECK}`);
+        });
       }
       if (toRemove.length > 0) {
         await ctx.call({ ...RELATED_DELETE, params: { taskId: a.taskId, tasks: taskList(toRemove) } }).catch((e: unknown) => {
-          if (toAdd.length === 0) throw e;
-          throw new Error(`связи добавлены ${toAdd.join(", ")}, но убрать ${toRemove.join(", ")} не удалось: ${errorMessage(e)}`);
+          const added = toAdd.length > 0 ? `связи добавлены ${toAdd.join(", ")}, но ` : "";
+          throw new Error(`${added}убрать ${toRemove.join(", ")} не удалось: ${errorMessage(e)} — ${RELATED_RECHECK}`);
         });
       }
       const actual = await readRelated(ctx, a.taskId).catch((e: unknown) => {
@@ -85,12 +95,18 @@ export const RELATION_OPERATIONS: Operation[] = [
       });
       const notAdded = toAdd.filter((id) => !actual.includes(id));
       const notRemoved = toRemove.filter((id) => actual.includes(id));
-      if (notAdded.length > 0 || notRemoved.length > 0) {
+      // Links the agent did not ask to drop must survive the write as well.
+      const lost = current.filter((id) => !toRemove.includes(id) && !actual.includes(id));
+      if (notAdded.length > 0 || notRemoved.length > 0 || lost.length > 0) {
         const parts = [
-          ...(notAdded.length > 0 ? [`добавить ${notAdded.join(", ")}`] : []),
-          ...(notRemoved.length > 0 ? [`убрать ${notRemoved.join(", ")}`] : []),
+          ...(notAdded.length > 0 ? [`не добавлены ${notAdded.join(", ")}`] : []),
+          ...(notRemoved.length > 0 ? [`не убраны ${notRemoved.join(", ")}`] : []),
+          ...(lost.length > 0 ? [`пропали без запроса ${lost.join(", ")}`] : []),
         ];
-        throw new Error(`Bitrix не применил: ${parts.join("; ")} (сейчас связаны: ${actual.join(", ") || "нет"})`);
+        throw new Error(
+          `правка связей применилась не так, как просили: ${parts.join("; ")} ` +
+            `(до правки: ${current.join(", ") || "нет"}; сейчас: ${actual.join(", ") || "нет"})`,
+        );
       }
       return { taskId: a.taskId, related: actual, changed: true };
     },
@@ -101,7 +117,7 @@ export const RELATION_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. Сделать задачу ПОДЗАДАЧЕЙ другой: parentId — id новой родительской задачи; null — " +
       "отвязать от родителя (задача становится самостоятельной). Текущий родитель читается заново; если он " +
       "уже тот, запись не делается (changed: false). Смена родителя — два шага: отвязка от старого, привязка " +
-      "к новому; если второй шаг не прошёл, задача остаётся без родителя, и ошибка называет старого. Свои " +
+      "к новому; если задача могла остаться без прежнего родителя, ошибка называет его и вызов, которым его вернуть. Свои " +
       "подзадачи задачи и прочие её связи не трогаются. Задача появляется в списке подзадач родителя у всех, " +
       "кто его видит. Ответ: { taskId, parentId, previousParentId, changed } — parentId перечитан после записи.",
     mutating: true,
@@ -113,21 +129,33 @@ export const RELATION_OPERATIONS: Operation[] = [
       const previousParentId = await readParent(ctx, a.taskId);
       if (previousParentId === a.parentId) return { taskId: a.taskId, parentId: a.parentId, previousParentId, changed: false };
 
+      // Once the detach may have gone through, every failure tells how to get the old parent back.
+      const restore =
+        previousParentId === null
+          ? ""
+          : ` — прежний родитель ${previousParentId}; вернуть его: bitrix_task_parent { taskId: ${a.taskId}, parentId: ${previousParentId} }`;
       const tasks = taskList([a.taskId]);
-      if (previousParentId !== null) await ctx.call({ ...CHILD_DELETE, params: { taskId: previousParentId, tasks } });
+      if (previousParentId !== null) {
+        await ctx.call({ ...CHILD_DELETE, params: { taskId: previousParentId, tasks } }).catch((e: unknown) => {
+          throw new Error(`отвязать от родителя ${previousParentId} не удалось: ${errorMessage(e)}; проверь родителя через bitrix_task_get${restore}`);
+        });
+      }
       if (a.parentId !== null) {
         await ctx.call({ ...CHILD_ADD, params: { taskId: a.parentId, tasks, noOverride: false, relationKind: "parent" } }).catch((e: unknown) => {
           if (previousParentId === null) throw e;
           throw new Error(
-            `задача отвязана от родителя ${previousParentId}, но привязать к ${a.parentId} не удалось: ${errorMessage(e)} — ` +
-              `сейчас у неё нет родителя; вернуть прежнего: bitrix_task_parent { taskId: ${a.taskId}, parentId: ${previousParentId} }`,
+            `задача отвязана от родителя ${previousParentId}, но привязать к ${a.parentId} не удалось: ${errorMessage(e)}; ` +
+              `сейчас у неё, вероятно, нет родителя${restore}`,
           );
         });
       }
       const parentId = await readParent(ctx, a.taskId).catch((e: unknown) => {
-        throw new Error(`запись отправлена, но перечитать задачу не удалось (проверь родителя через bitrix_task_get): ${errorMessage(e)}`);
+        throw new Error(`запись отправлена, но перечитать задачу не удалось (проверь родителя через bitrix_task_get): ${errorMessage(e)}${restore}`);
       });
-      if (parentId !== a.parentId) throw new Error(`Bitrix не применил смену родителя (сейчас родитель: ${parentId ?? "нет"})`);
+      if (parentId !== a.parentId) {
+        const lostPrevious = parentId !== previousParentId ? restore : "";
+        throw new Error(`Bitrix не применил смену родителя (сейчас родитель: ${parentId ?? "нет"})${lostPrevious}`);
+      }
       return { taskId: a.taskId, parentId, previousParentId, changed: true };
     },
   }),
