@@ -48,16 +48,17 @@ describe("OPERATIONS", () => {
       "task_description_append", "chat_send", "sprint_columns", "task_move", "task_result_add",
       "task_delegate", "task_accomplices", "task_auditors", "user_find", "task_to_sprint", "task_to_backlog",
       "task_create", "task_description_replace", "task_tags", "task_checklist", "task_checklist_edit", "task_plan",
-      "task_related_edit", "task_parent", "task_gantt_link",
+      "task_related_edit", "task_parent", "task_gantt_link", "chat_message_edit", "chat_reaction", "task_chat_post",
     ].sort());
   });
 
   it("marks exactly the operations that change data as mutating", () => {
     expect(OPERATIONS.filter((o) => o.mutating).map((o) => o.name).sort()).toEqual([
-      "chat_mark_read", "chat_read_all", "chat_send", "task_accomplices", "task_auditors", "task_checklist_edit",
-      "task_create", "task_delegate", "task_description_append", "task_description_replace",
-      "task_description_set", "task_gantt_link", "task_move", "task_parent", "task_plan", "task_related_edit",
-      "task_result_add", "task_tags", "task_to_backlog", "task_to_sprint",
+      "chat_mark_read", "chat_message_edit", "chat_reaction", "chat_read_all", "chat_send", "task_accomplices",
+      "task_auditors", "task_chat_post", "task_checklist_edit", "task_create", "task_delegate",
+      "task_description_append", "task_description_replace", "task_description_set", "task_gantt_link",
+      "task_move", "task_parent", "task_plan", "task_related_edit", "task_result_add", "task_tags",
+      "task_to_backlog", "task_to_sprint",
     ]);
   });
 });

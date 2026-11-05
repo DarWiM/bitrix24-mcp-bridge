@@ -1,5 +1,4 @@
-// Operations that change task content or people, post messages, create tasks or move them on the
-// scrum board.
+// Operations that change task content or people, create tasks or move them on the scrum board.
 // None of them takes agent `params`: merged-in fields could widen a write beyond what the tool
 // says it does.
 
@@ -21,7 +20,6 @@ import { OpInputError, defineOperation, idArg, type OpContext, type Operation } 
 import { TASK_V2_GET, callTarget } from "./read.js";
 
 const TASK_UPDATE = restMethod("tasks.task.update");
-const MESSAGE_ADD = restMethod("im.message.add");
 const TASK_DELEGATE = restMethod("tasks.task.delegate");
 const USER_GET = restMethod("user.get");
 // Changes only the container (backlog / sprint): the task is not on the sprint board yet.
@@ -36,8 +34,6 @@ const BOARD_CREATE = callTarget({
 const RESULT_ADD = callTarget({ action: "tasks.v2.Task.Result.add", method: "POST", bodyType: "json" });
 
 export const DESCRIPTION_MAX = 100_000;
-// Bitrix's documented message limit; past it the portal truncates without an error.
-const MESSAGE_MAX = 20_000;
 const RESULT_MAX = 20_000;
 // b_tasks.TITLE is varchar(255).
 const TITLE_MAX = 255;
@@ -45,7 +41,6 @@ const TITLE_MAX = 255;
 // `description` is required, not optional: reading an unexpected shape as "empty" would make
 // append overwrite the whole description with the new text.
 const descriptionResponse = z.object({ data: z.object({ description: z.string().nullable() }) });
-const messageResponse = z.object({ result: numeric });
 const boardCreateResponse = z.object({ data: z.object({ id: numeric, columnId: numeric.nullish() }) });
 const resultAddResponse = z.object({ data: z.array(z.object({ id: numeric })).min(1) });
 const responsibleResponse = z.object({ result: z.object({ task: z.object({ responsibleId: numeric }) }) });
@@ -139,12 +134,6 @@ export const DESCRIPTION_FORMAT =
   "с пунктами [*], [quote], [code], [spoiler=Заголовок]…[/spoiler], таблицы [table][tr][th]/[td]. " +
   "Вложения [disk file id=…] в описании не трогай — это прикреплённые файлы.";
 
-const CHAT_FORMAT =
-  "Формат — только то, что видно и в вебе, и в мобильном: [b] [i] [u] [s], [url=…]…[/url], " +
-  "[user=ID]Имя[/user], [code], [color=#hex]…[/color], [br]. Цитата — строка, начинающаяся с «>>», " +
-  "или блок между двумя строками из дефисов; список — строки, начинающиеся с «• ». " +
-  "В чате НЕ рендерятся: [quote], [list], [spoiler], таблицы и Markdown.";
-
 export const WRITE_OPERATIONS: Operation[] = [
   defineOperation({
     name: "task_description_set",
@@ -168,27 +157,6 @@ export const WRITE_OPERATIONS: Operation[] = [
     run: async (ctx, a) => {
       const current = (await readDescription(ctx, a.taskId)).trimEnd();
       return writeDescription(ctx, a.taskId, current ? `${current}\n\n${a.text}` : a.text);
-    },
-  }),
-  defineOperation({
-    name: "chat_send",
-    description:
-      "⚠ МУТИРУЮЩИЙ. Отправить сообщение в чат. Адрес — РОВНО ОДНО из: chatId (числовой id чата) или " +
-      'dialogId строкой (userId — личный чат с человеком, либо "chat"+chatId). Чат задачи: CHAT_ID из ' +
-      'bitrix_task_get (или bitrix_entity_chat с entityType "TASKS_TASK"). Сообщение видят все ' +
-      "участники чата; упоминание [user=ID]Имя[/user] шлёт этому человеку уведомление. " +
-      `До ${MESSAGE_MAX} символов (длиннее Bitrix молча обрежет). ` +
-      CHAT_FORMAT,
-    mutating: true,
-    input: { chatId: idArg().optional(), dialogId: z.string().min(1).optional(), text: z.string().min(1).max(MESSAGE_MAX) },
-    run: async (ctx, a) => {
-      const dialogId = a.chatId !== undefined ? `chat${a.chatId}` : a.dialogId;
-      if (dialogId === undefined || (a.chatId !== undefined && a.dialogId !== undefined)) {
-        throw new OpInputError("invalid arguments for chat_send — pass exactly one of chatId / dialogId");
-      }
-      const raw = await ctx.call({ ...MESSAGE_ADD, params: { DIALOG_ID: dialogId, MESSAGE: a.text } });
-      const messageId = parseResponse(messageResponse, raw, "im.message.add").result;
-      return { ...(a.chatId !== undefined ? { chatId: a.chatId } : {}), dialogId, messageId };
     },
   }),
   defineOperation({

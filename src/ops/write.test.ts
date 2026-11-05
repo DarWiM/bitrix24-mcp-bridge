@@ -77,7 +77,7 @@ describe("write operations in OPERATIONS", () => {
     expect(op("sprint_columns").mutating).toBe(false);
     expect(op("user_find").mutating).toBe(false);
     for (const name of [
-      "task_description_set", "task_description_append", "chat_send", "task_move", "task_result_add",
+      "task_description_set", "task_description_append", "task_move", "task_result_add",
       "task_delegate", "task_accomplices", "task_auditors", "task_to_sprint", "task_to_backlog", "task_create",
     ]) {
       expect(op(name).mutating).toBe(true);
@@ -86,7 +86,7 @@ describe("write operations in OPERATIONS", () => {
 
   it("takes no agent params", () => {
     for (const name of [
-      "task_description_set", "task_description_append", "chat_send", "sprint_columns", "task_move", "task_result_add",
+      "task_description_set", "task_description_append", "sprint_columns", "task_move", "task_result_add",
       "task_delegate", "task_accomplices", "task_auditors", "user_find", "task_to_sprint", "task_to_backlog", "task_create",
     ]) {
       expect(Object.keys(op(name).input)).not.toContain("params");
@@ -99,7 +99,6 @@ describe("write operations in OPERATIONS", () => {
     const calls: Array<[string, Record<string, unknown>]> = [
       ["task_description_set", { taskId: 1, text: "x" }],
       ["task_description_append", { taskId: 1, text: "x" }],
-      ["chat_send", { chatId: 1, text: "x" }],
       ["task_move", { taskIds: [1], column: "Готово" }],
       ["task_result_add", { taskIds: [1], text: "x" }],
       ["task_delegate", { taskIds: [1], userId: 2 }],
@@ -180,50 +179,6 @@ describe("task_description_append", () => {
 
     await expect(op("task_description_append").execute(ctx, { taskId: 42, text: "" })).rejects.toThrow(OpInputError);
     expect(call).not.toHaveBeenCalled();
-  });
-});
-
-describe("chat_send", () => {
-  it("addresses a chat by chatId as DIALOG_ID chat<id>", async () => {
-    const { ctx, call } = fakeCtx(async () => ({ result: 1884131 }));
-
-    const result = await op("chat_send").execute(ctx, { chatId: "40271", text: "Привет, [user=11]Пётр[/user]" });
-
-    expect(call.mock.calls[0][0]).toEqual(rest("/rest/im.message.add.json", { DIALOG_ID: "chat40271", MESSAGE: "Привет, [user=11]Пётр[/user]" }));
-    expect(result).toEqual({ chatId: 40271, dialogId: "chat40271", messageId: 1884131 });
-  });
-
-  it("passes a dialogId through as is", async () => {
-    const { ctx, call } = fakeCtx(async () => ({ result: "77" }));
-
-    const result = await op("chat_send").execute(ctx, { dialogId: "11", text: "ok" });
-
-    expect(call.mock.calls[0][0]).toEqual(rest("/rest/im.message.add.json", { DIALOG_ID: "11", MESSAGE: "ok" }));
-    expect(result).toEqual({ dialogId: "11", messageId: 77 });
-  });
-
-  for (const [title, args] of [
-    ["both chatId and dialogId", { chatId: 1, dialogId: "chat1", text: "x" }],
-    ["neither chatId nor dialogId", { text: "x" }],
-    ["a text over 20 000 characters", { chatId: 1, text: "a".repeat(20_001) }],
-    ["an empty text", { chatId: 1, text: "" }],
-  ] as const) {
-    it(`rejects ${title} before any request`, async () => {
-      const { ctx, call } = fakeCtx();
-
-      const err = await rejection(op("chat_send").execute(ctx, args));
-
-      expect(err).toBeInstanceOf(OpInputError);
-      expect(call).not.toHaveBeenCalled();
-    });
-  }
-
-  it("names both addressing fields when the choice is wrong", async () => {
-    const { ctx } = fakeCtx();
-
-    const err = await rejection(op("chat_send").execute(ctx, { text: "x" }));
-
-    expect(err.message).toContain("exactly one of chatId / dialogId");
   });
 });
 
