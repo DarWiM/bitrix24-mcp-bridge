@@ -157,18 +157,10 @@ daemon. Набор операций фиксирован в коде; произ
 
 ### Переключатель мутаций
 
-Мутирующие операции — все помеченные ⚠ в таблице выше: `bitrix_task_description_set`,
-`bitrix_task_description_append`, `bitrix_task_description_replace`, `bitrix_task_tags`,
-`bitrix_task_checklist_edit`, `bitrix_task_plan`, `bitrix_task_priority`, `bitrix_task_deadline`,
-`bitrix_task_close`, `bitrix_task_reopen`, `bitrix_task_result_add`, `bitrix_task_file_attach`,
-`bitrix_task_mute`, `bitrix_task_reminder_set`, `bitrix_task_reminder_delete`, `bitrix_task_delegate`,
-`bitrix_task_accomplices`, `bitrix_task_auditors`, `bitrix_task_related_edit`, `bitrix_task_parent`,
-`bitrix_task_gantt_link`, `bitrix_task_move`, `bitrix_task_to_sprint`, `bitrix_task_to_backlog`,
-`bitrix_task_create`, `bitrix_chat_send`, `bitrix_chat_message_edit`, `bitrix_chat_reaction`,
-`bitrix_task_chat_post`, `bitrix_chat_mark_read`, `bitrix_chat_read_all` — по умолчанию
-**разрешены**. Они действуют от имени пользователя: другие участники видят изменения и получают
-уведомления Bitrix24 (кто именно — в `docs/api-notes.md` §3). Запретить их можно тремя способами
-(побеждает верхний):
+Мутирующие операции — все помеченные ⚠ в таблице выше (полный список — `bitrix_help` /
+[`docs/api-notes.md`](docs/api-notes.md) §3, «Мутирующие операции») — по умолчанию **разрешены**. Они действуют от имени
+пользователя: другие участники видят изменения и получают уведомления Bitrix24 (кто именно — там же).
+Запретить их можно тремя способами (побеждает верхний):
 
 1. env `BITRIX_MCP_MUTATIONS=off` (или `on`) у процесса daemon;
 2. `"mutations": false` в `~/.bitrix24-mcp-bridge/config.json`;

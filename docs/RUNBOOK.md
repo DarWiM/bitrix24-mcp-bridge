@@ -123,21 +123,10 @@ bitrix24-mcp-bridge`. Для другого MCP-клиента — та же к�
 
 ## Переключатель мутаций
 
-Мутирующие операции по умолчанию разрешены:
-
-- задачи: `bitrix_task_description_set`, `bitrix_task_description_append`,
-  `bitrix_task_description_replace`, `bitrix_task_tags`, `bitrix_task_checklist_edit`, `bitrix_task_plan`,
-  `bitrix_task_priority`, `bitrix_task_deadline`, `bitrix_task_close`, `bitrix_task_reopen`,
-  `bitrix_task_result_add`, `bitrix_task_file_attach`, `bitrix_task_mute`, `bitrix_task_reminder_set`,
-  `bitrix_task_reminder_delete`;
-- участники и связи: `bitrix_task_delegate`, `bitrix_task_accomplices`, `bitrix_task_auditors`,
-  `bitrix_task_related_edit`, `bitrix_task_parent`, `bitrix_task_gantt_link`;
-- scrum: `bitrix_task_move`, `bitrix_task_to_sprint`, `bitrix_task_to_backlog`, `bitrix_task_create`;
-- чаты: `bitrix_chat_send`, `bitrix_chat_message_edit`, `bitrix_chat_reaction`, `bitrix_task_chat_post`,
-  `bitrix_chat_mark_read`, `bitrix_chat_read_all`.
-
-Они действуют от твоего имени: участники задач и чатов видят изменения и получают уведомления
-Bitrix24, `bitrix_task_file_attach` отправляет локальный файл на твой Диск Битрикс24. Если агенту достаточно
+Мутирующие операции — все помеченные ⚠ в таблице инструментов [README](../README.md) (полный список —
+`bitrix_help` / [`api-notes.md`](api-notes.md) §3, «Мутирующие операции») — по умолчанию разрешены. Они
+действуют от твоего имени: участники задач и чатов видят изменения и получают уведомления Bitrix24,
+`bitrix_task_file_attach` отправляет локальный файл на твой Диск Битрикс24. Если агенту достаточно
 чтения, выключи их (побеждает верхний способ):
 
 1. env `BITRIX_MCP_MUTATIONS=off` (`on` — включить) у процесса daemon;
