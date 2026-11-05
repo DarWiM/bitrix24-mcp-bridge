@@ -1,4 +1,4 @@
-// Operations that change task content or post messages.
+// Operations that change task content, post messages or move tasks on the scrum board.
 // None of them takes agent `params`: merged-in fields could widen a write beyond what the tool
 // says it does.
 
@@ -9,11 +9,20 @@ import { TASK_V2_GET, callTarget } from "./read.js";
 const restMethod = (method: string) => callTarget({ endpoint: `/rest/${method}.json`, method: "POST" });
 
 const TASK_UPDATE = restMethod("tasks.task.update");
+const TASK_GET = restMethod("tasks.task.get");
 const MESSAGE_ADD = restMethod("im.message.add");
+const SPRINT_LIST = restMethod("tasks.api.scrum.sprint.list");
+const SPRINT_STAGES = restMethod("tasks.api.scrum.kanban.getStages");
+const STAGE_MOVE = restMethod("task.stages.movetask");
+// The official tasks.task.result.add exists in REST 3.0 only, which the session refuses.
+const RESULT_ADD = callTarget({ action: "tasks.v2.Task.Result.add", method: "POST", bodyType: "json" });
+
+const TASK_STAGE_SELECT = ["ID", "GROUP_ID", "STAGE_ID", "STATUS"];
 
 const DESCRIPTION_MAX = 100_000;
 // Bitrix's documented message limit; past it the portal truncates without an error.
 const MESSAGE_MAX = 20_000;
+const RESULT_MAX = 20_000;
 
 // Classic REST hands ids and statuses back as strings.
 const numeric = z.union([z.number(), z.string().regex(/^\d+$/)]).transform(Number);
@@ -22,6 +31,14 @@ const numeric = z.union([z.number(), z.string().regex(/^\d+$/)]).transform(Numbe
 // append overwrite the whole description with the new text.
 const descriptionResponse = z.object({ data: z.object({ description: z.string().nullable() }) });
 const messageResponse = z.object({ result: numeric });
+const sprintsResponse = z.object({ result: z.array(z.object({ id: numeric, status: z.string() })) });
+const stagesResponse = z.object({
+  result: z.array(z.object({ id: numeric, name: z.string(), type: z.string().nullish(), sort: numeric })),
+});
+const taskResponse = z.object({
+  result: z.object({ task: z.object({ groupId: numeric.nullish(), stageId: numeric.nullish(), status: numeric.nullish() }) }),
+});
+const resultAddResponse = z.object({ data: z.array(z.object({ id: numeric })).min(1) });
 
 function parseResponse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: unknown, method: string): T {
   const parsed = schema.safeParse(raw);
@@ -32,6 +49,45 @@ function parseResponse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: unkn
 async function writeDescription(ctx: OpContext, taskId: number, text: string) {
   await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { DESCRIPTION: text } } });
   return { taskId, length: text.length };
+}
+
+interface SprintColumn {
+  id: number;
+  name: string;
+  type: string;
+}
+
+async function activeSprintColumns(ctx: OpContext, groupId: number): Promise<{ sprintId: number; columns: SprintColumn[] }> {
+  const sprints = parseResponse(
+    sprintsResponse,
+    await ctx.call({ ...SPRINT_LIST, params: { filter: { GROUP_ID: groupId, STATUS: "active" } } }),
+    "tasks.api.scrum.sprint.list",
+  );
+  // Checked again here: were the filter ignored, the first sprint could be a finished one.
+  const sprint = sprints.result.find((s) => s.status === "active");
+  if (!sprint) throw new Error(`в проекте ${groupId} нет активного спринта — сначала начните спринт на scrum-доске (или это не scrum-проект)`);
+  const stages = parseResponse(
+    stagesResponse,
+    await ctx.call({ ...SPRINT_STAGES, params: { sprintId: sprint.id } }),
+    "tasks.api.scrum.kanban.getStages",
+  );
+  const columns = [...stages.result]
+    .sort((a, b) => a.sort - b.sort)
+    .map(({ id, name, type }) => ({ id, name, type: type ?? "" }));
+  return { sprintId: sprint.id, columns };
+}
+
+async function readTaskStage(ctx: OpContext, taskId: number) {
+  const raw = await ctx.call({ ...TASK_GET, params: { taskId, select: TASK_STAGE_SELECT } });
+  return parseResponse(taskResponse, raw, "tasks.task.get").result.task;
+}
+
+function findColumn(columns: SprintColumn[], column: number | string): SprintColumn | undefined {
+  if (typeof column === "number") return columns.find((c) => c.id === column);
+  const wanted = column.trim().toLowerCase();
+  const byName = columns.find((c) => c.name.trim().toLowerCase() === wanted);
+  // Agents often pass an id as a string; a column literally named "61" still wins above.
+  return byName ?? (/^\d+$/.test(wanted) ? columns.find((c) => c.id === Number(wanted)) : undefined);
 }
 
 const DESCRIPTION_FORMAT =
@@ -89,6 +145,60 @@ export const WRITE_OPERATIONS: Operation[] = [
       const raw = await ctx.call({ ...MESSAGE_ADD, params: { DIALOG_ID: dialogId, MESSAGE: a.text } });
       const messageId = parseResponse(messageResponse, raw, "im.message.add").result;
       return { ...(a.chatId !== undefined ? { chatId: a.chatId } : {}), dialogId, messageId };
+    },
+  }),
+  defineOperation({
+    name: "sprint_columns",
+    description:
+      "Колонки доски АКТИВНОГО спринта scrum-проекта (read-only), по порядку на доске: " +
+      "{ groupId, sprintId, columns: [{ id, name, type }] }. groupId — id проекта (GROUP_ID задачи). " +
+      "type — NEW / WORK / FINISH; у пользовательских колонок (напр. «Testing») type пустой. " +
+      "Не путать с task.stages.get: тот отдаёт старый канбан группы, а не колонки спринта.",
+    mutating: false,
+    input: { groupId: idArg() },
+    run: async (ctx, a) => ({ groupId: a.groupId, ...(await activeSprintColumns(ctx, a.groupId)) }),
+  }),
+  defineOperation({
+    name: "task_move",
+    description:
+      "⚠ МУТИРУЮЩИЙ. Перенести задачу в колонку доски активного спринта её проекта. column — id " +
+      "колонки или её название (без учёта регистра); список колонок — bitrix_sprint_columns. " +
+      "Работает только для задачи, которая уже на доске спринта (не в бэклоге). Перенос может " +
+      "переоткрыть закрытую задачу — смотри status в ответе. Ответ: { taskId, stageId, column, status }.",
+    mutating: true,
+    // Up to five requests in a row.
+    budget: "long",
+    input: { taskId: idArg(), column: z.union([z.number().int().positive(), z.string().min(1)]) },
+    run: async (ctx, a) => {
+      const task = await readTaskStage(ctx, a.taskId);
+      if (!task.groupId) throw new Error(`задача ${a.taskId} не в проекте — колонки спринта есть только у задач scrum-проекта`);
+      const { columns } = await activeSprintColumns(ctx, task.groupId);
+      const target = findColumn(columns, a.column);
+      if (!target) {
+        throw new Error(
+          `колонки ${JSON.stringify(a.column)} нет на доске активного спринта; есть: ${columns.map((c) => `«${c.name}» (${c.id})`).join(", ")}`,
+        );
+      }
+      await ctx.call({ ...STAGE_MOVE, params: { id: a.taskId, stageId: target.id } });
+      const moved = await readTaskStage(ctx, a.taskId);
+      // movetask answers true and does nothing for a task that is not on the sprint board.
+      if (moved.stageId !== target.id) {
+        throw new Error("Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта");
+      }
+      return { taskId: a.taskId, stageId: target.id, column: target.name, status: moved.status ?? null };
+    },
+  }),
+  defineOperation({
+    name: "task_result_add",
+    description:
+      "⚠ МУТИРУЮЩИЙ. Добавить РЕЗУЛЬТАТ задачи: он закрепляется в карточке задачи и объявляется в " +
+      "чате задачи (его видят все участники). Формат — BBCode, как в описании задачи (как он выглядит " +
+      `в карточке в чате, не проверено). До ${RESULT_MAX} символов. Ответ: { taskId, resultId }.`,
+    mutating: true,
+    input: { taskId: idArg(), text: z.string().min(1).max(RESULT_MAX) },
+    run: async (ctx, a) => {
+      const raw = await ctx.call({ ...RESULT_ADD, params: { results: [{ taskId: a.taskId, text: a.text }] } });
+      return { taskId: a.taskId, resultId: parseResponse(resultAddResponse, raw, "tasks.v2.Task.Result.add").data[0].id };
     },
   }),
 ];

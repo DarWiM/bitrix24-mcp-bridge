@@ -69,6 +69,10 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 | `bitrix_task_comments` | старые комментарии задачи (форум), §5.6 | `taskId`, `limit?`, `maxPages?`, `beforeId?`, `output?` | `beforeId` — курсор |
 | `bitrix_task_description_set` ⚠ | **заменить** описание задачи целиком (`""` — очистить) | `taskId`, `text` (≤ 100 000) | без `params`; разметка — BBCode описания (ниже) |
 | `bitrix_task_description_append` ⚠ | **дописать** в конец описания через пустую строку; старое (файлы `[disk file id=…]`, таблицы) не трогает | `taskId`, `text` (≤ 100 000) | без `params` |
+| `bitrix_task_result_add` ⚠ | добавить **результат** задачи: закреплён в карточке, анонс в чате задачи | `taskId`, `text` (≤ 20 000) | без `params`; ответ `{ taskId, resultId }` |
+| *Scrum* | | | |
+| `bitrix_sprint_columns` | колонки доски **активного** спринта `[{ id, name, type }]` | `groupId` (= `GROUP_ID` задачи) | без `params`; `type` — `NEW`/`WORK`/`FINISH`, у своих колонок пустой |
+| `bitrix_task_move` ⚠ | перенести задачу в колонку спринта | `taskId`, `column` (id или название, без учёта регистра) | без `params`; ответ `{ taskId, stageId, column, status }` — перенос может переоткрыть закрытую задачу |
 | *Проекты* | | | |
 | `bitrix_projects_list` | рабочие группы / проекты | + `params` | верхний уровень: `select[]`, `order{}`, `filter{}`; `start` (шаг 50; `start=(N-1)*50`, `-1` — ответ без `total`) 📖 |
 | `bitrix_project_get` | карточка группы (участники, `CHAT_ID`) | `groupId` + `params` | **обёрнуто**: `params[groupId]`, `params[select][]` |
@@ -95,19 +99,25 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 | `bitrix_file_download` | скачать файл портала на диск, §5.5 | `url`, `savePath?`, `overwrite?` | — |
 
 ⚠ — мутирующие (`bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`,
-`bitrix_task_description_set`, `bitrix_task_description_append`); их может выключить пользователь
-(§1). `bitrix_task_comments` ничего не помечает прочитанным и мутирующим не считается.
+`bitrix_task_description_set`, `bitrix_task_description_append`, `bitrix_task_result_add`,
+`bitrix_task_move`); их может выключить пользователь (§1). `bitrix_task_comments` ничего не помечает
+прочитанным и мутирующим не считается.
 
 **Кто это увидит.** Сообщение `bitrix_chat_send` видят все участники чата; упоминание
 `[user=ID]Имя[/user]` шлёт этому человеку уведомление. Правка описания попадает в историю задачи.
-Чат задачи — `CHAT_ID` из `bitrix_task_get` (или `bitrix_entity_chat { entityType:"TASKS_TASK" }`).
+Результат задачи закрепляется в её карточке и объявляется в чате задачи. Чат задачи — `CHAT_ID` из
+`bitrix_task_get` (или `bitrix_entity_chat { entityType:"TASKS_TASK" }`).
+
+**`bitrix_task_move`** работает только для задачи, которая уже на доске спринта (не в бэклоге):
+`task.stages.movetask` отвечает `true`, ничего не сделав, — мост перечитывает задачу и в этом случае
+возвращает ошибку. `task.stages.get` отдаёт старый канбан группы, а не колонки спринта.
 
 **Разметка текста.**
 
-- **Описание задачи** — полный BBCode: `[b] [i] [u] [s]`, `[url=…]…[/url]`,
+- **Описание задачи** (и результат) — полный BBCode: `[b] [i] [u] [s]`, `[url=…]…[/url]`,
   `[user=ID]Имя[/user]`, списки `[list]` / `[list=1]` с пунктами `[*]`, `[quote]`, `[code]`,
   `[spoiler=Заголовок]…[/spoiler]`, таблицы `[table][tr][th]/[td]`. Теги `[disk file id=…]` — это
-  прикреплённые файлы, сохраняй их.
+  прикреплённые файлы, сохраняй их. Как BBCode результата выглядит в его карточке в чате, не проверено.
 - **Сообщение в чат** — только то, что рендерят и веб, и мобильное приложение: `[b] [i] [u] [s]`,
   `[url=…]…[/url]`, `[user=ID]Имя[/user]`, `[code]`, `[color=#hex]…[/color]`, `[br]`. Цитата — строка,
   начинающаяся с `>>`, или блок между двумя строками из дефисов; список — строки, начинающиеся с `•`.
@@ -155,7 +165,7 @@ WITH_PARSED_DESCRIPTION}`.
 > **Scrum-задачи (спринты).** Поле `SPRINT_ID` задачи и жёсткий `filter[SPRINT_ID]` могут расходиться:
 > задача числится за спринтом по своему полю, но не попадает в выборку по фильтру (возвращена в бэклог
 > или в иной stage). Если по фильтру «маловато» — перепроверь без него и отфильтруй по
-> `SPRINT_ID`/`STAGE_ID` у себя. Инструмента «колонки scrum-доски» (`STAGE_ID` → имя колонки) пока нет.
+> `SPRINT_ID`/`STAGE_ID` у себя. `STAGE_ID` → имя колонки — `bitrix_sprint_columns { groupId }` (§3).
 
 **Группа/проект — список** (`workgroup.list`): `ID`, `NAME`, `DESCRIPTION`, `NUMBER_OF_MEMBERS`,
 `OWNER_ID`, `DATE_CREATE`, `PROJECT` (Y=проект/N=группа), `TYPE`; **без `select` вернётся только `ID`**.

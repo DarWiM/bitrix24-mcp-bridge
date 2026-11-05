@@ -112,6 +112,9 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
 | `task_description_set` ⚠ | `/rest/tasks.task.update.json` | `taskId`, `fields[DESCRIPTION]` |
 | `task_description_append` ⚠ | ajax `tasks.v2.Task.get` → `/rest/tasks.task.update.json` | читает сырой BBCode из `data.description`, дописывает через `\n\n` |
 | `chat_send` ⚠ | `/rest/im.message.add.json` | `DIALOG_ID` (`chatId` → `"chat"+id`), `MESSAGE`; ответ `result` = id сообщения |
+| `sprint_columns` | `/rest/tasks.api.scrum.sprint.list.json` → `/rest/tasks.api.scrum.kanban.getStages.json` | `filter{GROUP_ID, STATUS:"active"}`, затем `sprintId`; не `task.stages.get` — он про канбан группы |
+| `task_move` ⚠ | `/rest/tasks.task.get.json` → `sprint_columns` → `/rest/task.stages.movetask.json` → `/rest/tasks.task.get.json` | `movetask {id, stageId}`; перечитывает `STAGE_ID` — пустой `true` для задачи вне доски спринта → ошибка |
+| `task_result_add` ⚠ | ajax `tasks.v2.Task.Result.add` | json `{"results":[{taskId,text}]}`; ответ `data[0].id`. Официальный `tasks.task.result.add` — только REST 3.0, через сессию отказ |
 
 ---
 
