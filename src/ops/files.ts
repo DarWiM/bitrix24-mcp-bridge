@@ -1,13 +1,14 @@
 // Attaching a local file to a task: the file is uploaded to the current user's Disk, then attached.
 // It runs in the daemon, so the path is resolved there, not where the agent works.
 
-import { readFile, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "./batch.js";
 import { currentUserId } from "./board.js";
 import { REST_TASK_GET, numeric, parseResponse, restMethod, reread } from "./calls.js";
-import { OpInputError, UPLOAD_TIMEOUT_MS, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
+import { BUDGET_TIMEOUT_MS, OpInputError, UPLOAD_TIMEOUT_MS, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 
 const STORAGE_LIST = restMethod("disk.storage.getlist");
 const UPLOAD = restMethod("disk.folder.uploadfile");
@@ -15,6 +16,10 @@ const ATTACH = restMethod("tasks.task.files.attach");
 
 // The upload is a base64 form body: 10 MB of file is about 13 MB on the wire.
 const MAX_BYTES = 10 * 1024 * 1024;
+// Attach and re-read after the upload, at the daemon's regular per-request timeout each.
+const AFTER_UPLOAD_MS = 60_000;
+// Less than one regular request's worth is not worth starting a 13 MB upload with.
+const MIN_UPLOAD_MS = 30_000;
 
 const storagesResponse = z.object({ result: z.array(z.object({ ROOT_OBJECT_ID: numeric })) });
 // Picked out field by field: the reply's DOWNLOAD_URL carries the session id.
@@ -28,27 +33,58 @@ const fileNameArg = () =>
     .string()
     .min(1)
     .max(255)
-    .refine((name) => !/[/\\]/.test(name) && name !== "." && name !== "..", "a file name, without path separators");
+    .refine((name) => !/[/\\\x00-\x1f\x7f]/.test(name) && name !== "." && name !== "..", "a file name, without path separators or control characters");
 
 async function readTaskFiles(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "UF_TASK_WEBDAV_FILES"] } });
   return parseResponse(taskFilesResponse, raw, "tasks.task.get").result.task.ufTaskWebdavFiles ?? [];
 }
 
-// Checked before reading: a fifo or a device would block or never end, a huge file would sit in memory.
+function fileError(path: string, e: unknown) {
+  const code = e instanceof Error && "code" in e ? e.code : undefined;
+  if (code === "ENOENT") return new OpInputError(`файл не найден: ${path}`);
+  if (code === "EACCES" || code === "EPERM") return new OpInputError(`нет доступа к файлу ${path}`);
+  return new OpInputError(`не удалось прочитать ${path}${typeof code === "string" ? ` (${code})` : ""}`);
+}
+
+// One descriptor for the checks and the read, so that the file read is the file checked.
+// Non-blocking: opening a fifo would otherwise wait for a writer; a fifo or a device is refused by
+// the stat anyway, and a huge file is never read.
 async function readLocalFile(path: string) {
   if (!isAbsolute(path)) throw new OpInputError(`path должен быть абсолютным (операция выполняется не в твоём рабочем каталоге): ${path}`);
-  const info = await stat(path).catch((e: unknown) => {
-    const code = e instanceof Error && "code" in e ? e.code : undefined;
-    throw new OpInputError(code === "ENOENT" ? `файл не найден: ${path}` : `не удалось открыть ${path}: ${errorMessage(e)}`);
+  const fh = await open(path, constants.O_RDONLY | constants.O_NONBLOCK).catch((e: unknown) => {
+    throw fileError(path, e);
   });
-  if (!info.isFile()) throw new OpInputError(`${path} — не обычный файл (каталог, устройство или канал)`);
-  if (info.size === 0) throw new OpInputError(`${path} — пустой файл`);
-  if (info.size > MAX_BYTES) throw new OpInputError(`${path} — ${info.size} байт, больше предела 10 МБ`);
-  const bytes = await readFile(path);
-  // The file may have changed since the stat.
-  if (bytes.length === 0 || bytes.length > MAX_BYTES) throw new OpInputError(`${path} изменился во время чтения — повтори`);
-  return bytes;
+  try {
+    const info = await fh.stat().catch((e: unknown) => {
+      throw fileError(path, e);
+    });
+    if (!info.isFile()) throw new OpInputError(`${path} — не обычный файл (каталог, устройство или канал)`);
+    if (info.size === 0) throw new OpInputError(`${path} — пустой файл`);
+    if (info.size > MAX_BYTES) throw new OpInputError(`${path} — ${info.size} байт, больше предела 10 МБ`);
+    // One byte of room past the stat size tells a file that grew since from one that did not.
+    const bytes = Buffer.alloc(info.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await fh.read(bytes, length, bytes.length - length, length).catch((e: unknown) => {
+        throw fileError(path, e);
+      });
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    if (length !== info.size) throw new OpInputError(`${path} изменился во время чтения — повтори`);
+    return bytes.subarray(0, length);
+  } finally {
+    await fh.close();
+  }
+}
+
+// The MCP client gives up after the "long" budget: the upload must end in time for the daemon,
+// not the client, to report how it went.
+function uploadTimeout(startedAt: number) {
+  const left = BUDGET_TIMEOUT_MS.long - (Date.now() - startedAt) - AFTER_UPLOAD_MS;
+  if (left < MIN_UPLOAD_MS) throw new Error("до конца времени операции осталось слишком мало для загрузки — файл не загружен, повтори");
+  return Math.min(left, UPLOAD_TIMEOUT_MS);
 }
 
 async function userDiskRoot(ctx: OpContext) {
@@ -68,7 +104,9 @@ export const FILE_OPERATIONS: Operation[] = [
       "Прикрепляй только то, что пользователь явно попросил; любой другой файл — сначала спроси. path — " +
       "АБСОЛЮТНЫЙ путь к обычному файлу (не каталогу), не пустому, до 10 МБ. name — имя файла в Битрикс24 " +
       "(необязательно, по умолчанию имя из path; без разделителей пути); если имя на Диске занято, Битрикс24 " +
-      "добавит к нему суффикс. Если прикрепить не удалось, файл остаётся на твоём Диске — ошибка назовёт его. " +
+      "добавит к нему суффикс. Нужно право прикреплять файлы к задаче: тому, кто задачу только видит, " +
+      "Битрикс24 может отказать уже после загрузки. Если прикрепить не удалось, файл остаётся на твоём Диске — " +
+      "ошибка назовёт его (имя и id). " +
       "После записи файлы задачи перечитываются; если вложения нет — ошибка. " +
       "Ответ: { taskId, diskFileId, name, size, attachmentId }.",
     mutating: true,
@@ -76,6 +114,7 @@ export const FILE_OPERATIONS: Operation[] = [
     budget: "long",
     input: { taskId: idArg(), path: z.string().min(1), name: fileNameArg().optional() },
     run: async (ctx, a) => {
+      const startedAt = Date.now();
       const { taskId } = a;
       const bytes = await readLocalFile(a.path);
       const fileName = a.name ?? basename(a.path);
@@ -86,27 +125,29 @@ export const FILE_OPERATIONS: Operation[] = [
       // A timed-out or dropped upload may still have reached Disk.
       const mayBeOnDisk = `файл мог загрузиться на Диск — проверь корневую папку Диска (имя «${fileName}», возможно с суффиксом) перед повтором`;
       const upload = { id: rootId, data: { NAME: fileName }, fileContent: [fileName, bytes.toString("base64")], generateUniqueName: true };
-      const raw = await ctx.call({ ...UPLOAD, params: upload }, ctx.portal, { timeoutMs: UPLOAD_TIMEOUT_MS }).catch((e: unknown) => {
+      const raw = await ctx.call({ ...UPLOAD, params: upload }, ctx.portal, { timeoutMs: uploadTimeout(startedAt) }).catch((e: unknown) => {
         throw new Error(`загрузка не подтверждена: ${errorMessage(e)} — ${mayBeOnDisk}`);
       });
       const parsed = uploadResponse.safeParse(raw);
       if (!parsed.success) throw new Error(`disk.folder.uploadfile returned an unexpected shape — ${mayBeOnDisk}`);
       const disk = parsed.data.result;
-      const onDisk = `файл «${disk.NAME}» (id ${disk.ID}) остался в корне твоего Диска`;
+      const onDisk = `файл «${disk.NAME}» (id ${disk.ID}) — в корне твоего Диска`;
       if (disk.SIZE !== bytes.length) {
         throw new Error(`на Диск загружено ${disk.SIZE} байт вместо ${bytes.length} — к задаче не прикреплён, ${onDisk}`);
       }
 
+      // Neither a timeout nor an unrecognised answer means nothing was attached: a retry could attach twice.
+      const mayBeAttached = `вложение могло создаться — проверь bitrix_task_files перед повтором; ${onDisk}`;
       const attachRaw = await ctx.call({ ...ATTACH, params: { taskId, fileId: disk.ID } }).catch((e: unknown) => {
-        throw new Error(`не удалось прикрепить файл к задаче ${taskId}: ${errorMessage(e)} — ${onDisk}`);
+        throw new Error(`прикрепление к задаче ${taskId} не подтверждено: ${errorMessage(e)} — ${mayBeAttached}`);
       });
       const attachment = attachResponse.safeParse(attachRaw);
-      if (!attachment.success) {
-        throw new Error(`tasks.task.files.attach returned an unexpected shape — прикреплён ли файл, проверь через bitrix_task_files; ${onDisk}`);
-      }
+      if (!attachment.success) throw new Error(`tasks.task.files.attach returned an unexpected shape — ${mayBeAttached}`);
       const { attachmentId } = attachment.data.result;
 
-      const files = await reread(readTaskFiles(ctx, taskId), "bitrix_task_files");
+      const files = await reread(readTaskFiles(ctx, taskId), "bitrix_task_files").catch((e: unknown) => {
+        throw new Error(`${errorMessage(e)}; ${onDisk}`);
+      });
       if (!files.includes(attachmentId)) throw new Error(`Bitrix ответил успехом, но вложения ${attachmentId} нет у задачи ${taskId}; ${onDisk}`);
       return { taskId, diskFileId: disk.ID, name: disk.NAME, size: bytes.length, attachmentId };
     },

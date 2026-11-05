@@ -1,9 +1,9 @@
-import { describe, it, expect, mock, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { describe, it, expect, mock, beforeAll, afterAll, afterEach, setSystemTime } from "bun:test";
+import { chmodSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
-import { OpInputError, OpRefusedError, UPLOAD_TIMEOUT_MS, type OpContext, type Operation } from "./operation.js";
+import { BUDGET_TIMEOUT_MS, OpInputError, OpRefusedError, UPLOAD_TIMEOUT_MS, type OpContext, type Operation } from "./operation.js";
 import { createRegistry, runOperation } from "./registry.js";
 import { OPERATIONS } from "./index.js";
 
@@ -77,6 +77,24 @@ afterAll(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+afterEach(() => {
+  setSystemTime();
+});
+
+// Replies in order like `replies`, and moves the frozen clock on by `ms` once the request matching `slow` is made.
+function slowReplies(slow: string, ms: number, ...pages: unknown[]): CallFn {
+  let now = Date.parse("2026-11-06T10:00:00Z");
+  setSystemTime(new Date(now));
+  const next = replies(...pages);
+  return async (target, portal, opts) => {
+    if (target.endpoint.includes(slow)) {
+      now += ms;
+      setSystemTime(new Date(now));
+    }
+    return next(target, portal, opts);
+  };
+}
+
 describe("task_file_attach in OPERATIONS", () => {
   it("is mutating, long and takes no agent params", () => {
     const attach = op("task_file_attach");
@@ -143,7 +161,7 @@ describe("task_file_attach", () => {
 
   it("rejects a name with a path separator or a dot name before any request", async () => {
     const { ctx, call } = fakeCtx();
-    for (const name of ["a/b.txt", "a\\b.txt", "..", ".", ""]) {
+    for (const name of ["a/b.txt", "a\\b.txt", "..", ".", "", "a\u0000b.txt", "a\nb.txt", "a\u007fb.txt"]) {
       await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: file, name })).rejects.toThrow(OpInputError);
     }
     expect(call).not.toHaveBeenCalled();
@@ -159,6 +177,28 @@ describe("task_file_attach", () => {
     await expect(attach.execute(ctx, { taskId: 42, path: dir })).rejects.toThrow(/не обычный файл/);
     await expect(attach.execute(ctx, { taskId: 42, path: "/dev/null" })).rejects.toThrow(/не обычный файл/);
     await expect(attach.execute(ctx, { taskId: 42, path: empty })).rejects.toThrow(/пуст/);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fifo without waiting for a writer", async () => {
+    const fifo = join(dir, "pipe");
+    expect(Bun.spawnSync(["mkfifo", fifo]).exitCode).toBe(0);
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: fifo })).rejects.toThrow(/не обычный файл/);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.getuid?.() === 0)("turns an unreadable file into a readable input error", async () => {
+    const locked = join(dir, "locked.txt");
+    writeFileSync(locked, CONTENT);
+    chmodSync(locked, 0o000);
+    const { ctx, call } = fakeCtx();
+
+    const error = await op("task_file_attach").execute(ctx, { taskId: 42, path: locked }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(OpInputError);
+    expect(error instanceof Error ? error.message : "").toMatch(/нет доступа.*locked\.txt/);
     expect(call).not.toHaveBeenCalled();
   });
 
@@ -189,6 +229,33 @@ describe("task_file_attach", () => {
     }
   });
 
+  it("gives the upload what is left of the operation's budget after a reserve for attach and re-read", async () => {
+    const { ctx, call } = fakeCtx(slowReplies("disk.storage", 100_000, taskFiles(), me, storages, uploaded(), attached, taskFiles([22193])));
+
+    await op("task_file_attach").execute(ctx, { taskId: 42, path: file });
+
+    expect(call.mock.calls[3][2]).toEqual({ timeoutMs: BUDGET_TIMEOUT_MS.long - 100_000 - 60_000 });
+  });
+
+  it("refuses to upload when too little of the operation's budget is left", async () => {
+    const { ctx, call } = fakeCtx(slowReplies("disk.storage", 230_000, taskFiles(), me, storages));
+
+    await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: file })).rejects.toThrow(/не загружен/);
+    expect(call).toHaveBeenCalledTimes(3);
+  });
+
+  it("says the file may be on Disk when the upload reply is not recognised, without leaking it", async () => {
+    const { ctx, call } = fakeCtx(replies(taskFiles(), me, storages, { result: { DOWNLOAD_URL: "https://d/rest/download.json?sessid=secret-sessid" } }));
+
+    const error = await op("task_file_attach").execute(ctx, { taskId: 42, path: file }).catch((e: unknown) => e);
+
+    const message = error instanceof Error ? error.message : "";
+    expect(message).toMatch(/unexpected shape.*мог загрузиться на Диск.*probe\.txt.*перед повтором/);
+    expect(message).not.toContain("secret-sessid");
+    expect(message).not.toContain(BASE64);
+    expect(call).toHaveBeenCalledTimes(4);
+  });
+
   it("keeps the file contents out of an upload error and says the file may be on Disk", async () => {
     const { ctx } = fakeCtx(replies(taskFiles(), me, storages, new Error("call disk.folder.uploadfile timed out")));
 
@@ -209,10 +276,21 @@ describe("task_file_attach", () => {
     expect(call).toHaveBeenCalledTimes(4);
   });
 
-  it("names the Disk file left behind when the attach fails, without retrying", async () => {
-    const { ctx, call } = fakeCtx(replies(taskFiles(), me, storages, uploaded(), new Error("TASK_ACCESS_DENIED")));
+  it("says the attachment may exist and names the Disk file when the attach fails, without retrying", async () => {
+    const { ctx, call } = fakeCtx(replies(taskFiles(), me, storages, uploaded(), new Error("call tasks.task.files.attach timed out")));
 
-    await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: file })).rejects.toThrow(/TASK_ACCESS_DENIED.*probe\.txt.*207687.*Диск/);
+    await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: file })).rejects.toThrow(
+      /timed out.*вложение могло создаться.*bitrix_task_files перед повтором.*probe\.txt.*207687.*Диск/,
+    );
+    expect(call).toHaveBeenCalledTimes(5);
+  });
+
+  it("says the attachment may exist and names the Disk file when the attach reply is not recognised", async () => {
+    const { ctx, call } = fakeCtx(replies(taskFiles(), me, storages, uploaded(), { result: true }));
+
+    await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: file })).rejects.toThrow(
+      /unexpected shape.*вложение могло создаться.*bitrix_task_files.*probe\.txt.*207687/,
+    );
     expect(call).toHaveBeenCalledTimes(5);
   });
 
@@ -225,6 +303,8 @@ describe("task_file_attach", () => {
   it("says the write was sent when the re-read fails", async () => {
     const { ctx } = fakeCtx(replies(taskFiles(), me, storages, uploaded(), attached, { result: "odd" }));
 
-    await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: file })).rejects.toThrow(/запись отправлена, но перечитать не удалось/);
+    await expect(op("task_file_attach").execute(ctx, { taskId: 42, path: file })).rejects.toThrow(
+      /запись отправлена, но перечитать не удалось.*probe\.txt.*207687/,
+    );
   });
 });

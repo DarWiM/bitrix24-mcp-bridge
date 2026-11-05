@@ -30,8 +30,8 @@ export interface CallOptions {
   timeoutMs?: number;
 }
 
-// A file upload of up to ~13 MB of form body on a slow uplink; leaves the rest of a "long"
-// operation about a minute.
+// Ceiling for a file upload of up to ~13 MB of form body on a slow uplink; within a "long"
+// operation it is cut further to what the operation's budget has left.
 export const UPLOAD_TIMEOUT_MS = 4 * 60_000;
 
 export interface Operation {
