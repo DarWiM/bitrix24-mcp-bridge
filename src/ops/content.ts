@@ -32,9 +32,18 @@ const planResponse = z.object({ data: z.object({ startPlanTs: z.number().nullabl
 
 const tagKey = (name: string) => name.trim().toLowerCase();
 
+// The request went through but its answer did not say what happened.
+class SentUnconfirmed extends Error {}
+
 async function readTags(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
   return parseResponse(tagsResponse, raw, "tasks.v2.Task.get (tags)").data.tags.map((t) => t.name);
+}
+
+async function readPlan(ctx: OpContext, taskId: number) {
+  const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
+  const { startPlanTs, endPlanTs } = parseResponse(planResponse, raw, "tasks.v2.Task.get (plan dates)").data;
+  return { startPlanTs: startPlanTs ?? 0, endPlanTs: endPlanTs ?? 0 };
 }
 
 async function readChecklist(ctx: OpContext, taskId: number) {
@@ -51,7 +60,14 @@ const tagNamesArg = () => z.array(z.string().trim().min(1)).max(MAX_BATCH).optio
 const itemIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
 const checklistTitle = () => z.string().trim().min(1);
 // An offset is required: without one the date would be read in the daemon's time zone.
-const planDateArg = () => z.string().datetime({ offset: true }).nullable().optional();
+// Unix time 0 means "no date" to Bitrix, so nothing at or before the epoch can be written.
+const planDateArg = () =>
+  z
+    .string()
+    .datetime({ offset: true })
+    .refine((date) => Date.parse(date) >= 1000, "date must be after 1970-01-01T00:00:00Z")
+    .nullable()
+    .optional();
 
 const toTs = (date: string | null) => (date === null ? 0 : Math.floor(Date.parse(date) / 1000));
 const fromTs = (ts: number | null) => (ts ? new Date(ts * 1000).toISOString() : null);
@@ -62,9 +78,10 @@ export const CONTENT_OPERATIONS: Operation[] = [
     description:
       "⚠ МУТИРУЮЩИЙ. Точечная правка описания задачи: заменить фрагмент find на replace (пустой replace — " +
       "удалить фрагмент). Совпадение — точная подстрока сырого BBCode (как в bitrix_task_get_v2 → description), " +
-      "с учётом регистра и переводов строк. Нет совпадений — ошибка; несколько — ошибка с их числом, если не " +
-      "передан all: true (заменить все). Всё вне фрагмента остаётся как было. Правка видна в истории задачи. " +
-      "Ответ: { taskId, replaced, length }. " +
+      "с учётом регистра и переводов строк. Нет совпадений — ошибка; несколько (считая и перекрывающиеся, " +
+      'как "aa" в "aaa") — ошибка с их числом, если не передан all: true. all заменяет все НЕперекрывающиеся ' +
+      'вхождения слева направо ("aaa", find "aa" → одна замена). Всё вне фрагмента остаётся как было. Правка ' +
+      "видна в истории задачи. Ответ: { taskId, replaced, length } — replaced — сколько замен сделано. " +
       DESCRIPTION_FORMAT,
     mutating: true,
     input: {
@@ -75,13 +92,16 @@ export const CONTENT_OPERATIONS: Operation[] = [
     },
     run: async (ctx, a) => {
       const current = await readDescription(ctx, a.taskId);
+      // Overlapping matches count too: in "aaa" the fragment "aa" is ambiguous, not unique.
+      let matches = 0;
+      for (let i = current.indexOf(a.find); i !== -1; i = current.indexOf(a.find, i + 1)) matches++;
+      if (matches === 0) throw new Error("фрагмент find не найден в описании — сверь точный текст через bitrix_task_get_v2");
+      if (matches > 1 && !a.all) {
+        throw new Error(`фрагмент find встречается в описании ${matches} раз — уточни его или передай all: true`);
+      }
       // split/join, not String.replace: `$&` or `$1` in the agent's text must stay literal.
       const parts = current.split(a.find);
       const replaced = parts.length - 1;
-      if (replaced === 0) throw new Error("фрагмент find не найден в описании — сверь точный текст через bitrix_task_get_v2");
-      if (replaced > 1 && !a.all) {
-        throw new Error(`фрагмент find встречается в описании ${replaced} раз — уточни его или передай all: true`);
-      }
       const next = parts.join(a.replace);
       if (next.length > DESCRIPTION_MAX) throw new Error(`после замены описание длиннее ${DESCRIPTION_MAX} символов — ничего не записано`);
       const { length } = await writeDescription(ctx, a.taskId, next);
@@ -152,7 +172,9 @@ export const CONTENT_OPERATIONS: Operation[] = [
       "отметить, но нельзя complete и reopen вместе или remove вместе с другой его правкой. Названия — простой " +
       "текст (как в пункте рендерится BBCode, не проверено). Изменения видят все, кто видит задачу. Сначала все " +
       "itemId сверяются с чек-листом (нет пункта — ничего не меняется), затем действия выполняются по " +
-      "очереди: add, rename, complete, reopen, remove; при сбое посередине ошибка перечисляет сделанное. " +
+      "очереди: add, rename, complete, reopen, remove — всего до 50 действий за вызов; при сбое посередине " +
+      "ошибка перечисляет сделанное. Пункты удаляемой группы отдельно не удаляются; если Bitrix их оставит, " +
+      "это будет в ошибке. " +
       "Ответ: { taskId, added, items } — added — id новых пунктов, items — чек-лист, перечитанный после правки.",
     mutating: true,
     // One request per item, two more around them.
@@ -178,6 +200,10 @@ export const CONTENT_OPERATIONS: Operation[] = [
         throw new OpInputError("invalid arguments for task_checklist_edit — pass a non-empty add, rename, complete, reopen or remove");
       }
       const invalid = (message: string) => new OpInputError(`invalid arguments for task_checklist_edit — ${message}`);
+      // One request per step: past this the call could outlive the client's wait, and the agent would
+      // never see which steps were done.
+      const steps = add.length + rename.length + complete.length + reopen.length + remove.length;
+      if (steps > MAX_BATCH) throw invalid(`${steps} actions in one call, at most ${MAX_BATCH}`);
       for (const ids of [renamed, complete, reopen, remove]) {
         const twice = ids.find((id, i) => ids.indexOf(id) !== i);
         if (twice !== undefined) throw invalid(`item ${twice} is listed twice in one action`);
@@ -198,8 +224,9 @@ export const CONTENT_OPERATIONS: Operation[] = [
         try {
           await request();
         } catch (e) {
+          const outcome = e instanceof SentUnconfirmed ? "отправлено, ответ не распознан" : `не выполнено (${errorMessage(e)})`;
           throw new Error(
-            `${label}: ${errorMessage(e)}; уже сделано: ${done.join(", ") || "ничего"} — перечитай чек-лист (bitrix_task_checklist) перед повтором`,
+            `${label}: ${outcome}; до этого сделано: ${done.join(", ") || "ничего"} — перечитай чек-лист (bitrix_task_checklist) перед повтором`,
           );
         }
         done.push(label);
@@ -212,7 +239,9 @@ export const CONTENT_OPERATIONS: Operation[] = [
       for (const TITLE of add) {
         await step(`добавить «${TITLE}»`, async () => {
           const raw = await ctx.call({ ...CHECKLIST_ADD, params: { TASKID, FIELDS: { TITLE } } });
-          added.push(parseResponse(checklistAddResponse, raw, "task.checklistitem.add").result);
+          const parsed = checklistAddResponse.safeParse(raw);
+          if (!parsed.success) throw new SentUnconfirmed();
+          added.push(parsed.data.result);
         });
       }
       for (const { itemId, title } of rename) {
@@ -223,17 +252,33 @@ export const CONTENT_OPERATIONS: Operation[] = [
       }
       for (const id of complete) await step(`отметить ${id}`, mark(CHECKLIST_COMPLETE, id, "task.checklistitem.complete"));
       for (const id of reopen) await step(`снять отметку ${id}`, mark(CHECKLIST_RENEW, id, "task.checklistitem.renew"));
-      for (const id of remove) await step(`удалить ${id}`, mark(CHECKLIST_DELETE, id, "task.checklistitem.delete"));
+      // Removing a group takes its items with it: they are not deleted again, nor reported as not applied.
+      const gone = new Set<number>();
+      const drop = (id: number) => {
+        if (gone.has(id)) return;
+        gone.add(id);
+        for (const item of before) if (item.parentId === id) drop(item.id);
+      };
+      for (const id of remove) {
+        if (gone.has(id)) continue;
+        await step(`удалить ${id}`, mark(CHECKLIST_DELETE, id, "task.checklistitem.delete"));
+        drop(id);
+      }
+      // Where a new item lands is Bitrix's choice, so a removed group may have taken it along.
+      const isGroup = (id: number) =>
+        before.some((item) => item.parentId === id) || before.find((item) => item.id === id)?.parentId === 0;
+      const groupRemoved = remove.some(isGroup);
 
       const items = await readChecklist(ctx, TASKID).catch((e: unknown) => {
         throw new Error(`изменения отправлены, но перечитать чек-лист не удалось (проверь через bitrix_task_checklist): ${errorMessage(e)}`);
       });
       const byId = new Map(items.map((item) => [item.id, item]));
+      const vanished = (id: number) => gone.has(id) && !byId.has(id);
       const notApplied = [
-        ...added.filter((id) => !byId.has(id)).map((id) => `добавить ${id}`),
-        ...rename.filter((r) => byId.get(r.itemId)?.title !== r.title).map((r) => `переименовать ${r.itemId}`),
-        ...complete.filter((id) => byId.get(id)?.done !== true).map((id) => `отметить ${id}`),
-        ...reopen.filter((id) => byId.get(id)?.done !== false).map((id) => `снять отметку ${id}`),
+        ...added.filter((id) => !byId.has(id) && !groupRemoved).map((id) => `добавить ${id}`),
+        ...rename.filter((r) => !vanished(r.itemId) && byId.get(r.itemId)?.title !== r.title).map((r) => `переименовать ${r.itemId}`),
+        ...complete.filter((id) => !vanished(id) && byId.get(id)?.done !== true).map((id) => `отметить ${id}`),
+        ...reopen.filter((id) => !vanished(id) && byId.get(id)?.done !== false).map((id) => `снять отметку ${id}`),
         ...remove.filter((id) => byId.has(id)).map((id) => `удалить ${id}`),
       ];
       if (notApplied.length > 0) {
@@ -248,8 +293,11 @@ export const CONTENT_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. Задать ПЛАНИРУЕМЫЕ даты задачи: start — начало, end — завершение; ISO 8601 со смещением " +
       '(напр. "2026-11-10T09:00:00+03:00" или "…Z"); null — очистить; не передано — остаётся текущее значение. ' +
       "Нужно хотя бы одно; start не позже end. Привязка к рабочему времени и к срокам подзадач выключается. " +
-      "Сроки видят все, кто видит задачу; правка видна в истории задачи. Ответ: { taskId, start, end } (UTC).",
+      "Сроки видят все, кто видит задачу; правка видна в истории задачи. Ответ: { taskId, start, end } (UTC) — " +
+      "даты перечитаны после записи.",
     mutating: true,
+    // Up to three requests in a row.
+    budget: "long",
     input: { taskId: idArg(), start: planDateArg(), end: planDateArg() },
     run: async (ctx, a) => {
       if (a.start === undefined && a.end === undefined) {
@@ -263,10 +311,9 @@ export const CONTENT_OPERATIONS: Operation[] = [
       }
       // The update sets both dates: the one not passed is written back as it is now.
       if (startPlanTs === undefined || endPlanTs === undefined) {
-        const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: a.taskId } } });
-        const current = parseResponse(planResponse, raw, "tasks.v2.Task.get (plan dates)").data;
-        startPlanTs ??= current.startPlanTs ?? 0;
-        endPlanTs ??= current.endPlanTs ?? 0;
+        const current = await readPlan(ctx, a.taskId);
+        startPlanTs ??= current.startPlanTs;
+        endPlanTs ??= current.endPlanTs;
         if (startAfterEnd(startPlanTs, endPlanTs)) {
           throw new Error(`начало ${fromTs(startPlanTs)} позже завершения ${fromTs(endPlanTs)} — передай обе даты`);
         }
@@ -275,6 +322,15 @@ export const CONTENT_OPERATIONS: Operation[] = [
         ...PLAN_UPDATE,
         params: { task: { id: a.taskId, startPlanTs, endPlanTs, matchesWorkTime: false, matchesSubTasksTime: false } },
       });
+      const actual = await readPlan(ctx, a.taskId).catch((e: unknown) => {
+        throw new Error(`запись отправлена, но перечитать даты не удалось (проверь через bitrix_task_get_v2): ${errorMessage(e)}`);
+      });
+      if (actual.startPlanTs !== startPlanTs || actual.endPlanTs !== endPlanTs) {
+        throw new Error(
+          `Bitrix ответил успехом, но даты другие: сейчас start ${fromTs(actual.startPlanTs) ?? "нет"}, ` +
+            `end ${fromTs(actual.endPlanTs) ?? "нет"}`,
+        );
+      }
       return { taskId: a.taskId, start: fromTs(startPlanTs), end: fromTs(endPlanTs) };
     },
   }),

@@ -94,6 +94,22 @@ describe("task_description_replace", () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
+  it("counts overlapping matches: \"aa\" in \"aaa\" is ambiguous", async () => {
+    const { ctx, call } = fakeCtx(replies(description("aaa")));
+
+    await expect(op("task_description_replace").execute(ctx, { taskId: 42, find: "aa", replace: "b" })).rejects.toThrow(/2 раз/);
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces non-overlapping matches left to right with all: true", async () => {
+    const { ctx, call } = fakeCtx(replies(description("aaa"), { result: true }));
+
+    const result = await op("task_description_replace").execute(ctx, { taskId: 42, find: "aa", replace: "b", all: true });
+
+    expect(call.mock.calls[1][0].params).toEqual({ taskId: 42, fields: { DESCRIPTION: "ba" } });
+    expect(result).toEqual({ taskId: 42, replaced: 1, length: 2 });
+  });
+
   it("replaces every match with all: true", async () => {
     const { ctx, call } = fakeCtx(replies(description("[*]todo\n[*]todo"), { result: true }));
 
@@ -286,6 +302,41 @@ describe("task_checklist_edit", () => {
     expect(String(err)).toMatch(/bitrix_task_checklist/);
   });
 
+  it("reports an add whose answer is not recognised as sent, not as failed", async () => {
+    const { ctx, call } = fakeCtx(replies(before, { result: { unexpected: true } }));
+
+    const err = await op("task_checklist_edit").execute(ctx, { taskId: 42, add: ["Деплой", "Релиз"] }).catch((e: unknown) => e);
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(String(err)).toMatch(/добавить «Деплой»: отправлено, ответ не распознан/);
+    expect(String(err)).not.toMatch(/не выполнено/);
+    expect(String(err)).toMatch(/перечитай чек-лист.*перед повтором/);
+  });
+
+  it("does not delete or report items that went away with their removed group", async () => {
+    const after = checklist(["14", "0", "Другая группа", "N"]);
+    const withSecondGroup = { result: [...before.result, ...checklist(["14", "0", "Другая группа", "N"]).result] };
+    const { ctx, call } = fakeCtx(replies(withSecondGroup, { result: "21" }, { result: true }, { result: true }, after));
+
+    const result = await op("task_checklist_edit").execute(ctx, { taskId: 42, add: ["Новый"], complete: [11], remove: [10, 13] });
+
+    expect(call.mock.calls.map(([t]) => t.endpoint)).toEqual([
+      "/rest/task.checklistitem.getlist.json",
+      "/rest/task.checklistitem.add.json",
+      "/rest/task.checklistitem.complete.json",
+      "/rest/task.checklistitem.delete.json",
+      "/rest/task.checklistitem.getlist.json",
+    ]);
+    expect(call.mock.calls[3][0].params).toEqual({ TASKID: 42, ITEMID: 10 });
+    expect(result).toEqual({ taskId: 42, added: [21], items: [{ id: 14, parentId: 0, title: "Другая группа", done: false }] });
+  });
+
+  it("still reports an item of a removed group that Bitrix kept", async () => {
+    const { ctx } = fakeCtx(replies(before, { result: true }, checklist(["13", "10", "Лишнее", "N"])));
+
+    await expect(op("task_checklist_edit").execute(ctx, { taskId: 42, remove: [10, 13] })).rejects.toThrow(/Bitrix не применил: удалить 13/);
+  });
+
   it("fails when a complete / reopen / remove answers anything but true", async () => {
     const { ctx } = fakeCtx(replies(before, { result: false }));
 
@@ -310,6 +361,7 @@ describe("task_checklist_edit", () => {
       { taskId: 42, complete: [11, "11"] },
       { taskId: 42, rename: [{ itemId: 11, title: "x" }, { itemId: 11, title: "y" }] },
       { taskId: 42, add: [" "] },
+      { taskId: 42, add: Array.from({ length: 30 }, (_, i) => `п${i}`), complete: Array.from({ length: 21 }, (_, i) => i + 1) },
     ]) {
       await expect(op("task_checklist_edit").execute(ctx, args)).rejects.toThrow(OpInputError);
     }
@@ -328,19 +380,44 @@ describe("task_plan", () => {
       matchesSubTasksTime: false,
     },
   });
+  // What v2 Task.get holds after the write: unset dates come back as null.
+  const stored = (start: string | null, end: string | null) => ({
+    status: "success",
+    data: {
+      id: 42,
+      startPlanTs: start === null ? null : Date.parse(start) / 1000,
+      endPlanTs: end === null ? null : Date.parse(end) / 1000,
+      deadlineTs: null,
+    },
+  });
 
-  it("writes both dates in unix seconds without reading the task", async () => {
-    const { ctx, call } = fakeCtx(replies({ status: "success", data: {} }));
+  it("writes both dates in unix seconds without reading the task first, then re-reads them", async () => {
+    const { ctx, call } = fakeCtx(replies({ status: "success", data: {} }, stored("2026-11-10T06:00:00Z", "2026-11-12T18:00:00Z")));
 
     const result = await op("task_plan").execute(ctx, { taskId: "42", start: "2026-11-10T09:00:00+03:00", end: "2026-11-12T18:00:00Z" });
 
-    expect(call).toHaveBeenCalledTimes(1);
+    expect(call).toHaveBeenCalledTimes(2);
     expect(call.mock.calls[0][0]).toEqual(json(PLAN, plan("2026-11-10T06:00:00Z", "2026-11-12T18:00:00Z")));
+    expect(call.mock.calls[1][0]).toEqual(json("tasks.v2.Task.get", { task: { id: 42 } }));
     expect(result).toEqual({ taskId: 42, start: "2026-11-10T06:00:00.000Z", end: "2026-11-12T18:00:00.000Z" });
   });
 
+  it("fails when the re-read dates differ from the written ones", async () => {
+    const { ctx } = fakeCtx(replies({ status: "success" }, stored("2026-11-10T00:00:00Z", null)));
+
+    await expect(
+      op("task_plan").execute(ctx, { taskId: 42, start: "2026-11-10T00:00:00Z", end: "2026-11-12T00:00:00Z" }),
+    ).rejects.toThrow(/даты другие.*end нет/);
+  });
+
+  it("says the write was sent when the re-read fails", async () => {
+    const { ctx } = fakeCtx(replies({ status: "success" }, new Error("timeout")));
+
+    await expect(op("task_plan").execute(ctx, { taskId: 42, start: null, end: null })).rejects.toThrow(/запись отправлена.*timeout/);
+  });
+
   it("clears a date passed as null", async () => {
-    const { ctx, call } = fakeCtx(replies({ status: "success" }));
+    const { ctx, call } = fakeCtx(replies({ status: "success" }, stored(null, null)));
 
     const result = await op("task_plan").execute(ctx, { taskId: 42, start: null, end: null });
 
@@ -350,7 +427,7 @@ describe("task_plan", () => {
 
   it("keeps the current value of a date that is not passed", async () => {
     const current = { status: "success", data: { id: 42, startPlanTs: Date.parse("2026-11-01T00:00:00Z") / 1000, endPlanTs: null } };
-    const { ctx, call } = fakeCtx(replies(current, { status: "success" }));
+    const { ctx, call } = fakeCtx(replies(current, { status: "success" }, stored("2026-11-01T00:00:00Z", "2026-11-20T00:00:00Z")));
 
     const result = await op("task_plan").execute(ctx, { taskId: 42, end: "2026-11-20T00:00:00Z" });
 
@@ -360,8 +437,7 @@ describe("task_plan", () => {
   });
 
   it("treats stored null dates as unset on a partial update", async () => {
-    const current = { status: "success", data: { id: 42, startPlanTs: null, endPlanTs: null, deadlineTs: null } };
-    const { ctx, call } = fakeCtx(replies(current, { status: "success" }));
+    const { ctx, call } = fakeCtx(replies(stored(null, null), { status: "success" }, stored("2026-11-10T00:00:00Z", null)));
 
     const result = await op("task_plan").execute(ctx, { taskId: 42, start: "2026-11-10T00:00:00Z" });
 
@@ -391,6 +467,8 @@ describe("task_plan", () => {
       { taskId: 42 },
       { taskId: 42, start: "2026-11-10" },
       { taskId: 42, start: "2026-11-10T09:00:00" },
+      { taskId: 42, start: "1970-01-01T00:00:00Z" },
+      { taskId: 42, end: "1969-12-31T23:00:00Z" },
       { taskId: 42, start: "2026-11-12T00:00:00Z", end: "2026-11-10T00:00:00Z" },
     ]) {
       await expect(op("task_plan").execute(ctx, args)).rejects.toThrow(OpInputError);
