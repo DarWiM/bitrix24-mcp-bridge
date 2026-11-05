@@ -318,11 +318,11 @@ describe("task_move", () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
-  for (const [title, reread] of [
-    ["comes back in an unexpected shape", async () => ({ result: [] })],
+  for (const [title, reread, cause] of [
+    ["comes back in an unexpected shape", async () => ({ result: [] }), "tasks.task.get returned an unexpected shape"],
     ["fails", async () => {
       throw new Error("extension not connected");
-    }],
+    }, "extension not connected"],
   ] as const) {
     it(`says the move was sent when the re-read ${title}`, async () => {
       const first = replies(taskReply("58"), activeSprint, sprintStages, { result: true });
@@ -332,7 +332,13 @@ describe("task_move", () => {
       const result = await op("task_move").execute(ctx, { taskIds: [42], column: "Готово" });
 
       expect(result).toEqual({
-        results: [{ taskId: 42, ok: false, error: expect.stringContaining("перенос отправлен, но перечитать задачу не удалось") }],
+        results: [
+          {
+            taskId: 42,
+            ok: false,
+            error: `перенос отправлен, но перечитать задачу не удалось (проверь её колонку через bitrix_task_get): ${cause}`,
+          },
+        ],
       });
     });
   }

@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult, OpRequest } from "./protocol.js";
 import type { PortalConnection } from "./daemon.js";
-import type { OpBudget } from "../ops/operation.js";
+import { BUDGET_TIMEOUT_MS, type OpBudget } from "../ops/operation.js";
 
 export interface DaemonStatus {
   portals: PortalConnection[];
@@ -25,13 +25,6 @@ interface UdsClientOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 35_000;
-// A download must outlast the daemon's own download timeout, so the daemon's error wins the race
-// and the caller learns what actually went wrong instead of a generic client-side timeout.
-// "long" fits a default multi-page scan (about ten portal requests at the daemon's 30 s each).
-const BUDGET_TIMEOUT_MS: Record<Exclude<OpBudget, "call">, number> = {
-  download: 11 * 60_000,
-  long: 5 * 60_000 + 5_000,
-};
 
 export function budgetTimeoutMs(budget: OpBudget, requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS): number {
   return budget === "call" ? requestTimeoutMs : BUDGET_TIMEOUT_MS[budget];

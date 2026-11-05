@@ -3,7 +3,7 @@
 // says it does.
 
 import { z } from "zod";
-import { forEachTask, taskIdsArg } from "./batch.js";
+import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
@@ -191,8 +191,8 @@ export const WRITE_OPERATIONS: Operation[] = [
           );
         }
         await ctx.call({ ...STAGE_MOVE, params: { id: taskId, stageId: target.id } });
-        const moved = await readTaskStage(ctx, taskId).catch(() => {
-          throw new Error("перенос отправлен, но перечитать задачу не удалось — проверь её колонку через bitrix_task_get");
+        const moved = await readTaskStage(ctx, taskId).catch((e: unknown) => {
+          throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь её колонку через bitrix_task_get): ${errorMessage(e)}`);
         });
         // movetask answers true and does nothing for a task that is not on the sprint board.
         if (moved.stageId !== target.id) {

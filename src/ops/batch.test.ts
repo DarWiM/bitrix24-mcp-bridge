@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { z } from "zod";
 import { MAX_BATCH, forEachTask, taskIdsArg } from "./batch.js";
+import { BUDGET_TIMEOUT_MS } from "./operation.js";
 
 describe("forEachTask", () => {
   it("runs every task in input order, one at a time, and reports each as ok with its fields", async () => {
@@ -41,6 +42,56 @@ describe("forEachTask", () => {
       { taskId: 2, ok: false, error: "задача 2 не на доске" },
       { taskId: 3, ok: true, done: true },
     ]);
+  });
+
+  it("keeps its own taskId and ok even when the operation's fields carry those keys", async () => {
+    const batch = await forEachTask([5], async () => ({ taskId: 99, ok: false, moved: true }));
+
+    expect(batch.results).toEqual([{ taskId: 5, ok: true, moved: true }]);
+    expect(Object.keys(batch.results[0])).toEqual(["taskId", "ok", "moved"]);
+  });
+
+  it("stops starting tasks once less than 30 s of the budget remain, awaits the running one and marks the rest", async () => {
+    let clock = 1_000;
+    const seen: number[] = [];
+
+    // Budget 40 s: a task may start while under 10 s have passed; each one takes 6 s.
+    const batch = await forEachTask(
+      [1, 2, 3, 4],
+      async (taskId) => {
+        seen.push(taskId);
+        clock += 6_000;
+        return { done: true };
+      },
+      { budgetMs: 40_000, now: () => clock },
+    );
+
+    const skipped = "не выполнено: истекло время пакета — перечитайте состояние и повторите только эти задачи";
+    expect(seen).toEqual([1, 2]);
+    expect(batch.results).toEqual([
+      { taskId: 1, ok: true, done: true },
+      { taskId: 2, ok: true, done: true },
+      { taskId: 3, ok: false, error: skipped },
+      { taskId: 4, ok: false, error: skipped },
+    ]);
+  });
+
+  it("plans against the client's long budget by default", async () => {
+    let clock = 0;
+    const seen: number[] = [];
+
+    const batch = await forEachTask(
+      [1, 2],
+      async (taskId) => {
+        seen.push(taskId);
+        clock = BUDGET_TIMEOUT_MS.long - 30_000;
+        return {};
+      },
+      { now: () => clock },
+    );
+
+    expect(seen).toEqual([1]);
+    expect(batch.results[1]).toMatchObject({ taskId: 2, ok: false });
   });
 
   it("turns a non-Error rejection into a string error", async () => {

@@ -16,6 +16,15 @@ export interface OpContext {
 // portal requests, each allowed up to the daemon's own per-request timeout.
 export type OpBudget = "call" | "download" | "long";
 
+// How long the MCP client waits for a non-"call" operation; batches also plan against it.
+// A download must outlast the daemon's own download timeout, so the daemon's error wins the race
+// and the caller learns what actually went wrong instead of a generic client-side timeout.
+// "long" fits a default multi-page scan (about ten portal requests at the daemon's 30 s each).
+export const BUDGET_TIMEOUT_MS: Record<Exclude<OpBudget, "call">, number> = {
+  download: 11 * 60_000,
+  long: 5 * 60_000 + 5_000,
+};
+
 export interface Operation {
   name: string;
   description: string;
