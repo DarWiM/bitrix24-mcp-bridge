@@ -1,6 +1,7 @@
 // Request targets and answer parsing shared by the modules that write to the portal.
 
 import { z } from "zod";
+import { errorMessage } from "./batch.js";
 import { callTarget } from "./read.js";
 
 export const restMethod = (method: string) => callTarget({ endpoint: `/rest/${method}.json`, method: "POST" });
@@ -16,3 +17,9 @@ export function parseResponse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, ra
   if (!parsed.success) throw new Error(`${method} returned an unexpected shape`);
   return parsed.data;
 }
+
+// The write went out: a failed re-read must not read as a failed write.
+export const reread = <T>(read: Promise<T>, checkWith: string) =>
+  read.catch((e: unknown) => {
+    throw new Error(`запись отправлена, но перечитать не удалось (проверь через ${checkWith}): ${errorMessage(e)}`);
+  });

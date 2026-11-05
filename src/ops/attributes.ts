@@ -4,9 +4,9 @@
 // says it does.
 
 import { z } from "zod";
-import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
+import { forEachTask, taskIdsArg } from "./batch.js";
 import { currentUserId } from "./board.js";
-import { numeric, parseResponse } from "./calls.js";
+import { numeric, parseResponse, reread } from "./calls.js";
 import { TASK_V2_UPDATE, dateArg, fromTs, sameMinute, toTs } from "./content.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
@@ -67,12 +67,6 @@ async function ownReminder(ctx: OpContext, taskId: number, reminderId: number, n
 }
 
 const reminderView = (r: Reminder) => ({ id: r.id, at: fromTs(r.nextRemindTs), via: r.remindVia, remindBy: r.remindBy, recipient: r.recipient });
-
-// The write went out: a failed re-read must not read as a failed write.
-const reread = <T>(read: Promise<T>, checkWith: string) =>
-  read.catch((e: unknown) => {
-    throw new Error(`запись отправлена, но перечитать не удалось (проверь через ${checkWith}): ${errorMessage(e)}`);
-  });
 
 const DATE_FORMAT = 'ISO 8601 со смещением (напр. "2026-11-10T09:00:00+03:00" или "…Z")';
 const BATCH_NOTE = "Задачи обрабатываются по очереди; ошибка одной не останавливает остальные.";

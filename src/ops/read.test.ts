@@ -50,7 +50,7 @@ describe("OPERATIONS", () => {
       "task_create", "task_description_replace", "task_tags", "task_checklist", "task_checklist_edit", "task_plan",
       "task_related_edit", "task_parent", "task_gantt_link", "chat_message_edit", "chat_reaction", "task_chat_post",
       "task_close", "task_reopen", "task_priority", "task_deadline", "task_mute", "task_reminders",
-      "task_reminder_set", "task_reminder_delete",
+      "task_reminder_set", "task_reminder_delete", "task_file_attach",
     ].sort());
   });
 
@@ -59,7 +59,7 @@ describe("OPERATIONS", () => {
       "chat_mark_read", "chat_message_edit", "chat_reaction", "chat_read_all", "chat_send", "task_accomplices",
       "task_auditors", "task_chat_post", "task_checklist_edit", "task_close", "task_create", "task_deadline",
       "task_delegate", "task_description_append", "task_description_replace", "task_description_set",
-      "task_gantt_link", "task_move", "task_mute", "task_parent", "task_plan", "task_priority",
+      "task_file_attach", "task_gantt_link", "task_move", "task_mute", "task_parent", "task_plan", "task_priority",
       "task_related_edit", "task_reminder_delete", "task_reminder_set", "task_reopen", "task_result_add",
       "task_tags", "task_to_backlog", "task_to_sprint",
     ]);
