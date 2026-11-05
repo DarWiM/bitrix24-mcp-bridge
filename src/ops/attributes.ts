@@ -143,13 +143,17 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
   defineOperation({
     name: "task_reminders",
     description:
-      "Напоминания по задаче (read-only): { taskId, reminders: [{ id, at, via, remindBy, recipient }] } — at — " +
-      "когда сработает (UTC), via — notification (уведомление в Битрикс24) / email, remindBy — date (на дату) / " +
-      "deadline (относительно срока), recipient — кому (myself — тебе). id — для bitrix_task_reminder_set / " +
-      "bitrix_task_reminder_delete (менять и удалять можно только свои напоминания).",
+      "Напоминания по задаче (read-only): { taskId, reminders: [{ id, at, via, remindBy, recipient, userId, mine }] } — " +
+      "at — когда сработает (UTC), via — notification (уведомление в Битрикс24) / email, remindBy — date (на дату) / " +
+      "deadline (относительно срока), recipient — кому (myself — владельцу), userId — чьё напоминание, mine — твоё ли. " +
+      "id — для bitrix_task_reminder_set / bitrix_task_reminder_delete; они работают только с напоминаниями mine: true.",
     mutating: false,
     input: { taskId: idArg() },
-    run: async (ctx, a) => ({ taskId: a.taskId, reminders: (await readReminders(ctx, a.taskId)).map(reminderView) }),
+    run: async (ctx, a) => {
+      const userId = await currentUserId(ctx);
+      const reminders = (await readReminders(ctx, a.taskId)).map((r) => ({ ...reminderView(r), userId: r.userId, mine: r.userId === userId }));
+      return { taskId: a.taskId, reminders };
+    },
   }),
   defineOperation({
     name: "task_reminder_set",

@@ -250,19 +250,28 @@ const list = (...items: unknown[]) => ({ status: "success", data: items });
 const saved = { status: "success", data: { id: 61 } };
 
 describe("task_reminders", () => {
-  it("lists the reminders with ISO dates, timestamps sent as strings included", async () => {
+  it("lists the reminders with ISO dates and marks the current user's, timestamps sent as strings included", async () => {
     const { ctx, call } = fakeCtx(
-      replies(list(reminder({ nextRemindTs: String(ts(AT)) }), reminder({ id: "62", nextRemindTs: null, remindBy: "deadline", remindVia: "email" }))),
+      replies(
+        ME,
+        list(
+          reminder({ nextRemindTs: String(ts(AT)) }),
+          reminder({ id: "62", userId: "9", nextRemindTs: null, remindBy: "deadline", remindVia: "email" }),
+        ),
+      ),
     );
 
     const result = await op("task_reminders").execute(ctx, { taskId: 42 });
 
-    expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.Reminder.list", { taskId: 42 }));
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      rest("/rest/user.current.json", {}),
+      json("tasks.v2.Task.Reminder.list", { taskId: 42 }),
+    ]);
     expect(result).toEqual({
       taskId: 42,
       reminders: [
-        { id: 61, at: "2099-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "myself" },
-        { id: 62, at: null, via: "email", remindBy: "deadline", recipient: "myself" },
+        { id: 61, at: "2099-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "myself", userId: 7, mine: true },
+        { id: 62, at: null, via: "email", remindBy: "deadline", recipient: "myself", userId: 9, mine: false },
       ],
     });
   });
