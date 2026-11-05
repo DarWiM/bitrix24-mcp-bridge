@@ -1,3 +1,4 @@
+import { ATTRIBUTE_OPERATIONS } from "./attributes.js";
 import { CHAT_OPERATIONS } from "./chat.js";
 import { COMPOSITE_OPERATIONS } from "./composite.js";
 import { CONTENT_OPERATIONS } from "./content.js";
@@ -15,4 +16,5 @@ export const OPERATIONS: Operation[] = [
   ...CONTENT_OPERATIONS,
   ...RELATION_OPERATIONS,
   ...LIFECYCLE_OPERATIONS,
+  ...ATTRIBUTE_OPERATIONS,
 ];

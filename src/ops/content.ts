@@ -11,7 +11,7 @@ import { TASK_V2_GET, callTarget } from "./read.js";
 import { DESCRIPTION_FORMAT, DESCRIPTION_MAX, readDescription, writeDescription } from "./write.js";
 
 // The classic TAGS field cannot be cleared through a form body; the v2 update replaces the list.
-const TASK_V2_UPDATE = callTarget({ action: "tasks.v2.Task.update", method: "POST", bodyType: "json" });
+export const TASK_V2_UPDATE = callTarget({ action: "tasks.v2.Task.update", method: "POST", bodyType: "json" });
 const PLAN_UPDATE = callTarget({ action: "tasks.v2.Task.Plan.update", method: "POST", bodyType: "json" });
 const CHECKLIST_LIST = restMethod("task.checklistitem.getlist");
 const CHECKLIST_ADD = restMethod("task.checklistitem.add");
@@ -61,16 +61,15 @@ const itemIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
 const checklistTitle = () => z.string().trim().min(1);
 // An offset is required: without one the date would be read in the daemon's time zone.
 // Unix time 0 means "no date" to Bitrix, so nothing at or before the epoch can be written.
-const planDateArg = () =>
+export const dateArg = () =>
   z
     .string()
     .datetime({ offset: true })
-    .refine((date) => Date.parse(date) >= 1000, "date must be after 1970-01-01T00:00:00Z")
-    .nullable()
-    .optional();
+    .refine((date) => Date.parse(date) >= 1000, "date must be after 1970-01-01T00:00:00Z");
+const planDateArg = () => dateArg().nullable().optional();
 
-const toTs = (date: string | null) => (date === null ? 0 : Math.floor(Date.parse(date) / 1000));
-const fromTs = (ts: number | null) => (ts ? new Date(ts * 1000).toISOString() : null);
+export const toTs = (date: string | null) => (date === null ? 0 : Math.floor(Date.parse(date) / 1000));
+export const fromTs = (ts: number | null) => (ts ? new Date(ts * 1000).toISOString() : null);
 
 export const CONTENT_OPERATIONS: Operation[] = [
   defineOperation({
