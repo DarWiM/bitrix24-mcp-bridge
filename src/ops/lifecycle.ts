@@ -8,7 +8,7 @@ import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
 import { readTaskStage } from "./board.js";
 import { numeric, parseResponse } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
-import { callTarget } from "./read.js";
+import { PROJECTS_GET, callTarget } from "./read.js";
 
 const dod = (action: string) => callTarget({ action: `bitrix:tasks.scrum.doD.${action}`, method: "POST" });
 const DOD_NECESSARY = dod("isNecessary");
@@ -21,6 +21,8 @@ const STATUS_RENEW = v2("tasks.v2.Task.Status.renew");
 
 const CLOSED = 5;
 
+// Required: a group of unknown type is not taken for a non-scrum one, which would skip DoD.
+const groupTypeResponse = z.object({ data: z.object({ TYPE: z.string() }) });
 // A strict boolean: an unexpected answer read as "not needed" would close past DoD.
 const necessaryResponse = z.object({ data: z.boolean() });
 const settingsResponse = z.object({
@@ -81,6 +83,12 @@ function renderData(html: string): string | null {
   return null;
 }
 
+// DoD exists in scrum projects only; elsewhere the task card closes without asking for it.
+async function isScrumGroup(ctx: OpContext, groupId: number) {
+  const raw = await ctx.call({ ...PROJECTS_GET, params: { params: { groupId, select: ["ID", "TYPE"] } } });
+  return parseResponse(groupTypeResponse, raw, "socialnetwork.api.workgroup.get").data.TYPE === "scrum";
+}
+
 async function readCriteria(ctx: OpContext, groupId: number, taskId: number, typeId: number): Promise<DodItem[]> {
   const raw = await ctx.call({ ...DOD_LIST, params: { groupId, taskId, typeId } });
   const { html } = parseResponse(listResponse, raw, "doD.getList").data;
@@ -139,7 +147,7 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
     name: "task_close",
     description:
       "⚠ МУТИРУЮЩИЙ. Закрыть (завершить) задачу. Definition of Done (DoD) scrum-проекта НЕ обходится — " +
-      "закрытие в два вызова. Шаг 1: { taskId }. Если DoD для задачи не нужен, она сразу закрывается. Если нужен — " +
+      "закрытие в два вызова. Шаг 1: { taskId }. Если задача не в scrum-проекте или DoD для неё не нужен, она сразу закрывается. Если нужен — " +
       "задача НЕ закрывается, ответ { taskId, needsConfirmation: true, types: [{ id, name, required, items: [{ title }] }] } — " +
       "типы задач проекта (required — DoD для типа обязателен) и критерии готовности каждого. Покажи пользователю " +
       "критерии и получи его ЯВНОЕ согласие отметить их выполненными для выбранного типа; без согласия шаг 2 не " +
@@ -149,7 +157,7 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
       "участники получают уведомление. Ответ: { taskId, status, changed, typeId? } (status 5 — завершена). " +
       "Возобновить — bitrix_task_reopen.",
     mutating: true,
-    // Up to six requests in a row.
+    // Up to seven requests in a row.
     budget: "long",
     input: { taskId: idArg(), typeId: idArg().optional(), confirmItems: z.literal(true).optional() },
     run: async (ctx, a) => {
@@ -161,10 +169,9 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
       const { taskId } = a;
       const before = await readTaskStage(ctx, taskId);
       if (before.status === CLOSED) return { taskId, status: CLOSED, changed: false };
-      const groupId = before.groupId || null;
+      const groupId = before.groupId && (await isScrumGroup(ctx, before.groupId)) ? before.groupId : null;
 
       if (a.typeId === undefined) {
-        // DoD lives in scrum projects only.
         if (groupId !== null) {
           const raw = await ctx.call({ ...DOD_NECESSARY, params: { groupId, taskId } });
           if (parseResponse(necessaryResponse, raw, "doD.isNecessary").data) {
@@ -181,7 +188,7 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
       }
 
       const { typeId } = a;
-      if (groupId === null) throw new Error(`задача ${taskId} не в проекте — DoD к ней не относится, закрой её без typeId и confirmItems`);
+      if (groupId === null) throw new Error(`задача ${taskId} не в scrum-проекте — DoD к ней не относится, закрой её без typeId и confirmItems`);
       const types = await readTypes(ctx, groupId, taskId);
       if (!types.some((t) => t.id === typeId)) {
         const available = types.map((t) => `${t.id} «${t.name}»`).join(", ") || "нет";

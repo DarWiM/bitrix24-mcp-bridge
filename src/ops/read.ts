@@ -19,7 +19,7 @@ const TASK_VIEWS_COUNT = callTarget({ action: "tasks.v2.Task.View.User.count", m
 const TASK_SUBTASKS = callTarget({ action: "tasks.v2.Task.Relation.Child.list", method: "POST", bodyType: "json" });
 export const TASK_RELATED = callTarget({ action: "tasks.v2.Task.Relation.Related.list", method: "POST", bodyType: "json" });
 const PROJECTS_LIST = callTarget({ action: "socialnetwork.api.workgroup.list", method: "POST" });
-const PROJECTS_GET = callTarget({ action: "socialnetwork.api.workgroup.get", method: "POST" });
+export const PROJECTS_GET = callTarget({ action: "socialnetwork.api.workgroup.get", method: "POST" });
 const CHATS_RECENT = callTarget({
   endpoint: "/rest/im.recent.list.json",
   method: "POST",

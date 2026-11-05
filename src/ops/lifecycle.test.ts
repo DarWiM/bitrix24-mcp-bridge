@@ -98,6 +98,9 @@ const listPage = (descendants: unknown[]) => {
   return ajaxOk({ html });
 };
 const GROUP_PARAMS = { groupId: 17, taskId: 31981 };
+const groupGet = (groupId: number) => form("socialnetwork.api.workgroup.get", { params: { groupId, select: ["ID", "TYPE"] } });
+const group = (type: string) => ajaxOk({ ID: "17", NAME: "Проект", PROJECT: "Y", TYPE: type });
+const SCRUM = group("scrum");
 
 describe("lifecycle operations in OPERATIONS", () => {
   it("registers them as mutating, under the long budget, none taking agent params", () => {
@@ -124,10 +127,11 @@ describe("lifecycle operations in OPERATIONS", () => {
 
 describe("task_close — step 1", () => {
   it("closes at once when the project does not need DoD for the task and checks the task closed", async () => {
-    const { ctx, call } = fakeCtx(replies(task("2"), ajaxOk(false), ajaxOk({ id: 31981 }), task("5")));
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(false), ajaxOk({ id: 31981 }), task("5")));
     const out = await op("task_close").execute(ctx, { taskId: 31981 });
     expect(call.mock.calls.map((c) => c[0])).toEqual([
       taskGet(31981),
+      groupGet(17),
       dod("isNecessary", GROUP_PARAMS),
       complete(31981),
       taskGet(31981),
@@ -142,11 +146,25 @@ describe("task_close — step 1", () => {
     expect(out).toEqual({ taskId: 31981, status: 5, changed: true });
   });
 
+  it("closes a task of a non-scrum project without asking about DoD", async () => {
+    const { ctx, call } = fakeCtx(replies(task("2"), group("project"), ajaxOk({ id: 31981 }), task("5")));
+    const out = await op("task_close").execute(ctx, { taskId: 31981 });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([taskGet(31981), groupGet(17), complete(31981), taskGet(31981)]);
+    expect(out).toEqual({ taskId: 31981, status: 5, changed: true });
+  });
+
+  it("fails without closing when the project's type cannot be read", async () => {
+    const { ctx, call } = fakeCtx(replies(task("2"), ajaxOk({ ID: "17", NAME: "Проект" })));
+    await expect(op("task_close").execute(ctx, { taskId: 31981 })).rejects.toThrow(/workgroup\.get/);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
   it("does not close when DoD is needed and returns every type with its criteria", async () => {
-    const { ctx, call } = fakeCtx(replies(task("2"), ajaxOk(true), SETTINGS, listPage(CRITERIA), listPage([])));
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(true), SETTINGS, listPage(CRITERIA), listPage([])));
     const out = await op("task_close").execute(ctx, { taskId: 31981 });
     expect(call.mock.calls.map((c) => c[0])).toEqual([
       taskGet(31981),
+      groupGet(17),
       dod("isNecessary", GROUP_PARAMS),
       dod("getSettings", { ...GROUP_PARAMS, saveRequest: "N" }),
       dod("getList", { ...GROUP_PARAMS, typeId: 1 }),
@@ -174,21 +192,21 @@ describe("task_close — step 1", () => {
 
   it("reads criteria whose titles carry braces and quotes", async () => {
     const tricky = [leaf(1, 5, 'Код в {скобках} и "кавычках" }', 0)];
-    const { ctx } = fakeCtx(replies(task("2"), ajaxOk(true), SETTINGS, listPage(tricky), listPage([])));
+    const { ctx } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(true), SETTINGS, listPage(tricky), listPage([])));
     const out = await op("task_close").execute(ctx, { taskId: 31981 });
     expect(out).toMatchObject({ types: [{ id: 1, items: [{ title: 'Код в {скобках} и "кавычках" }' }] }, { id: 3, items: [] }] });
   });
 
   it("fails without closing when the criteria cannot be found in the page", async () => {
-    const { ctx, call } = fakeCtx(replies(task("2"), ajaxOk(true), SETTINGS, ajaxOk({ html: "<div>нет данных</div>" })));
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(true), SETTINGS, ajaxOk({ html: "<div>нет данных</div>" })));
     await expect(op("task_close").execute(ctx, { taskId: 31981 })).rejects.toThrow(/DoD/);
-    expect(call).toHaveBeenCalledTimes(4);
+    expect(call).toHaveBeenCalledTimes(5);
   });
 
   it("fails without closing when Bitrix does not say whether DoD is needed", async () => {
-    const { ctx, call } = fakeCtx(replies(task("2"), ajaxOk(null)));
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(null)));
     await expect(op("task_close").execute(ctx, { taskId: 31981 })).rejects.toThrow(/isNecessary/);
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenCalledTimes(3);
   });
 
   it("leaves an already closed task alone", async () => {
@@ -199,28 +217,29 @@ describe("task_close — step 1", () => {
   });
 
   it("fails when Bitrix answers success but the task stays open", async () => {
-    const { ctx } = fakeCtx(replies(task("2"), ajaxOk(false), ajaxOk({ id: 31981 }), task("2")));
+    const { ctx } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(false), ajaxOk({ id: 31981 }), task("2")));
     await expect(op("task_close").execute(ctx, { taskId: 31981 })).rejects.toThrow(/не закрылась.*статус 2/);
   });
 });
 
 describe("task_close — step 2", () => {
   it("marks every criterion of the chosen type done, then closes and checks the task closed", async () => {
-    const { ctx, call } = fakeCtx(replies(task("2"), SETTINGS, listPage(CRITERIA), ajaxOk(""), ajaxOk({ id: 31981 }), task("5")));
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, SETTINGS, listPage(CRITERIA), ajaxOk(""), ajaxOk({ id: 31981 }), task("5")));
     const out = await op("task_close").execute(ctx, { taskId: 31981, typeId: 1, confirmItems: true });
     const targets = call.mock.calls.map((c) => c[0]);
     expect(targets.map((t) => t.action ?? t.endpoint)).toEqual([
       "/rest/tasks.task.get.json",
+      "socialnetwork.api.workgroup.get",
       "bitrix:tasks.scrum.doD.getSettings",
       "bitrix:tasks.scrum.doD.getList",
       "bitrix:tasks.scrum.doD.saveList",
       "tasks.v2.Task.Status.complete",
       "/rest/tasks.task.get.json",
     ]);
-    expect(targets[2]).toEqual(dod("getList", { ...GROUP_PARAMS, typeId: 1 }));
-    expect(targets[4]).toEqual(complete(31981));
+    expect(targets[3]).toEqual(dod("getList", { ...GROUP_PARAMS, typeId: 1 }));
+    expect(targets[5]).toEqual(complete(31981));
 
-    const save = targets[3];
+    const save = targets[4];
     expect(save).toMatchObject({ endpoint: AJAX, action: "bitrix:tasks.scrum.doD.saveList", bodyType: "form" });
     expect(save.params).toMatchObject({ typeId: 1, taskId: 31981, groupId: 17 });
     const items = save.params.items;
@@ -240,15 +259,15 @@ describe("task_close — step 2", () => {
   });
 
   it("saves an empty list for a type without criteria and closes", async () => {
-    const { ctx, call } = fakeCtx(replies(task("2"), SETTINGS, listPage([]), ajaxOk(""), ajaxOk({ id: 31981 }), task("5")));
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, SETTINGS, listPage([]), ajaxOk(""), ajaxOk({ id: 31981 }), task("5")));
     await op("task_close").execute(ctx, { taskId: 31981, typeId: "3", confirmItems: true });
-    expect(call.mock.calls[3][0]).toEqual(dod("saveList", { typeId: 3, taskId: 31981, groupId: 17, items: [] }));
+    expect(call.mock.calls[4][0]).toEqual(dod("saveList", { typeId: 3, taskId: 31981, groupId: 17, items: [] }));
   });
 
   it("refuses a type the project does not have, before marking anything", async () => {
-    const { ctx, call } = fakeCtx(replies(task("2"), SETTINGS));
+    const { ctx, call } = fakeCtx(replies(task("2"), SCRUM, SETTINGS));
     await expect(op("task_close").execute(ctx, { taskId: 31981, typeId: 7, confirmItems: true })).rejects.toThrow(/7.*1.*3/s);
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenCalledTimes(3);
   });
 
   it("refuses a task outside any project: there is no DoD to confirm", async () => {
@@ -257,8 +276,14 @@ describe("task_close — step 2", () => {
     expect(call).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses a task of a non-scrum project: there is no DoD to confirm", async () => {
+    const { ctx, call } = fakeCtx(replies(task("2"), group("project")));
+    await expect(op("task_close").execute(ctx, { taskId: 31981, typeId: 1, confirmItems: true })).rejects.toThrow(/не в scrum-проекте/);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
   it("says the criteria are already marked when closing then fails", async () => {
-    const { ctx } = fakeCtx(replies(task("2"), SETTINGS, listPage(CRITERIA), ajaxOk(""), new Error("ACCESS_DENIED")));
+    const { ctx } = fakeCtx(replies(task("2"), SCRUM, SETTINGS, listPage(CRITERIA), ajaxOk(""), new Error("ACCESS_DENIED")));
     await expect(op("task_close").execute(ctx, { taskId: 31981, typeId: 1, confirmItems: true })).rejects.toThrow(/отмечены.*ACCESS_DENIED/);
   });
 
