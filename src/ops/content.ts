@@ -70,6 +70,8 @@ const planDateArg = () => dateArg().nullable().optional();
 
 export const toTs = (date: string | null) => (date === null ? 0 : Math.floor(Date.parse(date) / 1000));
 export const fromTs = (ts: number | null) => (ts ? new Date(ts * 1000).toISOString() : null);
+// Bitrix keeps task times to the minute: seconds the agent passed are not a write that failed.
+export const sameMinute = (a: number | null, b: number | null) => Math.floor((a ?? 0) / 60) === Math.floor((b ?? 0) / 60);
 
 export const CONTENT_OPERATIONS: Operation[] = [
   defineOperation({
@@ -324,13 +326,13 @@ export const CONTENT_OPERATIONS: Operation[] = [
       const actual = await readPlan(ctx, a.taskId).catch((e: unknown) => {
         throw new Error(`запись отправлена, но перечитать даты не удалось (проверь через bitrix_task_get_v2): ${errorMessage(e)}`);
       });
-      if (actual.startPlanTs !== startPlanTs || actual.endPlanTs !== endPlanTs) {
+      if (!sameMinute(actual.startPlanTs, startPlanTs) || !sameMinute(actual.endPlanTs, endPlanTs)) {
         throw new Error(
           `Bitrix ответил успехом, но даты другие: сейчас start ${fromTs(actual.startPlanTs) ?? "нет"}, ` +
             `end ${fromTs(actual.endPlanTs) ?? "нет"}`,
         );
       }
-      return { taskId: a.taskId, start: fromTs(startPlanTs), end: fromTs(endPlanTs) };
+      return { taskId: a.taskId, start: fromTs(actual.startPlanTs), end: fromTs(actual.endPlanTs) };
     },
   }),
 ];

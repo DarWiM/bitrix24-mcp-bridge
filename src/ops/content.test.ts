@@ -410,6 +410,17 @@ describe("task_plan", () => {
     ).rejects.toThrow(/даты другие.*end нет/);
   });
 
+  it("takes dates stored without the seconds for the written ones and fails ones a minute off", async () => {
+    const same = fakeCtx(replies({ status: "success" }, stored("2026-11-10T06:00:00Z", "2026-11-12T18:00:00Z")));
+    const result = await op("task_plan").execute(same.ctx, { taskId: 42, start: "2026-11-10T06:00:59Z", end: "2026-11-12T18:00:01Z" });
+    expect(result).toEqual({ taskId: 42, start: "2026-11-10T06:00:00.000Z", end: "2026-11-12T18:00:00.000Z" });
+
+    const off = fakeCtx(replies({ status: "success" }, stored("2026-11-10T06:00:00Z", "2026-11-12T18:01:00Z")));
+    await expect(
+      op("task_plan").execute(off.ctx, { taskId: 42, start: "2026-11-10T06:00:00Z", end: "2026-11-12T18:00:00Z" }),
+    ).rejects.toThrow(/даты другие.*18:01/);
+  });
+
   it("says the write was sent when the re-read fails", async () => {
     const { ctx } = fakeCtx(replies({ status: "success" }, new Error("timeout")));
 

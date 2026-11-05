@@ -7,7 +7,7 @@ import { z } from "zod";
 import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
 import { currentUserId } from "./board.js";
 import { numeric, parseResponse } from "./calls.js";
-import { TASK_V2_UPDATE, dateArg, fromTs, toTs } from "./content.js";
+import { TASK_V2_UPDATE, dateArg, fromTs, sameMinute, toTs } from "./content.js";
 import { defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
@@ -27,7 +27,8 @@ const CHANNELS = ["notification", "email"] as const;
 const priorityResponse = z.object({ data: z.object({ priority: z.string() }) });
 // Required: a deadline missing from the card must not pass for a cleared one.
 const deadlineResponse = z.object({ data: z.object({ deadlineTs: z.number().nullable() }) });
-const doneResponse = z.object({ data: z.literal(true) });
+// Who of the participants muted the task; required, so that an unexpected card is not read as "nobody".
+const muteResponse = z.object({ data: z.object({ inMute: z.array(numeric) }) });
 const reminderAddResponse = z.object({ data: z.object({ id: numeric }) });
 const remindersResponse = z.object({
   data: z.array(
@@ -100,8 +101,8 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
         await ctx.call({ ...DEADLINE_UPDATE, params: { task: { id: taskId, deadlineTs, deadlineChangeReason: a.reason ?? "" } } });
         const card = await reread(readCard(ctx, taskId, deadlineResponse, "deadline"), "bitrix_task_get_v2");
         const actual = card.data.deadlineTs ?? 0;
-        if (actual !== deadlineTs) throw new Error(`Bitrix ответил успехом, но срок другой: сейчас ${fromTs(actual) ?? "нет"}`);
-        return { deadline: fromTs(deadlineTs) };
+        if (!sameMinute(actual, deadlineTs)) throw new Error(`Bitrix ответил успехом, но срок другой: сейчас ${fromTs(actual) ?? "нет"}`);
+        return { deadline: fromTs(actual) };
       });
     },
   }),
@@ -109,14 +110,23 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
     name: "task_mute",
     description:
       "⚠ МУТИРУЮЩИЙ. Выключить (muted: true) или включить (muted: false) ТВОИ уведомления по задаче. Касается " +
-      "только тебя: другие участники этого не видят и уведомления получают как прежде. Прочитать текущее " +
-      "состояние нельзя — ответ { taskId, muted } подтверждает только, что Bitrix принял запрос.",
+      "только тебя: другие участники этого не видят и уведомления получают как прежде. После записи состояние " +
+      "перечитывается; если оно не то — ошибка. Ответ: { taskId, muted }.",
     mutating: true,
+    // Three requests in a row.
+    budget: "long",
     input: { taskId: idArg(), muted: z.boolean() },
     run: async (ctx, a) => {
-      const raw = await ctx.call({ ...(a.muted ? MUTE : UNMUTE), params: { taskId: a.taskId } });
-      parseResponse(doneResponse, raw, `tasks.v2.Task.Attention.${a.muted ? "mute" : "unmute"}`);
-      return { taskId: a.taskId, muted: a.muted };
+      const { taskId } = a;
+      // Asked before the write, so that the only request after it is the re-read.
+      const userId = await currentUserId(ctx);
+      await ctx.call({ ...(a.muted ? MUTE : UNMUTE), params: { taskId } });
+      const { inMute } = (await reread(readCard(ctx, taskId, muteResponse, "mute"), "bitrix_task_get_v2")).data;
+      const muted = inMute.includes(userId);
+      if (muted !== a.muted) {
+        throw new Error(`Bitrix ответил успехом, но уведомления по задаче ${muted ? "по-прежнему выключены" : "по-прежнему включены"}`);
+      }
+      return { taskId, muted };
     },
   }),
   defineOperation({
@@ -179,7 +189,7 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
       }
       const saved = (await reread(readReminders(ctx, taskId), "bitrix_task_reminders")).find((r) => r.id === id);
       if (!saved) throw new Error(`Bitrix ответил успехом, но напоминания ${id} нет у задачи ${taskId}`);
-      if (saved.nextRemindTs !== nextRemindTs || saved.remindVia !== a.via) {
+      if (!sameMinute(saved.nextRemindTs, nextRemindTs) || saved.remindVia !== a.via) {
         throw new Error(`Bitrix ответил успехом, но напоминание ${id} другое: ${fromTs(saved.nextRemindTs) ?? "без даты"}, ${saved.remindVia}`);
       }
       return { taskId, reminder: reminderView(saved) };
@@ -188,14 +198,23 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
   defineOperation({
     name: "task_reminder_delete",
     description:
-      "⚠ МУТИРУЮЩИЙ. Удалить напоминание по id (из bitrix_task_reminders). Другие участники об этом не узнают. " +
-      "Удаление не перечитывается — проверить можно через bitrix_task_reminders. Ответ: { reminderId, deleted: true }.",
+      "⚠ МУТИРУЮЩИЙ. Удалить напоминание reminderId задачи taskId (id — из bitrix_task_reminders). Другие " +
+      "участники об этом не узнают. Нет такого напоминания у задачи — ошибка, ничего не удаляется. После удаления " +
+      "список перечитывается; если напоминание осталось — ошибка. Ответ: { taskId, reminderId, deleted: true }.",
     mutating: true,
-    input: { reminderId: idArg() },
+    // Three requests in a row.
+    budget: "long",
+    input: { taskId: idArg(), reminderId: idArg() },
     run: async (ctx, a) => {
-      const raw = await ctx.call({ ...REMINDER_DELETE, params: { reminder: { id: a.reminderId } } });
-      parseResponse(doneResponse, raw, "tasks.v2.Task.Reminder.delete");
-      return { reminderId: a.reminderId, deleted: true };
+      const { taskId, reminderId } = a;
+      // Reminder ids are portal-wide: without this check a wrong taskId would delete another task's reminder.
+      if (!(await readReminders(ctx, taskId)).some((r) => r.id === reminderId)) {
+        throw new Error(`у задачи ${taskId} нет напоминания ${reminderId} — ничего не удалено; список — bitrix_task_reminders`);
+      }
+      await ctx.call({ ...REMINDER_DELETE, params: { reminder: { id: reminderId } } });
+      const left = await reread(readReminders(ctx, taskId), "bitrix_task_reminders");
+      if (left.some((r) => r.id === reminderId)) throw new Error(`Bitrix ответил успехом, но напоминание ${reminderId} осталось`);
+      return { taskId, reminderId, deleted: true };
     },
   }),
 ];
