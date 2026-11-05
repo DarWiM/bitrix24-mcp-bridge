@@ -202,7 +202,8 @@ export const WRITE_OPERATIONS: Operation[] = [
       "завершённых) не трогаются — ошибка. Изменение видят все участники проекта на scrum-доске; перенос может " +
       "переоткрыть закрытую задачу — смотри status в ответе. Задачи обрабатываются по очереди; ошибка одной " +
       "не останавливает остальные. Ответ: { results: [{ taskId, ok, error?, sprintId, stageId, column, status, " +
-      "fromBacklog }] } — колонка перечитана после переноса.",
+      "fromBacklog }] } — после переноса колонка перечитывается, а у задачи из бэклога перечитывается ещё и то, " +
+      "что она теперь в спринте.",
     mutating: true,
     // Up to six requests per task, three more per project.
     budget: "long",
