@@ -104,6 +104,11 @@ daemon. Набор операций фиксирован в коде; произ
 | `bitrix_task_views_count` | счётчик просмотров |
 | `bitrix_task_subtasks` / `bitrix_task_related` | подзадачи / связанные задачи |
 | `bitrix_task_comments` | старые комментарии задачи (форум, до чатов задач) |
+| `bitrix_task_description_set` ⚠ / `bitrix_task_description_append` ⚠ | заменить описание задачи / дописать в его конец |
+| `bitrix_task_result_add` ⚠ | добавить результат задачам (пакетно, `taskIds`) |
+| *Scrum* | |
+| `bitrix_sprint_columns` | колонки доски активного спринта проекта |
+| `bitrix_task_move` ⚠ | перенести задачи в колонку спринта (пакетно, `taskIds`) |
 | *Проекты* | |
 | `bitrix_projects_list` / `bitrix_project_get` | рабочие группы / проекты |
 | *Чаты* | |
@@ -114,6 +119,7 @@ daemon. Набор операций фиксирован в коде; произ
 | `bitrix_chat_history` | листать историю вглубь |
 | `bitrix_chat_get_dialog_id` | резолв dialogId по externalId |
 | `bitrix_chat_mark_read` ⚠ / `bitrix_chat_read_all` ⚠ | пометить сообщения / все чаты прочитанными |
+| `bitrix_chat_send` ⚠ | отправить сообщение в чат |
 | *Люди / поиск* | |
 | `bitrix_user_get` | карточка пользователя |
 | `bitrix_entity_selector` / `bitrix_entity_search` | загрузка селектора / текстовый поиск сущностей |
@@ -129,7 +135,9 @@ daemon. Набор операций фиксирован в коде; произ
 
 ### Переключатель мутаций
 
-Мутирующие операции (сейчас `bitrix_chat_mark_read` и `bitrix_chat_read_all`) по умолчанию
+Мутирующие операции (`bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`,
+`bitrix_task_description_set`, `bitrix_task_description_append`, `bitrix_task_result_add`,
+`bitrix_task_move`) по умолчанию
 **разрешены**. Запретить их можно тремя способами (побеждает верхний):
 
 1. env `BITRIX_MCP_MUTATIONS=off` (или `on`) у процесса daemon;

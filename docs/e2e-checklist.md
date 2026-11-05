@@ -13,7 +13,12 @@
   `bitrix_recent_tail`, `bitrix_chat_load`, `bitrix_chat_get_dialog_id`, `bitrix_chat_messages`,
   `bitrix_chat_history`, `bitrix_user_get`, `bitrix_entity_search`, `bitrix_entity_selector`,
   `bitrix_entity_chat`, `bitrix_chat_calls`, `bitrix_call_detail`, `bitrix_call_recording`,
-  `bitrix_file_download`; мутирующие `bitrix_chat_mark_read` / `bitrix_chat_read_all` — на тестовом чате.
+  `bitrix_file_download`, `bitrix_sprint_columns`; мутирующие — на тестовой задаче / тестовом чате:
+  `bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`, `bitrix_task_description_set`,
+  `bitrix_task_description_append`, `bitrix_task_result_add`, `bitrix_task_move`.
+- [ ] Пакетные `bitrix_task_move` / `bitrix_task_result_add` с двумя `taskIds`, одна из которых заведомо
+  не подходит (напр. задача в бэклоге для переноса) → `results` в порядке `taskIds`, у неподходящей
+  `ok: false` и `error`, вторая выполнена.
 - [ ] `bitrix_chat_messages { chatId }` → последние сообщения; `bitrix_chat_history { chatId, beforeId }` листает вглубь.
 - [ ] Инструмента `bitrix_call` в списке нет.
 

@@ -123,7 +123,9 @@ bitrix24-mcp-bridge`. Для другого MCP-клиента — та же к�
 
 ## Переключатель мутаций
 
-Мутирующие операции (`bitrix_chat_mark_read`, `bitrix_chat_read_all`) по умолчанию разрешены.
+Мутирующие операции (`bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`,
+`bitrix_task_description_set`, `bitrix_task_description_append`, `bitrix_task_result_add`,
+`bitrix_task_move`) по умолчанию разрешены.
 Выключить (побеждает верхний способ):
 
 1. env `BITRIX_MCP_MUTATIONS=off` (`on` — включить) у процесса daemon;
