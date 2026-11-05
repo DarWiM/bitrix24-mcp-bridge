@@ -113,7 +113,8 @@ describe("task_file_attach in OPERATIONS", () => {
 
 describe("task_file_attach", () => {
   it("uploads the file to the user's Disk root, attaches it and re-reads the task's files", async () => {
-    const { ctx, call } = fakeCtx(replies(taskFiles(), me, storages, uploaded(), attached, taskFiles([22193])));
+    // Frozen clock: with no time spent, the upload gets the full ceiling.
+    const { ctx, call } = fakeCtx(slowReplies("disk.storage", 0, taskFiles(), me, storages, uploaded(), attached, taskFiles([22193])));
 
     const result = await op("task_file_attach").execute(ctx, { taskId: "42", path: file });
 
@@ -234,7 +235,7 @@ describe("task_file_attach", () => {
 
     await op("task_file_attach").execute(ctx, { taskId: 42, path: file });
 
-    expect(call.mock.calls[3][2]).toEqual({ timeoutMs: BUDGET_TIMEOUT_MS.long - 100_000 - 60_000 });
+    expect(call.mock.calls[3][2]).toEqual({ timeoutMs: BUDGET_TIMEOUT_MS.long - 100_000 - 65_000 });
   });
 
   it("refuses to upload when too little of the operation's budget is left", async () => {

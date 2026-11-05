@@ -16,8 +16,9 @@ const ATTACH = restMethod("tasks.task.files.attach");
 
 // The upload is a base64 form body: 10 MB of file is about 13 MB on the wire.
 const MAX_BYTES = 10 * 1024 * 1024;
-// Attach and re-read after the upload, at the daemon's regular per-request timeout each.
-const AFTER_UPLOAD_MS = 60_000;
+// Attach and re-read after the upload, at the daemon's regular per-request timeout each, plus slack
+// so that the daemon answers before the client's own timeout.
+const AFTER_UPLOAD_MS = 65_000;
 // Less than one regular request's worth is not worth starting a 13 MB upload with.
 const MIN_UPLOAD_MS = 30_000;
 
@@ -75,7 +76,8 @@ async function readLocalFile(path: string) {
     if (length !== info.size) throw new OpInputError(`${path} изменился во время чтения — повтори`);
     return bytes.subarray(0, length);
   } finally {
-    await fh.close();
+    // A failed close must not replace the error that ended the read.
+    await fh.close().catch(() => {});
   }
 }
 
