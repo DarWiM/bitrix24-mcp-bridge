@@ -115,6 +115,10 @@ const userIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
 // edited rather than one list being written to every task of the batch.
 function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITORS"; key: "accomplices" | "auditors"; description: string }) {
   const response = membersResponse(def.key);
+  const readMembers = async (ctx: OpContext, taskId: number) => {
+    const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", def.field] } });
+    return parseResponse(response, raw, "tasks.task.get").result.task[def.key];
+  };
   return defineOperation({
     name: def.name,
     description: def.description,
@@ -130,14 +134,27 @@ function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITO
       const both = add.find((id) => remove.has(id));
       if (both !== undefined) throw new OpInputError(`invalid arguments for ${def.name} — user ${both} is in both add and remove`);
       return forEachTask(a.taskIds, async (taskId) => {
-        const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", def.field] } });
-        const current = parseResponse(response, raw, "tasks.task.get").result.task[def.key];
+        const current = await readMembers(ctx, taskId);
         const next = current.filter((id) => !remove.has(id));
         for (const id of add) if (!next.includes(id)) next.push(id);
         const changed = next.length !== current.length || next.some((id, i) => id !== current[i]);
+        if (!changed) return { [def.key]: current, changed };
         // An empty array vanishes from the form body and Bitrix then rejects the call; "" clears.
-        if (changed) await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { [def.field]: next.length > 0 ? next : "" } } });
-        return { [def.key]: next, changed };
+        await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { [def.field]: next.length > 0 ? next : "" } } });
+        // Bitrix may answer success and still keep a list of its own (e.g. refuse a user).
+        const actual = await readMembers(ctx, taskId).catch((e: unknown) => {
+          throw new Error(`запись отправлена, но перечитать задачу не удалось (проверь список через bitrix_task_get): ${errorMessage(e)}`);
+        });
+        const notAdded = next.filter((id) => !actual.includes(id));
+        const notRemoved = actual.filter((id) => !next.includes(id));
+        if (notAdded.length > 0 || notRemoved.length > 0) {
+          const parts = [
+            ...(notAdded.length > 0 ? [`добавить ${notAdded.join(", ")}`] : []),
+            ...(notRemoved.length > 0 ? [`убрать ${notRemoved.join(", ")}`] : []),
+          ];
+          throw new Error(`Bitrix не применил: ${parts.join("; ")} (сейчас в списке: ${actual.join(", ") || "никого"})`);
+        }
+        return { [def.key]: actual, changed };
       });
     },
   });
@@ -145,8 +162,8 @@ function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITO
 
 const MEMBERS_HINT =
   "add / remove — массивы userId (найти id по фамилии — bitrix_user_find); нужен хотя бы один непустой. " +
-  "Список читается у каждой задачи заново и записывается целиком; если менять нечего, запись не делается " +
-  "(changed: false). Задачи обрабатываются по очереди; ошибка одной не останавливает остальные.";
+  "Список читается у каждой задачи заново, записывается целиком и перечитывается; если менять нечего, " +
+  "запись не делается (changed: false). Если Bitrix применил не всё, задача ok: false с перечнем. Задачи обрабатываются по очереди; ошибка одной не останавливает остальные.";
 
 const DESCRIPTION_FORMAT =
   "Формат — BBCode: [b] [i] [u] [s], [url=…]…[/url], [user=ID]Имя[/user], списки [list] / [list=1] " +
@@ -303,7 +320,7 @@ export const WRITE_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. Добавить / убрать СОИСПОЛНИТЕЛЕЙ задач (taskIds — до 50). Каждый добавленный " +
       "получает уведомление; правка видна в истории задачи. " +
       MEMBERS_HINT +
-      " Ответ: { results: [{ taskId, ok, error?, accomplices, changed }] } — accomplices — итоговый список.",
+      " Ответ: { results: [{ taskId, ok, error?, accomplices, changed }] } — accomplices — список, перечитанный после записи.",
   }),
   memberListOperation({
     name: "task_auditors",
@@ -313,7 +330,7 @@ export const WRITE_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. Добавить / убрать НАБЛЮДАТЕЛЕЙ задач (taskIds — до 50). Каждый добавленный " +
       "получает уведомление; правка видна в истории задачи. " +
       MEMBERS_HINT +
-      " Ответ: { results: [{ taskId, ok, error?, auditors, changed }] } — auditors — итоговый список.",
+      " Ответ: { results: [{ taskId, ok, error?, auditors, changed }] } — auditors — список, перечитанный после записи.",
   }),
   defineOperation({
     name: "user_find",

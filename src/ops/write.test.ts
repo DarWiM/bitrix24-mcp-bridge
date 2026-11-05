@@ -472,17 +472,42 @@ for (const { name, field, key } of [
     const write = (taskId: number, value: number[] | "") => rest("/rest/tasks.task.update.json", { taskId, fields: { [field]: value } });
     const members = (...ids: string[]) => ({ result: { task: { id: "42", [key]: ids } } });
 
-    it("adds and removes people on top of the current list and returns the final one", async () => {
-      const { ctx, call } = fakeCtx(replies(members("5", "7", "9"), { result: { task: {} } }));
+    const updated = { result: { task: {} } };
+
+    it("adds and removes people on top of the current list and returns the re-read one", async () => {
+      const { ctx, call } = fakeCtx(replies(members("5", "7", "9"), updated, members("5", "9", "11")));
 
       const result = await op(name).execute(ctx, { taskIds: [42], add: [11, "5"], remove: ["7"] });
 
-      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42), write(42, [5, 9, 11])]);
+      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42), write(42, [5, 9, 11]), read(42)]);
       expect(result).toEqual({ results: [{ taskId: 42, ok: true, [key]: [5, 9, 11], changed: true }] });
     });
 
+    it("computes each task's write from its own list", async () => {
+      const { ctx, call } = fakeCtx(replies(members("5"), updated, members("5", "11"), members("3", "8"), updated, members("3", "11")));
+
+      const result = await op(name).execute(ctx, { taskIds: [42, 43], add: [11], remove: [8] });
+
+      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42), write(42, [5, 11]), read(42), read(43), write(43, [3, 11]), read(43)]);
+      expect(result).toEqual({
+        results: [
+          { taskId: 42, ok: true, [key]: [5, 11], changed: true },
+          { taskId: 43, ok: true, [key]: [3, 11], changed: true },
+        ],
+      });
+    });
+
+    it("adds to an empty list without duplicating a repeated id", async () => {
+      const { ctx, call } = fakeCtx(replies(members(), updated, members("11")));
+
+      const result = await op(name).execute(ctx, { taskIds: [42], add: [11, 11] });
+
+      expect(call.mock.calls[1][0]).toEqual(write(42, [11]));
+      expect(result).toEqual({ results: [{ taskId: 42, ok: true, [key]: [11], changed: true }] });
+    });
+
     it('clears the list with "" because an empty array vanishes from the form body', async () => {
-      const { ctx, call } = fakeCtx(replies(members("5"), { result: { task: {} } }));
+      const { ctx, call } = fakeCtx(replies(members("5"), updated, members()));
 
       const result = await op(name).execute(ctx, { taskIds: [42], remove: [5] });
 
@@ -499,12 +524,12 @@ for (const { name, field, key } of [
       expect(result).toEqual({ results: [{ taskId: 42, ok: true, [key]: [5, 7], changed: false }] });
     });
 
-    it("computes the list per task and does not write when the read comes back in an unexpected shape", async () => {
-      const { ctx, call } = fakeCtx(replies({ result: { task: { id: "42" } } }, members("3"), { result: { task: {} } }));
+    it("does not write when the read comes back in an unexpected shape", async () => {
+      const { ctx, call } = fakeCtx(replies({ result: { task: { id: "42" } } }, members("3"), updated, members("3", "11")));
 
       const result = await op(name).execute(ctx, { taskIds: [42, 43], add: [11] });
 
-      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42), read(43), write(43, [3, 11])]);
+      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42), read(43), write(43, [3, 11]), read(43)]);
       expect(result).toEqual({
         results: [
           { taskId: 42, ok: false, error: "tasks.task.get returned an unexpected shape" },
@@ -512,6 +537,52 @@ for (const { name, field, key } of [
         ],
       });
     });
+
+    it("does not write when the read fails", async () => {
+      const { ctx, call } = fakeCtx(async () => {
+        throw new Error("extension not connected");
+      });
+
+      const result = await op(name).execute(ctx, { taskIds: [42], add: [11] });
+
+      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42)]);
+      expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: "extension not connected" }] });
+    });
+
+    it("fails the task and names what Bitrix did not apply when the re-read list differs", async () => {
+      const { ctx } = fakeCtx(replies(members("5", "7"), updated, members("5", "7")));
+
+      const result = await op(name).execute(ctx, { taskIds: [42], add: [11], remove: [7] });
+
+      expect(result).toEqual({
+        results: [{ taskId: 42, ok: false, error: "Bitrix не применил: добавить 11; убрать 7 (сейчас в списке: 5, 7)" }],
+      });
+    });
+
+    for (const [title, reread, cause] of [
+      ["comes back in an unexpected shape", async () => ({ result: { task: {} } }), "tasks.task.get returned an unexpected shape"],
+      ["fails", async () => {
+        throw new Error("extension not connected");
+      }, "extension not connected"],
+    ] as const) {
+      it(`says the write was sent when the re-read ${title}`, async () => {
+        const first = replies(members("5"), updated);
+        let n = 0;
+        const { ctx } = fakeCtx(async (target) => (n++ < 2 ? first(target) : reread()));
+
+        const result = await op(name).execute(ctx, { taskIds: [42], add: [11] });
+
+        expect(result).toEqual({
+          results: [
+            {
+              taskId: 42,
+              ok: false,
+              error: `запись отправлена, но перечитать задачу не удалось (проверь список через bitrix_task_get): ${cause}`,
+            },
+          ],
+        });
+      });
+    }
 
     for (const [title, args] of [
       ["neither add nor remove", { taskIds: [42] }],
