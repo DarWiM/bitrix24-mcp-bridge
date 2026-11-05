@@ -8,7 +8,7 @@ import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
 import { currentUserId } from "./board.js";
 import { numeric, parseResponse } from "./calls.js";
 import { TASK_V2_UPDATE, dateArg, fromTs, sameMinute, toTs } from "./content.js";
-import { defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
+import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
 const v2 = (action: string) => callTarget({ action, method: "POST", bodyType: "json" });
@@ -26,7 +26,7 @@ const CHANNELS = ["notification", "email"] as const;
 
 const priorityResponse = z.object({ data: z.object({ priority: z.string() }) });
 // Required: a deadline missing from the card must not pass for a cleared one.
-const deadlineResponse = z.object({ data: z.object({ deadlineTs: z.number().nullable() }) });
+const deadlineResponse = z.object({ data: z.object({ deadlineTs: numeric.nullable() }) });
 // Who of the participants muted the task; required, so that an unexpected card is not read as "nobody".
 const muteResponse = z.object({ data: z.object({ inMute: z.array(numeric) }) });
 const reminderAddResponse = z.object({ data: z.object({ id: numeric }) });
@@ -35,7 +35,7 @@ const remindersResponse = z.object({
     z.object({
       id: numeric,
       userId: numeric,
-      nextRemindTs: z.number().nullable(),
+      nextRemindTs: numeric.nullable(),
       remindBy: z.string(),
       remindVia: z.string(),
       recipient: z.string(),
@@ -53,6 +53,17 @@ async function readCard<T>(ctx: OpContext, taskId: number, schema: z.ZodType<T, 
 async function readReminders(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REMINDER_LIST, params: { taskId } });
   return parseResponse(remindersResponse, raw, "tasks.v2.Task.Reminder.list").data;
+}
+
+// Another user's reminder is theirs to change: the agent acts for the current user only.
+async function ownReminder(ctx: OpContext, taskId: number, reminderId: number, nothingDone: string) {
+  const userId = await currentUserId(ctx);
+  const found = (await readReminders(ctx, taskId)).find((r) => r.id === reminderId);
+  if (!found) throw new Error(`у задачи ${taskId} нет напоминания ${reminderId} — ${nothingDone}; список — bitrix_task_reminders`);
+  if (found.userId !== userId) {
+    throw new Error(`напоминание ${reminderId} — пользователя ${found.userId}, а менять можно только свои — ${nothingDone}`);
+  }
+  return found;
 }
 
 const reminderView = (r: Reminder) => ({ id: r.id, at: fromTs(r.nextRemindTs), via: r.remindVia, remindBy: r.remindBy, recipient: r.recipient });
@@ -135,7 +146,7 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
       "Напоминания по задаче (read-only): { taskId, reminders: [{ id, at, via, remindBy, recipient }] } — at — " +
       "когда сработает (UTC), via — notification (уведомление в Битрикс24) / email, remindBy — date (на дату) / " +
       "deadline (относительно срока), recipient — кому (myself — тебе). id — для bitrix_task_reminder_set / " +
-      "bitrix_task_reminder_delete.",
+      "bitrix_task_reminder_delete (менять и удалять можно только свои напоминания).",
     mutating: false,
     input: { taskId: idArg() },
     run: async (ctx, a) => ({ taskId: a.taskId, reminders: (await readReminders(ctx, a.taskId)).map(reminderView) }),
@@ -145,18 +156,21 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
     description:
       `⚠ МУТИРУЮЩИЙ. Поставить НАПОМИНАНИЕ по задаче на дату at — ${DATE_FORMAT}; via — notification ` +
       "(уведомление в Битрикс24) или email. Без reminderId создаётся новое напоминание тебе; его получаешь только " +
-      "ты, другие участники его не видят. С reminderId (из bitrix_task_reminders) меняется существующее: дата и " +
-      "канал, получатель остаётся прежним; напоминание относительно срока становится напоминанием на дату. После " +
-      "записи напоминание перечитывается; если оно другое — ошибка. Ответ: { taskId, reminder: { id, at, via, " +
+      "ты, другие участники его не видят. at — в будущем. С reminderId (из bitrix_task_reminders) меняется " +
+      "существующее — только свои напоминания: дата и канал, получатель остаётся прежним; напоминание относительно " +
+      "срока становится напоминанием на дату. После записи напоминание перечитывается; если оно другое — ошибка. " +
+      "Ответ: { taskId, reminder: { id, at, via, " +
       "remindBy, recipient } } (at — UTC).",
     mutating: true,
-    // Three requests in a row.
+    // Up to four requests in a row.
     budget: "long",
     input: { taskId: idArg(), reminderId: idArg().optional(), at: dateArg(), via: z.enum(CHANNELS) },
     run: async (ctx, a) => {
       const { taskId } = a;
       const nextRemindTs = toTs(a.at);
+      if (nextRemindTs <= Date.now() / 1000) throw new OpInputError("invalid arguments for task_reminder_set — at is in the past");
       let id: number;
+      let recipient: string;
       if (a.reminderId === undefined) {
         const userId = await currentUserId(ctx);
         // The id the task card makes up for a reminder not saved yet; Bitrix answers with the real one.
@@ -168,11 +182,9 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
           );
         }
         id = parsed.data.data.id;
+        recipient = draft.recipient;
       } else {
-        const current = (await readReminders(ctx, taskId)).find((r) => r.id === a.reminderId);
-        if (!current) {
-          throw new Error(`у задачи ${taskId} нет напоминания ${a.reminderId} — ничего не изменено; список — bitrix_task_reminders`);
-        }
+        const current = await ownReminder(ctx, taskId, a.reminderId, "ничего не изменено");
         // The update replaces the whole reminder: whose it is and whom it reaches are written back as they are.
         const reminder = {
           id: current.id,
@@ -186,11 +198,13 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
         };
         await ctx.call({ ...REMINDER_UPDATE, params: { reminder } });
         id = current.id;
+        recipient = current.recipient;
       }
       const saved = (await reread(readReminders(ctx, taskId), "bitrix_task_reminders")).find((r) => r.id === id);
       if (!saved) throw new Error(`Bitrix ответил успехом, но напоминания ${id} нет у задачи ${taskId}`);
-      if (!sameMinute(saved.nextRemindTs, nextRemindTs) || saved.remindVia !== a.via) {
-        throw new Error(`Bitrix ответил успехом, но напоминание ${id} другое: ${fromTs(saved.nextRemindTs) ?? "без даты"}, ${saved.remindVia}`);
+      if (!sameMinute(saved.nextRemindTs, nextRemindTs) || saved.remindVia !== a.via || saved.remindBy !== "date" || saved.recipient !== recipient) {
+        const now = [fromTs(saved.nextRemindTs) ?? "без даты", saved.remindVia, saved.remindBy, saved.recipient].join(", ");
+        throw new Error(`Bitrix ответил успехом, но напоминание ${id} другое: ${now}`);
       }
       return { taskId, reminder: reminderView(saved) };
     },
@@ -198,19 +212,18 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
   defineOperation({
     name: "task_reminder_delete",
     description:
-      "⚠ МУТИРУЮЩИЙ. Удалить напоминание reminderId задачи taskId (id — из bitrix_task_reminders). Другие " +
-      "участники об этом не узнают. Нет такого напоминания у задачи — ошибка, ничего не удаляется. После удаления " +
+      "⚠ МУТИРУЮЩИЙ. Удалить напоминание reminderId задачи taskId (id — из bitrix_task_reminders) — только свои " +
+      "напоминания. Другие участники об этом не узнают. Нет такого напоминания у задачи или оно чужое — ошибка, " +
+      "ничего не удаляется. После удаления " +
       "список перечитывается; если напоминание осталось — ошибка. Ответ: { taskId, reminderId, deleted: true }.",
     mutating: true,
-    // Three requests in a row.
+    // Four requests in a row.
     budget: "long",
     input: { taskId: idArg(), reminderId: idArg() },
     run: async (ctx, a) => {
       const { taskId, reminderId } = a;
       // Reminder ids are portal-wide: without this check a wrong taskId would delete another task's reminder.
-      if (!(await readReminders(ctx, taskId)).some((r) => r.id === reminderId)) {
-        throw new Error(`у задачи ${taskId} нет напоминания ${reminderId} — ничего не удалено; список — bitrix_task_reminders`);
-      }
+      await ownReminder(ctx, taskId, reminderId, "ничего не удалено");
       await ctx.call({ ...REMINDER_DELETE, params: { reminder: { id: reminderId } } });
       const left = await reread(readReminders(ctx, taskId), "bitrix_task_reminders");
       if (left.some((r) => r.id === reminderId)) throw new Error(`Bitrix ответил успехом, но напоминание ${reminderId} осталось`);

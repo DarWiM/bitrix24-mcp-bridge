@@ -160,6 +160,14 @@ describe("task_deadline", () => {
     });
   });
 
+  it("reads a deadline the card sends as a string", async () => {
+    const { ctx } = fakeCtx(replies(card({}), card({ deadlineTs: String(ts("2026-11-10T06:00:00Z")) })));
+
+    const result = await op("task_deadline").execute(ctx, { taskIds: [42], deadline: "2026-11-10T06:00:00Z" });
+
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, deadline: "2026-11-10T06:00:00.000Z" }] });
+  });
+
   it("fails a task whose re-read deadline differs, a card without deadlineTs included", async () => {
     const { ctx } = fakeCtx(replies(card({}), card({ deadlineTs: null }), card({}), card({})));
 
@@ -223,11 +231,14 @@ describe("task_mute", () => {
   });
 });
 
+// Far ahead, so that the "not in the past" check never depends on when the tests run.
+const AT = "2099-11-10T06:00:00Z";
+const ME = { result: { ID: "7" } };
 const reminder = (fields: Record<string, unknown> = {}) => ({
   id: 61,
   userId: 7,
   taskId: 42,
-  nextRemindTs: ts("2026-11-10T06:00:00Z"),
+  nextRemindTs: ts(AT),
   remindBy: "date",
   remindVia: "notification",
   recipient: "myself",
@@ -236,10 +247,13 @@ const reminder = (fields: Record<string, unknown> = {}) => ({
   ...fields,
 });
 const list = (...items: unknown[]) => ({ status: "success", data: items });
+const saved = { status: "success", data: { id: 61 } };
 
 describe("task_reminders", () => {
-  it("lists the reminders with ISO dates", async () => {
-    const { ctx, call } = fakeCtx(replies(list(reminder(), reminder({ id: "62", nextRemindTs: null, remindBy: "deadline", remindVia: "email" }))));
+  it("lists the reminders with ISO dates, timestamps sent as strings included", async () => {
+    const { ctx, call } = fakeCtx(
+      replies(list(reminder({ nextRemindTs: String(ts(AT)) }), reminder({ id: "62", nextRemindTs: null, remindBy: "deadline", remindVia: "email" }))),
+    );
 
     const result = await op("task_reminders").execute(ctx, { taskId: 42 });
 
@@ -247,7 +261,7 @@ describe("task_reminders", () => {
     expect(result).toEqual({
       taskId: 42,
       reminders: [
-        { id: 61, at: "2026-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "myself" },
+        { id: 61, at: "2099-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "myself" },
         { id: 62, at: null, via: "email", remindBy: "deadline", recipient: "myself" },
       ],
     });
@@ -255,13 +269,11 @@ describe("task_reminders", () => {
 });
 
 describe("task_reminder_set", () => {
-  const at = "2026-11-10T09:00:00+03:00";
-  const atTs = ts("2026-11-10T06:00:00Z");
+  const at = "2099-11-10T09:00:00+03:00";
+  const atTs = ts(AT);
 
   it("adds a reminder for the current user and re-reads it from the list", async () => {
-    const { ctx, call } = fakeCtx(
-      replies({ result: { ID: "7" } }, { status: "success", data: { id: 61 } }, list(reminder({ id: 60 }), reminder({ remindVia: "email" }))),
-    );
+    const { ctx, call } = fakeCtx(replies(ME, saved, list(reminder({ id: 60 }), reminder({ remindVia: "email" }))));
 
     const result = await op("task_reminder_set").execute(ctx, { taskId: 42, at, via: "email" });
 
@@ -283,12 +295,12 @@ describe("task_reminder_set", () => {
     ]);
     expect(result).toEqual({
       taskId: 42,
-      reminder: { id: 61, at: "2026-11-10T06:00:00.000Z", via: "email", remindBy: "date", recipient: "myself" },
+      reminder: { id: 61, at: "2099-11-10T06:00:00.000Z", via: "email", remindBy: "date", recipient: "myself" },
     });
   });
 
   it("warns that a reminder may exist when the add answer is not recognised", async () => {
-    const { ctx, call } = fakeCtx(replies({ result: { ID: 7 } }, { status: "success", data: null }));
+    const { ctx, call } = fakeCtx(replies(ME, { status: "success", data: null }));
 
     await expect(op("task_reminder_set").execute(ctx, { taskId: 42, at, via: "notification" })).rejects.toThrow(
       /могло создаться.*bitrix_task_reminders/,
@@ -296,21 +308,37 @@ describe("task_reminder_set", () => {
     expect(call).toHaveBeenCalledTimes(2);
   });
 
-  it("updates an existing reminder to a date, keeping its owner and recipient", async () => {
-    const existing = reminder({ userId: 9, recipient: "responsible", remindBy: "deadline", before: 3600, nextRemindTs: 1 });
-    const { ctx, call } = fakeCtx(
-      replies(list(existing), { status: "success", data: { id: 61 } }, list(reminder({ userId: 9, recipient: "responsible" }))),
-    );
+  it("fails an added reminder whose channel, kind or recipient is not the one sent", async () => {
+    for (const stored of [
+      reminder({ remindVia: "notification" }),
+      reminder({ remindVia: "email", remindBy: "deadline" }),
+      reminder({ remindVia: "email", recipient: "responsible" }),
+    ]) {
+      const { ctx } = fakeCtx(replies(ME, saved, list(stored)));
+      await expect(op("task_reminder_set").execute(ctx, { taskId: 42, at, via: "email" })).rejects.toThrow(/напоминание 61 другое/);
+    }
+  });
+
+  it("says the add was sent when the re-read fails", async () => {
+    const { ctx } = fakeCtx(replies(ME, saved, new Error("timeout")));
+
+    await expect(op("task_reminder_set").execute(ctx, { taskId: 42, at, via: "email" })).rejects.toThrow(/запись отправлена.*timeout/);
+  });
+
+  it("updates the current user's reminder to a date, keeping its recipient", async () => {
+    const existing = reminder({ recipient: "responsible", remindBy: "deadline", before: 3600, nextRemindTs: 1 });
+    const { ctx, call } = fakeCtx(replies(ME, list(existing), saved, list(reminder({ recipient: "responsible" }))));
 
     const result = await op("task_reminder_set").execute(ctx, { taskId: 42, reminderId: "61", at, via: "notification" });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
+      rest("/rest/user.current.json", {}),
       json("tasks.v2.Task.Reminder.list", { taskId: 42 }),
       json("tasks.v2.Task.Reminder.update", {
         reminder: {
           id: 61,
           taskId: 42,
-          userId: 9,
+          userId: 7,
           nextRemindTs: atTs,
           remindBy: "date",
           remindVia: "notification",
@@ -322,62 +350,70 @@ describe("task_reminder_set", () => {
     ]);
     expect(result).toEqual({
       taskId: 42,
-      reminder: { id: 61, at: "2026-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "responsible" },
+      reminder: { id: 61, at: "2099-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "responsible" },
     });
   });
 
-  it("does not write when the task has no such reminder or the list cannot be read", async () => {
-    const missing = fakeCtx(replies(list(reminder({ id: 60 }))));
+  it("does not write when the reminder is missing, another user's, or the list cannot be read", async () => {
+    const missing = fakeCtx(replies(ME, list(reminder({ id: 60 }))));
     await expect(op("task_reminder_set").execute(missing.ctx, { taskId: 42, reminderId: 61, at, via: "email" })).rejects.toThrow(
       /нет напоминания 61.*ничего не изменено/,
     );
-    expect(missing.call).toHaveBeenCalledTimes(1);
+    expect(missing.call).toHaveBeenCalledTimes(2);
 
-    const unreadable = fakeCtx(replies({ status: "success", data: null }));
+    const foreign = fakeCtx(replies(ME, list(reminder({ userId: "9" }))));
+    await expect(op("task_reminder_set").execute(foreign.ctx, { taskId: 42, reminderId: 61, at, via: "email" })).rejects.toThrow(
+      /пользователя 9.*только свои.*ничего не изменено/,
+    );
+    expect(foreign.call).toHaveBeenCalledTimes(2);
+
+    const unreadable = fakeCtx(replies(ME, { status: "success", data: null }));
     await expect(op("task_reminder_set").execute(unreadable.ctx, { taskId: 42, reminderId: 61, at, via: "email" })).rejects.toThrow(
       /unexpected shape/,
     );
-    expect(unreadable.call).toHaveBeenCalledTimes(1);
+    expect(unreadable.call).toHaveBeenCalledTimes(2);
   });
 
   it("takes a reminder stored without the seconds for the written one and fails one a minute off", async () => {
-    const same = fakeCtx(replies(list(reminder()), { status: "success", data: { id: 61 } }, list(reminder())));
-    const result = await op("task_reminder_set").execute(same.ctx, { taskId: 42, reminderId: 61, at: "2026-11-10T06:00:30Z", via: "notification" });
+    const same = fakeCtx(replies(ME, list(reminder()), saved, list(reminder())));
+    const result = await op("task_reminder_set").execute(same.ctx, { taskId: 42, reminderId: 61, at: "2099-11-10T06:00:30Z", via: "notification" });
     expect(result).toEqual({
       taskId: 42,
-      reminder: { id: 61, at: "2026-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "myself" },
+      reminder: { id: 61, at: "2099-11-10T06:00:00.000Z", via: "notification", remindBy: "date", recipient: "myself" },
     });
 
-    const off = fakeCtx(replies(list(reminder()), { status: "success", data: { id: 61 } }, list(reminder())));
+    const off = fakeCtx(replies(ME, list(reminder()), saved, list(reminder())));
     await expect(
-      op("task_reminder_set").execute(off.ctx, { taskId: 42, reminderId: 61, at: "2026-11-10T06:01:00Z", via: "notification" }),
+      op("task_reminder_set").execute(off.ctx, { taskId: 42, reminderId: 61, at: "2099-11-10T06:01:00Z", via: "notification" }),
     ).rejects.toThrow(/напоминание 61 другое/);
   });
 
   it("fails when the re-read reminder is missing or differs from the written one", async () => {
-    const gone = fakeCtx(replies({ result: { ID: 7 } }, { status: "success", data: { id: 61 } }, list()));
+    const gone = fakeCtx(replies(ME, saved, list()));
     await expect(op("task_reminder_set").execute(gone.ctx, { taskId: 42, at, via: "email" })).rejects.toThrow(/напоминания 61 нет/);
 
-    const other = fakeCtx(replies(list(reminder()), { status: "success", data: { id: 61 } }, list(reminder())));
+    const other = fakeCtx(replies(ME, list(reminder()), saved, list(reminder())));
     await expect(op("task_reminder_set").execute(other.ctx, { taskId: 42, reminderId: 61, at, via: "email" })).rejects.toThrow(
       /напоминание 61 другое.*notification/,
     );
   });
 
-  it("says the write was sent when the re-read fails", async () => {
-    const { ctx } = fakeCtx(replies(list(reminder()), { status: "success", data: { id: 61 } }, new Error("timeout")));
+  it("says the update was sent when the re-read fails", async () => {
+    const { ctx } = fakeCtx(replies(ME, list(reminder()), saved, new Error("timeout")));
 
     await expect(op("task_reminder_set").execute(ctx, { taskId: 42, reminderId: 61, at, via: "email" })).rejects.toThrow(
       /запись отправлена.*timeout/,
     );
   });
 
-  it("rejects a date without an offset or an unknown channel before any request", async () => {
+  it("rejects a date without an offset, in the past, or an unknown channel before any request", async () => {
     const { ctx, call } = fakeCtx();
 
     for (const args of [
-      { taskId: 42, at: "2026-11-10T09:00:00", via: "email" },
+      { taskId: 42, at: "2099-11-10T09:00:00", via: "email" },
       { taskId: 42, at: null, via: "email" },
+      { taskId: 42, at: "2020-01-01T00:00:00Z", via: "email" },
+      { taskId: 42, reminderId: 61, at: new Date(Date.now() - 60_000).toISOString(), via: "email" },
       { taskId: 42, at, via: "sms" },
     ]) {
       await expect(op("task_reminder_set").execute(ctx, args)).rejects.toThrow(OpInputError);
@@ -387,8 +423,8 @@ describe("task_reminder_set", () => {
 });
 
 describe("task_reminder_delete", () => {
-  it("deletes a reminder of the task and re-reads the list", async () => {
-    const { ctx, call } = fakeCtx(replies(list(reminder(), reminder({ id: 62 })), ok, list(reminder({ id: 62 }))));
+  it("deletes the current user's reminder of the task and re-reads the list", async () => {
+    const { ctx, call } = fakeCtx(replies(ME, list(reminder(), reminder({ id: 62 })), ok, list(reminder({ id: 62 }))));
 
     expect(await op("task_reminder_delete").execute(ctx, { taskId: "42", reminderId: "61" })).toEqual({
       taskId: 42,
@@ -396,27 +432,35 @@ describe("task_reminder_delete", () => {
       deleted: true,
     });
     expect(call.mock.calls.map((c) => c[0])).toEqual([
+      rest("/rest/user.current.json", {}),
       json("tasks.v2.Task.Reminder.list", { taskId: 42 }),
       json("tasks.v2.Task.Reminder.delete", { reminder: { id: 61 } }),
       json("tasks.v2.Task.Reminder.list", { taskId: 42 }),
     ]);
   });
 
-  it("does not delete a reminder the task does not have", async () => {
-    const { ctx, call } = fakeCtx(replies(list(reminder({ id: 62 }))));
+  it("does not delete a reminder the task does not have or another user's", async () => {
+    const missing = fakeCtx(replies(ME, list(reminder({ id: 62 }))));
+    await expect(op("task_reminder_delete").execute(missing.ctx, { taskId: 42, reminderId: 61 })).rejects.toThrow(
+      /нет напоминания 61.*ничего не удалено/,
+    );
+    expect(missing.call).toHaveBeenCalledTimes(2);
 
-    await expect(op("task_reminder_delete").execute(ctx, { taskId: 42, reminderId: 61 })).rejects.toThrow(/нет напоминания 61.*ничего не удалено/);
-    expect(call).toHaveBeenCalledTimes(1);
+    const foreign = fakeCtx(replies(ME, list(reminder({ userId: 9 }))));
+    await expect(op("task_reminder_delete").execute(foreign.ctx, { taskId: 42, reminderId: 61 })).rejects.toThrow(
+      /пользователя 9.*только свои.*ничего не удалено/,
+    );
+    expect(foreign.call).toHaveBeenCalledTimes(2);
   });
 
   it("fails when the reminder is still there after the delete", async () => {
-    const { ctx } = fakeCtx(replies(list(reminder()), ok, list(reminder())));
+    const { ctx } = fakeCtx(replies(ME, list(reminder()), ok, list(reminder())));
 
     await expect(op("task_reminder_delete").execute(ctx, { taskId: 42, reminderId: 61 })).rejects.toThrow(/напоминание 61 осталось/);
   });
 
   it("says the delete was sent when the re-read fails", async () => {
-    const { ctx } = fakeCtx(replies(list(reminder()), ok, new Error("timeout")));
+    const { ctx } = fakeCtx(replies(ME, list(reminder()), ok, new Error("timeout")));
 
     await expect(op("task_reminder_delete").execute(ctx, { taskId: 42, reminderId: 61 })).rejects.toThrow(/запись отправлена.*timeout/);
   });
