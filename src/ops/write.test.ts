@@ -73,15 +73,22 @@ const COLUMNS = [
 const TASK_STAGE_SELECT = ["ID", "GROUP_ID", "STAGE_ID", "STATUS"];
 
 describe("write operations in OPERATIONS", () => {
-  it("registers sprint_columns as a read and the other five as mutating", () => {
+  it("registers sprint_columns and user_find as reads and the others as mutating", () => {
     expect(op("sprint_columns").mutating).toBe(false);
-    for (const name of ["task_description_set", "task_description_append", "chat_send", "task_move", "task_result_add"]) {
+    expect(op("user_find").mutating).toBe(false);
+    for (const name of [
+      "task_description_set", "task_description_append", "chat_send", "task_move", "task_result_add",
+      "task_delegate", "task_accomplices", "task_auditors",
+    ]) {
       expect(op(name).mutating).toBe(true);
     }
   });
 
   it("takes no agent params", () => {
-    for (const name of ["task_description_set", "task_description_append", "chat_send", "sprint_columns", "task_move", "task_result_add"]) {
+    for (const name of [
+      "task_description_set", "task_description_append", "chat_send", "sprint_columns", "task_move", "task_result_add",
+      "task_delegate", "task_accomplices", "task_auditors", "user_find",
+    ]) {
       expect(Object.keys(op(name).input)).not.toContain("params");
     }
   });
@@ -95,6 +102,9 @@ describe("write operations in OPERATIONS", () => {
       ["chat_send", { chatId: 1, text: "x" }],
       ["task_move", { taskIds: [1], column: "Готово" }],
       ["task_result_add", { taskIds: [1], text: "x" }],
+      ["task_delegate", { taskIds: [1], userId: 2 }],
+      ["task_accomplices", { taskIds: [1], add: [2] }],
+      ["task_auditors", { taskIds: [1], remove: [2] }],
     ];
     for (const [name, args] of calls) {
       const err = await rejection(runOperation(reg, name, args, ctx, { allowMutations: false }));
@@ -387,6 +397,162 @@ describe("task_result_add", () => {
     const { ctx, call } = fakeCtx();
 
     await expect(op("task_result_add").execute(ctx, { taskIds: [42], text: "a".repeat(20_001) })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("task_delegate", () => {
+  const delegate = (taskId: number, userId: number) => rest("/rest/tasks.task.delegate.json", { taskId, userId });
+  const getResponsible = (taskId: number) => rest("/rest/tasks.task.get.json", { taskId, select: ["ID", "RESPONSIBLE_ID"] });
+  const responsible = (id: string) => ({ result: { task: { id: "42", responsibleId: id } } });
+
+  it("delegates each task in order, re-reads the responsible and keeps going past a failed task", async () => {
+    const { ctx, call } = fakeCtx(replies({ result: { task: {} } }, responsible("11"), { result: { task: {} } }, responsible("9")));
+
+    const result = await op("task_delegate").execute(ctx, { taskIds: [42, 43], userId: "11" });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([delegate(42, 11), getResponsible(42), delegate(43, 11), getResponsible(43)]);
+    expect(result).toEqual({
+      results: [
+        { taskId: 42, ok: true, responsibleId: 11 },
+        { taskId: 43, ok: false, error: "Bitrix ответил успехом, но ответственный не сменился (сейчас 9)" },
+      ],
+    });
+  });
+
+  for (const [title, reread, cause] of [
+    ["comes back in an unexpected shape", async () => ({ result: { task: {} } }), "tasks.task.get returned an unexpected shape"],
+    ["fails", async () => {
+      throw new Error("extension not connected");
+    }, "extension not connected"],
+  ] as const) {
+    it(`says the delegation was sent when the re-read ${title}`, async () => {
+      let n = 0;
+      const { ctx } = fakeCtx(async () => (n++ === 0 ? { result: { task: {} } } : reread()));
+
+      const result = await op("task_delegate").execute(ctx, { taskIds: [42], userId: 11 });
+
+      expect(result).toEqual({
+        results: [
+          {
+            taskId: 42,
+            ok: false,
+            error: `делегирование отправлено, но перечитать задачу не удалось (проверь ответственного через bitrix_task_get): ${cause}`,
+          },
+        ],
+      });
+    });
+  }
+
+  it("does not re-read when the delegation itself fails", async () => {
+    const { ctx, call } = fakeCtx(async () => {
+      throw new Error("ACCESS_DENIED");
+    });
+
+    const result = await op("task_delegate").execute(ctx, { taskIds: [42], userId: 11 });
+
+    expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: "ACCESS_DENIED" }] });
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a missing userId before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("task_delegate").execute(ctx, { taskIds: [42] })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+for (const { name, field, key } of [
+  { name: "task_accomplices", field: "ACCOMPLICES", key: "accomplices" },
+  { name: "task_auditors", field: "AUDITORS", key: "auditors" },
+] as const) {
+  describe(name, () => {
+    const read = (taskId: number) => rest("/rest/tasks.task.get.json", { taskId, select: ["ID", field] });
+    const write = (taskId: number, value: number[] | "") => rest("/rest/tasks.task.update.json", { taskId, fields: { [field]: value } });
+    const members = (...ids: string[]) => ({ result: { task: { id: "42", [key]: ids } } });
+
+    it("adds and removes people on top of the current list and returns the final one", async () => {
+      const { ctx, call } = fakeCtx(replies(members("5", "7", "9"), { result: { task: {} } }));
+
+      const result = await op(name).execute(ctx, { taskIds: [42], add: [11, "5"], remove: ["7"] });
+
+      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42), write(42, [5, 9, 11])]);
+      expect(result).toEqual({ results: [{ taskId: 42, ok: true, [key]: [5, 9, 11], changed: true }] });
+    });
+
+    it('clears the list with "" because an empty array vanishes from the form body', async () => {
+      const { ctx, call } = fakeCtx(replies(members("5"), { result: { task: {} } }));
+
+      const result = await op(name).execute(ctx, { taskIds: [42], remove: [5] });
+
+      expect(call.mock.calls[1][0]).toEqual(write(42, ""));
+      expect(result).toEqual({ results: [{ taskId: 42, ok: true, [key]: [], changed: true }] });
+    });
+
+    it("does not write when nothing changes", async () => {
+      const { ctx, call } = fakeCtx(replies(members("5", "7")));
+
+      const result = await op(name).execute(ctx, { taskIds: [42], add: [7], remove: [3] });
+
+      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42)]);
+      expect(result).toEqual({ results: [{ taskId: 42, ok: true, [key]: [5, 7], changed: false }] });
+    });
+
+    it("computes the list per task and does not write when the read comes back in an unexpected shape", async () => {
+      const { ctx, call } = fakeCtx(replies({ result: { task: { id: "42" } } }, members("3"), { result: { task: {} } }));
+
+      const result = await op(name).execute(ctx, { taskIds: [42, 43], add: [11] });
+
+      expect(call.mock.calls.map((c) => c[0])).toEqual([read(42), read(43), write(43, [3, 11])]);
+      expect(result).toEqual({
+        results: [
+          { taskId: 42, ok: false, error: "tasks.task.get returned an unexpected shape" },
+          { taskId: 43, ok: true, [key]: [3, 11], changed: true },
+        ],
+      });
+    });
+
+    for (const [title, args] of [
+      ["neither add nor remove", { taskIds: [42] }],
+      ["only empty lists", { taskIds: [42], add: [], remove: [] }],
+      ["the same person in add and remove", { taskIds: [42], add: [5], remove: ["5"] }],
+    ] as const) {
+      it(`rejects ${title} before any request`, async () => {
+        const { ctx, call } = fakeCtx();
+
+        const err = await rejection(op(name).execute(ctx, args));
+
+        expect(err).toBeInstanceOf(OpInputError);
+        expect(call).not.toHaveBeenCalled();
+      });
+    }
+  });
+}
+
+describe("user_find", () => {
+  it("searches user.get by last name and returns compact cards, inactive ones included", async () => {
+    const { ctx, call } = fakeCtx(async () => ({
+      result: [
+        { ID: "11", NAME: "Пётр", LAST_NAME: "Иванов", ACTIVE: true, WORK_POSITION: "Разработчик", EMAIL: "p@example.com" },
+        { ID: "7225", NAME: "Иван", LAST_NAME: "Иванов", ACTIVE: false, WORK_POSITION: null },
+      ],
+      total: 2,
+    }));
+
+    const result = await op("user_find").execute(ctx, { lastName: " Иванов " });
+
+    expect(call.mock.calls[0][0]).toEqual(rest("/rest/user.get.json", { FILTER: { LAST_NAME: "Иванов" } }));
+    expect(result).toEqual([
+      { id: 11, name: "Пётр", lastName: "Иванов", active: true, workPosition: "Разработчик" },
+      { id: 7225, name: "Иван", lastName: "Иванов", active: false, workPosition: "" },
+    ]);
+  });
+
+  it("rejects an empty last name before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("user_find").execute(ctx, { lastName: "  " })).rejects.toThrow(OpInputError);
     expect(call).not.toHaveBeenCalled();
   });
 });

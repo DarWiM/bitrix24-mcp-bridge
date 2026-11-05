@@ -1,9 +1,9 @@
-// Operations that change task content, post messages or move tasks on the scrum board.
+// Operations that change task content or people, post messages or move tasks on the scrum board.
 // None of them takes agent `params`: merged-in fields could widen a write beyond what the tool
 // says it does.
 
 import { z } from "zod";
-import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
+import { MAX_BATCH, errorMessage, forEachTask, taskIdsArg } from "./batch.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
@@ -16,6 +16,8 @@ const MESSAGE_ADD = restMethod("im.message.add");
 const SPRINT_LIST = restMethod("tasks.api.scrum.sprint.list");
 const SPRINT_STAGES = restMethod("tasks.api.scrum.kanban.getStages");
 const STAGE_MOVE = restMethod("task.stages.movetask");
+const TASK_DELEGATE = restMethod("tasks.task.delegate");
+const USER_GET = restMethod("user.get");
 // The official tasks.task.result.add exists in REST 3.0 only, which the session refuses.
 const RESULT_ADD = callTarget({ action: "tasks.v2.Task.Result.add", method: "POST", bodyType: "json" });
 
@@ -41,6 +43,16 @@ const taskResponse = z.object({
   result: z.object({ task: z.object({ groupId: numeric.nullish(), stageId: numeric.nullish(), status: numeric.nullish() }) }),
 });
 const resultAddResponse = z.object({ data: z.array(z.object({ id: numeric })).min(1) });
+const responsibleResponse = z.object({ result: z.object({ task: z.object({ responsibleId: numeric }) }) });
+// The list is required: an unexpected shape read as "nobody" would make add drop everyone else.
+const membersResponse = (key: "accomplices" | "auditors") =>
+  z.object({ result: z.object({ task: z.object({ [key]: z.array(numeric) }) }) });
+const optionalText = z.string().nullish().transform((v) => v ?? "");
+const usersResponse = z.object({
+  result: z.array(
+    z.object({ ID: numeric, NAME: optionalText, LAST_NAME: optionalText, ACTIVE: z.boolean(), WORK_POSITION: optionalText }),
+  ),
+});
 
 function parseResponse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: unknown, method: string): T {
   const parsed = schema.safeParse(raw);
@@ -84,6 +96,11 @@ async function readTaskStage(ctx: OpContext, taskId: number) {
   return parseResponse(taskResponse, raw, "tasks.task.get").result.task;
 }
 
+async function readResponsible(ctx: OpContext, taskId: number) {
+  const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "RESPONSIBLE_ID"] } });
+  return parseResponse(responsibleResponse, raw, "tasks.task.get").result.task;
+}
+
 function findColumn(columns: SprintColumn[], column: number | string): SprintColumn | undefined {
   if (typeof column === "number") return columns.find((c) => c.id === column);
   const wanted = column.trim().toLowerCase();
@@ -91,6 +108,45 @@ function findColumn(columns: SprintColumn[], column: number | string): SprintCol
   // Agents often pass an id as a string; a column literally named "61" still wins above.
   return byName ?? (/^\d+$/.test(wanted) ? columns.find((c) => c.id === Number(wanted)) : undefined);
 }
+
+const userIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
+
+// Accomplices and auditors: Bitrix replaces the whole list, so each task's own list is read and
+// edited rather than one list being written to every task of the batch.
+function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITORS"; key: "accomplices" | "auditors"; description: string }) {
+  const response = membersResponse(def.key);
+  return defineOperation({
+    name: def.name,
+    description: def.description,
+    mutating: true,
+    budget: "long",
+    input: { taskIds: taskIdsArg(), add: userIdsArg(), remove: userIdsArg() },
+    run: async (ctx, a) => {
+      const add = a.add ?? [];
+      const remove = new Set(a.remove ?? []);
+      if (add.length === 0 && remove.size === 0) {
+        throw new OpInputError(`invalid arguments for ${def.name} — pass a non-empty add or remove`);
+      }
+      const both = add.find((id) => remove.has(id));
+      if (both !== undefined) throw new OpInputError(`invalid arguments for ${def.name} — user ${both} is in both add and remove`);
+      return forEachTask(a.taskIds, async (taskId) => {
+        const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", def.field] } });
+        const current = parseResponse(response, raw, "tasks.task.get").result.task[def.key];
+        const next = current.filter((id) => !remove.has(id));
+        for (const id of add) if (!next.includes(id)) next.push(id);
+        const changed = next.length !== current.length || next.some((id, i) => id !== current[i]);
+        // An empty array vanishes from the form body and Bitrix then rejects the call; "" clears.
+        if (changed) await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { [def.field]: next.length > 0 ? next : "" } } });
+        return { [def.key]: next, changed };
+      });
+    },
+  });
+}
+
+const MEMBERS_HINT =
+  "add / remove — массивы userId (найти id по фамилии — bitrix_user_find); нужен хотя бы один непустой. " +
+  "Список читается у каждой задачи заново и записывается целиком; если менять нечего, запись не делается " +
+  "(changed: false). Задачи обрабатываются по очереди; ошибка одной не останавливает остальные.";
 
 const DESCRIPTION_FORMAT =
   "Формат — BBCode: [b] [i] [u] [s], [url=…]…[/url], [user=ID]Имя[/user], списки [list] / [list=1] " +
@@ -218,5 +274,65 @@ export const WRITE_OPERATIONS: Operation[] = [
         const raw = await ctx.call({ ...RESULT_ADD, params: { results: [{ taskId, text: a.text }] } });
         return { resultId: parseResponse(resultAddResponse, raw, "tasks.v2.Task.Result.add").data[0].id };
       }),
+  }),
+  defineOperation({
+    name: "task_delegate",
+    description:
+      "⚠ МУТИРУЮЩИЙ. Делегировать задачи (taskIds — до 50) другому человеку: userId становится " +
+      "ответственным и получает уведомление; смена видна в истории задачи. Если он уже соисполнитель, " +
+      "там он и остаётся. Задачи обрабатываются по очереди; ошибка одной не останавливает остальные. " +
+      "Ответ: { results: [{ taskId, ok, error?, responsibleId }] } — responsibleId перечитан после делегирования.",
+    mutating: true,
+    budget: "long",
+    input: { taskIds: taskIdsArg(), userId: idArg() },
+    run: (ctx, a) =>
+      forEachTask(a.taskIds, async (taskId) => {
+        await ctx.call({ ...TASK_DELEGATE, params: { taskId, userId: a.userId } });
+        const { responsibleId } = await readResponsible(ctx, taskId).catch((e: unknown) => {
+          throw new Error(`делегирование отправлено, но перечитать задачу не удалось (проверь ответственного через bitrix_task_get): ${errorMessage(e)}`);
+        });
+        if (responsibleId !== a.userId) throw new Error(`Bitrix ответил успехом, но ответственный не сменился (сейчас ${responsibleId})`);
+        return { responsibleId };
+      }),
+  }),
+  memberListOperation({
+    name: "task_accomplices",
+    field: "ACCOMPLICES",
+    key: "accomplices",
+    description:
+      "⚠ МУТИРУЮЩИЙ. Добавить / убрать СОИСПОЛНИТЕЛЕЙ задач (taskIds — до 50). Каждый добавленный " +
+      "получает уведомление; правка видна в истории задачи. " +
+      MEMBERS_HINT +
+      " Ответ: { results: [{ taskId, ok, error?, accomplices, changed }] } — accomplices — итоговый список.",
+  }),
+  memberListOperation({
+    name: "task_auditors",
+    field: "AUDITORS",
+    key: "auditors",
+    description:
+      "⚠ МУТИРУЮЩИЙ. Добавить / убрать НАБЛЮДАТЕЛЕЙ задач (taskIds — до 50). Каждый добавленный " +
+      "получает уведомление; правка видна в истории задачи. " +
+      MEMBERS_HINT +
+      " Ответ: { results: [{ taskId, ok, error?, auditors, changed }] } — auditors — итоговый список.",
+  }),
+  defineOperation({
+    name: "user_find",
+    description:
+      "Найти пользователей портала по фамилии (read-only): [{ id, name, lastName, active, workPosition }]. " +
+      "В выдаче есть и НЕАКТИВНЫЕ (уволенные) — active: false; не назначай их на рабочие задачи, но для " +
+      "безопасной проверки мутирующих операций (соисполнители, наблюдатели, делегирование) они удобны — " +
+      "уведомление никто не прочтёт.",
+    mutating: false,
+    input: { lastName: z.string().trim().min(1).max(100) },
+    run: async (ctx, a) => {
+      const raw = await ctx.call({ ...USER_GET, params: { FILTER: { LAST_NAME: a.lastName } } });
+      return parseResponse(usersResponse, raw, "user.get").result.map((u) => ({
+        id: u.ID,
+        name: u.NAME,
+        lastName: u.LAST_NAME,
+        active: u.ACTIVE,
+        workPosition: u.WORK_POSITION,
+      }));
+    },
   }),
 ];

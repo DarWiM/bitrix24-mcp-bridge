@@ -46,13 +46,14 @@ describe("OPERATIONS", () => {
       "chat_calls", "recent_load", "recent_tail", "entity_selector", "entity_search", "entity_chat",
       "user_get", "call_detail", "call_recording", "file_download", "task_description_set",
       "task_description_append", "chat_send", "sprint_columns", "task_move", "task_result_add",
+      "task_delegate", "task_accomplices", "task_auditors", "user_find",
     ].sort());
   });
 
   it("marks exactly the operations that change data as mutating", () => {
     expect(OPERATIONS.filter((o) => o.mutating).map((o) => o.name).sort()).toEqual([
-      "chat_mark_read", "chat_read_all", "chat_send", "task_description_append", "task_description_set",
-      "task_move", "task_result_add",
+      "chat_mark_read", "chat_read_all", "chat_send", "task_accomplices", "task_auditors", "task_delegate",
+      "task_description_append", "task_description_set", "task_move", "task_result_add",
     ]);
   });
 });
