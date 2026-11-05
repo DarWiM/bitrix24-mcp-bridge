@@ -5,11 +5,16 @@ import { HELP } from "./help.js";
 // The bulleted list right under this heading is the one place the docs name every mutating tool.
 const MUTATING_LIST_HEADING = "**Мутирующие операции** (⚠)";
 
+// The list ends at the first line that is neither a list item, its indented continuation nor blank.
 function documentedMutatingTools(notes: string): string[] {
   const at = notes.indexOf(MUTATING_LIST_HEADING);
   if (at === -1) return [];
-  const list = notes.slice(at).split("\n\n")[1] ?? "";
-  return [...list.matchAll(/`(bitrix_\w+)`/g)].map((m) => m[1]);
+  const list: string[] = [];
+  for (const line of notes.slice(at).split("\n").slice(1)) {
+    if (line.startsWith("- ") || line.startsWith("  ")) list.push(line);
+    else if (line.trim() !== "") break;
+  }
+  return [...list.join("\n").matchAll(/`(bitrix_\w+)`/g)].map((m) => m[1]);
 }
 
 describe("HELP (api-notes)", () => {
