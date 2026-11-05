@@ -3,7 +3,6 @@ import type { CallTarget, DownloadResult } from "../../shared/wire.js";
 import { OpInputError, OpRefusedError, type OpContext, type Operation } from "./operation.js";
 import { createRegistry, runOperation } from "./registry.js";
 import { OPERATIONS } from "./index.js";
-import { currentUserId } from "./write.js";
 
 const AJAX = "/bitrix/services/main/ajax.php";
 
@@ -647,13 +646,17 @@ describe("task_to_sprint", () => {
 
   it("takes a backlog task into the active sprint, onto the board and into the NEW column by default", async () => {
     const { ctx, call } = fakeCtx(
-      replies(scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, { result: true }, taskReply("58")),
+      replies(
+        scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, scrumTask("7"), { result: true },
+        taskReply("58"),
+      ),
     );
 
     const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
-      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7), addTask(42, 58), move(42, 58), getTask(42),
+      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7), addTask(42, 58), scrumGet(42), move(42, 58),
+      getTask(42),
     ]);
     expect(result).toEqual({
       results: [{ taskId: 42, ok: true, sprintId: 7, stageId: 58, column: "Новые", status: 2, fromBacklog: true }],
@@ -674,7 +677,8 @@ describe("task_to_sprint", () => {
   it("looks the project up once per batch and keeps going past a task of another sprint", async () => {
     const { ctx, call } = fakeCtx(
       replies(
-        scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, { result: true }, taskReply("59"),
+        scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, scrumTask("7"), { result: true },
+        taskReply("59"),
         scrumTask("6"),
         scrumTask("7"), { result: true }, taskReply("59"),
       ),
@@ -683,7 +687,8 @@ describe("task_to_sprint", () => {
     const result = await op("task_to_sprint").execute(ctx, { taskIds: [42, 43, 44], column: 59 });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
-      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7), addTask(42, 59), move(42, 59), getTask(42),
+      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7), addTask(42, 59), scrumGet(42), move(42, 59),
+      getTask(42),
       scrumGet(43),
       scrumGet(44), move(44, 59), getTask(44),
     ]);
@@ -696,16 +701,83 @@ describe("task_to_sprint", () => {
     });
   });
 
-  it("fails a placement Bitrix answered true to but did not make", async () => {
+  it("tells to go back to the backlog when a task taken from it did not land on the column", async () => {
     const { ctx } = fakeCtx(
-      replies(scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, { result: true }, taskReply("981")),
+      replies(
+        scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, scrumTask("7"), { result: true },
+        taskReply("981"),
+      ),
     );
 
     const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
 
     expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error:
+            "Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта; верни её в бэклог (bitrix_task_to_backlog) и повтори",
+        },
+      ],
+    });
+  });
+
+  it("gives no backlog recipe when a task already in the sprint did not move", async () => {
+    const { ctx } = fakeCtx(replies(scrumTask("7"), backlog, activeSprint, sprintStages, { result: true }, taskReply("58")));
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42], column: "Готово" });
+
+    expect(result).toEqual({
       results: [{ taskId: 42, ok: false, error: "Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта" }],
     });
+  });
+
+  it("fails without moving when the task did not reach the sprint container", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, scrumTask("1")));
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: "Bitrix ответил успехом, но задача не в спринте 7 (сейчас в 1)" }],
+    });
+    expect(call).toHaveBeenCalledTimes(7);
+  });
+
+  it("says the placement was sent when re-reading the container fails", async () => {
+    const first = replies(scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true });
+    let n = 0;
+    const { ctx, call } = fakeCtx(async (target) => {
+      if (n++ < 6) return first(target);
+      throw new Error("extension not connected");
+    });
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error: "перенос в спринт отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): extension not connected",
+        },
+      ],
+    });
+    expect(call).toHaveBeenCalledTimes(7);
+  });
+
+  it("does not put the task on the board when moving it into the sprint fails", async () => {
+    const first = replies(scrumTask("1"), backlog, activeSprint, sprintStages);
+    let n = 0;
+    const { ctx, call } = fakeCtx(async (target) => {
+      if (n++ < 4) return first(target);
+      throw new Error("ACCESS_DENIED");
+    });
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: "ACCESS_DENIED" }] });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7)]);
   });
 
   it("says the task is already in the sprint when putting it on the board fails", async () => {
@@ -899,6 +971,20 @@ describe("task_create", () => {
     );
   });
 
+  it("warns the task may exist when the create request itself fails", async () => {
+    const first = replies(activeSprint, sprintStages, me);
+    let n = 0;
+    const { ctx, call } = fakeCtx(async (target) => {
+      if (n++ < 3) return first(target);
+      throw new Error("request timed out");
+    });
+
+    await expect(op("task_create").execute(ctx, { groupId: 15, title: "x" })).rejects.toThrow(
+      "request timed out — задача могла создаться, проверь доску спринта перед повтором",
+    );
+    expect(call).toHaveBeenCalledTimes(4);
+  });
+
   it("fails on an answer without the new task id", async () => {
     const { ctx } = fakeCtx(replies(activeSprint, sprintStages, me, { status: "success", data: null, errors: [] }));
 
@@ -912,24 +998,5 @@ describe("task_create", () => {
 
     await expect(op("task_create").execute(ctx, { groupId: 15, title: "   " })).rejects.toThrow(OpInputError);
     expect(call).not.toHaveBeenCalled();
-  });
-});
-
-describe("currentUserId", () => {
-  it("reads user.current once per operation call", async () => {
-    const first = fakeCtx(async () => ({ result: { ID: "55" } }));
-    const second = fakeCtx(async () => ({ result: { ID: "56" } }));
-
-    expect(await currentUserId(first.ctx)).toBe(55);
-    expect(await currentUserId(first.ctx)).toBe(55);
-    expect(await currentUserId(second.ctx)).toBe(56);
-    expect(first.call).toHaveBeenCalledTimes(1);
-    expect(first.call.mock.calls[0][0]).toEqual(rest("/rest/user.current.json", {}));
-  });
-
-  it("fails on an unexpected shape", async () => {
-    const { ctx } = fakeCtx(async () => ({ result: {} }));
-
-    await expect(currentUserId(ctx)).rejects.toThrow("user.current returned an unexpected shape");
   });
 });

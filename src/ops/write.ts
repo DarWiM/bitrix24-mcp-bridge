@@ -5,25 +5,27 @@
 
 import { z } from "zod";
 import { MAX_BATCH, errorMessage, forEachTask, taskIdsArg } from "./batch.js";
+import {
+  activeSprintColumns,
+  columnArg,
+  currentUserId,
+  moveToColumn,
+  perGroup,
+  readBacklogId,
+  readScrumTask,
+  readTaskStage,
+  targetColumn,
+} from "./board.js";
+import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
-const restMethod = (method: string) => callTarget({ endpoint: `/rest/${method}.json`, method: "POST" });
-
 const TASK_UPDATE = restMethod("tasks.task.update");
-// read.ts has an ajax TASK_GET of its own.
-const REST_TASK_GET = restMethod("tasks.task.get");
 const MESSAGE_ADD = restMethod("im.message.add");
-const SPRINT_LIST = restMethod("tasks.api.scrum.sprint.list");
-const SPRINT_STAGES = restMethod("tasks.api.scrum.kanban.getStages");
-const STAGE_MOVE = restMethod("task.stages.movetask");
 const TASK_DELEGATE = restMethod("tasks.task.delegate");
 const USER_GET = restMethod("user.get");
-const USER_CURRENT = restMethod("user.current");
-const SCRUM_TASK_GET = restMethod("tasks.api.scrum.task.get");
 // Changes only the container (backlog / sprint): the task is not on the sprint board yet.
 const SCRUM_TASK_UPDATE = restMethod("tasks.api.scrum.task.update");
-const BACKLOG_GET = restMethod("tasks.api.scrum.backlog.get");
 const BOARD_ADD = restMethod("tasks.api.scrum.kanban.addTask");
 // What the board's own «+» sends: the task is born in the sprint column, as when created in the UI.
 const BOARD_CREATE = callTarget({
@@ -33,8 +35,6 @@ const BOARD_CREATE = callTarget({
 // The official tasks.task.result.add exists in REST 3.0 only, which the session refuses.
 const RESULT_ADD = callTarget({ action: "tasks.v2.Task.Result.add", method: "POST", bodyType: "json" });
 
-const TASK_STAGE_SELECT = ["ID", "GROUP_ID", "STAGE_ID", "STATUS"];
-
 const DESCRIPTION_MAX = 100_000;
 // Bitrix's documented message limit; past it the portal truncates without an error.
 const MESSAGE_MAX = 20_000;
@@ -42,23 +42,10 @@ const RESULT_MAX = 20_000;
 // b_tasks.TITLE is varchar(255).
 const TITLE_MAX = 255;
 
-// Classic REST hands ids and statuses back as strings.
-const numeric = z.union([z.number(), z.string().regex(/^\d+$/)]).transform(Number);
-
 // `description` is required, not optional: reading an unexpected shape as "empty" would make
 // append overwrite the whole description with the new text.
 const descriptionResponse = z.object({ data: z.object({ description: z.string().nullable() }) });
 const messageResponse = z.object({ result: numeric });
-const sprintsResponse = z.object({ result: z.array(z.object({ id: numeric, status: z.string() })) });
-const stagesResponse = z.object({
-  result: z.array(z.object({ id: numeric, name: z.string(), type: z.string().nullish(), sort: numeric })),
-});
-const taskResponse = z.object({
-  result: z.object({ task: z.object({ groupId: numeric.nullish(), stageId: numeric.nullish(), status: numeric.nullish() }) }),
-});
-const scrumTaskResponse = z.object({ result: z.object({ entityId: numeric, groupId: numeric.nullish() }) });
-const backlogResponse = z.object({ result: z.object({ id: numeric }) });
-const currentUserResponse = z.object({ result: z.object({ ID: numeric }) });
 const boardCreateResponse = z.object({ data: z.object({ id: numeric, columnId: numeric.nullish() }) });
 const resultAddResponse = z.object({ data: z.array(z.object({ id: numeric })).min(1) });
 const responsibleResponse = z.object({ result: z.object({ task: z.object({ responsibleId: numeric }) }) });
@@ -72,121 +59,15 @@ const usersResponse = z.object({
   ),
 });
 
-function parseResponse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: unknown, method: string): T {
-  const parsed = schema.safeParse(raw);
-  if (!parsed.success) throw new Error(`${method} returned an unexpected shape`);
-  return parsed.data;
-}
-
 async function writeDescription(ctx: OpContext, taskId: number, text: string) {
   await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { DESCRIPTION: text } } });
   return { taskId, length: text.length };
-}
-
-interface SprintColumn {
-  id: number;
-  name: string;
-  type: string;
-}
-
-async function activeSprintColumns(ctx: OpContext, groupId: number): Promise<{ sprintId: number; columns: SprintColumn[] }> {
-  const sprints = parseResponse(
-    sprintsResponse,
-    await ctx.call({ ...SPRINT_LIST, params: { filter: { GROUP_ID: groupId, STATUS: "active" } } }),
-    "tasks.api.scrum.sprint.list",
-  );
-  // Checked again here: were the filter ignored, the first sprint could be a finished one.
-  const sprint = sprints.result.find((s) => s.status === "active");
-  if (!sprint) throw new Error(`в проекте ${groupId} нет активного спринта — сначала начните спринт на scrum-доске (или это не scrum-проект)`);
-  const stages = parseResponse(
-    stagesResponse,
-    await ctx.call({ ...SPRINT_STAGES, params: { sprintId: sprint.id } }),
-    "tasks.api.scrum.kanban.getStages",
-  );
-  const columns = [...stages.result]
-    .sort((a, b) => a.sort - b.sort)
-    .map(({ id, name, type }) => ({ id, name, type: type ?? "" }));
-  return { sprintId: sprint.id, columns };
-}
-
-async function readTaskStage(ctx: OpContext, taskId: number) {
-  const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: TASK_STAGE_SELECT } });
-  return parseResponse(taskResponse, raw, "tasks.task.get").result.task;
-}
-
-// The request below goes out at most once per operation call, whichever helper asks first.
-const currentUsers = new WeakMap<OpContext, Promise<number>>();
-
-export function currentUserId(ctx: OpContext): Promise<number> {
-  let lookup = currentUsers.get(ctx);
-  if (!lookup) {
-    lookup = ctx.call(USER_CURRENT).then((raw) => parseResponse(currentUserResponse, raw, "user.current").result.ID);
-    currentUsers.set(ctx, lookup);
-  }
-  return lookup;
-}
-
-// A batch usually touches tasks of one project: what is looked up per project, is looked up once.
-function perGroup<T>(load: (groupId: number) => Promise<T>): (groupId: number) => Promise<T> {
-  const cache = new Map<number, Promise<T>>();
-  return (groupId) => {
-    let found = cache.get(groupId);
-    if (!found) {
-      found = load(groupId);
-      cache.set(groupId, found);
-    }
-    return found;
-  };
-}
-
-async function readScrumTask(ctx: OpContext, taskId: number) {
-  const raw = await ctx.call({ ...SCRUM_TASK_GET, params: { id: taskId } });
-  const { entityId, groupId } = parseResponse(scrumTaskResponse, raw, "tasks.api.scrum.task.get").result;
-  if (!groupId) throw new Error(`задача ${taskId} не в scrum-проекте — бэклог и спринты есть только у задач scrum-проекта`);
-  return { entityId, groupId };
-}
-
-async function readBacklogId(ctx: OpContext, groupId: number) {
-  const raw = await ctx.call({ ...BACKLOG_GET, params: { id: groupId } });
-  return parseResponse(backlogResponse, raw, "tasks.api.scrum.backlog.get").result.id;
 }
 
 async function readResponsible(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "RESPONSIBLE_ID"] } });
   return parseResponse(responsibleResponse, raw, "tasks.task.get").result.task;
 }
-
-function findColumn(columns: SprintColumn[], column: number | string): SprintColumn | undefined {
-  if (typeof column === "number") return columns.find((c) => c.id === column);
-  const wanted = column.trim().toLowerCase();
-  const byName = columns.find((c) => c.name.trim().toLowerCase() === wanted);
-  // Agents often pass an id as a string; a column literally named "61" still wins above.
-  return byName ?? (/^\d+$/.test(wanted) ? columns.find((c) => c.id === Number(wanted)) : undefined);
-}
-
-// No column → the board's NEW-type column, where the UI puts a new task too.
-function targetColumn(columns: SprintColumn[], column: number | string | undefined): SprintColumn {
-  const target = column === undefined ? columns.find((c) => c.type === "NEW") : findColumn(columns, column);
-  if (target) return target;
-  const available = columns.map((c) => `«${c.name}» (${c.id})`).join(", ");
-  if (column === undefined) throw new Error(`на доске активного спринта нет колонки типа NEW — укажи column; есть: ${available}`);
-  throw new Error(`колонки ${JSON.stringify(column)} нет на доске активного спринта; есть: ${available}`);
-}
-
-async function moveToColumn(ctx: OpContext, taskId: number, target: SprintColumn) {
-  await ctx.call({ ...STAGE_MOVE, params: { id: taskId, stageId: target.id } });
-  const moved = await readTaskStage(ctx, taskId).catch((e: unknown) => {
-    throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь её колонку через bitrix_task_get): ${errorMessage(e)}`);
-  });
-  // movetask answers true and does nothing for a task that is not on the sprint board.
-  if (moved.stageId !== target.id) {
-    throw new Error("Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта");
-  }
-  return { stageId: target.id, column: target.name, status: moved.status ?? null };
-}
-
-// A factory for the same `$ref` reason as idArg.
-const columnArg = () => z.union([z.number().int().positive(), z.string().min(1)]);
 
 const userIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
 
@@ -238,6 +119,9 @@ function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITO
     },
   });
 }
+
+const RETRY_FROM_BACKLOG = "верни её в бэклог (bitrix_task_to_backlog) и повтори";
+const CREATE_MAY_EXIST = "задача могла создаться, проверь доску спринта перед повтором";
 
 const MEMBERS_HINT =
   "add / remove — массивы userId (найти id по фамилии — bitrix_user_find); нужен хотя бы один непустой. " +
@@ -346,7 +230,7 @@ export const WRITE_OPERATIONS: Operation[] = [
       "не останавливает остальные. Ответ: { results: [{ taskId, ok, error?, sprintId, stageId, column, status, " +
       "fromBacklog }] } — колонка перечитана после переноса.",
     mutating: true,
-    // Up to five requests per task, three more per project.
+    // Up to six requests per task, three more per project.
     budget: "long",
     input: { taskIds: taskIdsArg(), column: columnArg().optional() },
     run: async (ctx, a) => {
@@ -362,18 +246,24 @@ export const WRITE_OPERATIONS: Operation[] = [
           await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: sprintId } } });
           // Without it movetask "succeeds" and changes nothing. It does not set the column itself.
           await ctx.call({ ...BOARD_ADD, params: { sprintId, taskId, stageId: target.id } }).catch((e: unknown) => {
-            throw new Error(
-              `задача перенесена в спринт ${sprintId}, но не поставлена на его доску (${errorMessage(e)}) — ` +
-                "верни её в бэклог (bitrix_task_to_backlog) и повтори",
-            );
+            throw new Error(`задача перенесена в спринт ${sprintId}, но не поставлена на его доску (${errorMessage(e)}) — ${RETRY_FROM_BACKLOG}`);
           });
+          const placed = await readScrumTask(ctx, taskId).catch((e: unknown) => {
+            throw new Error(`перенос в спринт отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${errorMessage(e)}`);
+          });
+          if (placed.entityId !== sprintId) {
+            throw new Error(`Bitrix ответил успехом, но задача не в спринте ${sprintId} (сейчас в ${placed.entityId})`);
+          }
         } else if (task.entityId !== sprintId) {
           throw new Error(
             `задача ${taskId} не в бэклоге и не в активном спринте ${sprintId} (сейчас в ${task.entityId}) — ` +
               "переносить задачи между спринтами эта операция не умеет",
           );
         }
-        return { sprintId, ...(await moveToColumn(ctx, taskId, target)), fromBacklog };
+        // Once in the sprint a retry takes the "already in the sprint" branch and never adds the
+        // task to the board, so a task left off it has to go back to the backlog first.
+        const moved = await moveToColumn(ctx, taskId, target, fromBacklog ? RETRY_FROM_BACKLOG : undefined);
+        return { sprintId, ...moved, fromBacklog };
       });
     },
   }),
@@ -419,30 +309,33 @@ export const WRITE_OPERATIONS: Operation[] = [
       const { sprintId, columns } = await activeSprintColumns(ctx, a.groupId);
       const target = targetColumn(columns, a.column);
       const userId = await currentUserId(ctx);
-      const raw = await ctx.call({
-        ...BOARD_CREATE,
-        params: {
-          taskName: a.title,
-          columnId: target.id,
-          parentTaskId: 0,
-          beforeItemId: 0,
+      // A timeout or a lost extension does not mean the portal did not create the task: every error
+      // from here on keeps the agent from creating it twice.
+      const raw = await ctx
+        .call({
+          ...BOARD_CREATE,
           params: {
-            USER_ID: userId,
-            GROUP_ID: a.groupId,
-            GROUP_ID_FORCED: 0,
-            SPRINT_ID: sprintId,
-            IS_COMPLETED_SPRINT: "N",
-            PERSONAL: "N",
-            TIMELINE_MODE: "N",
+            taskName: a.title,
+            columnId: target.id,
+            parentTaskId: 0,
+            beforeItemId: 0,
+            params: {
+              USER_ID: userId,
+              GROUP_ID: a.groupId,
+              GROUP_ID_FORCED: 0,
+              SPRINT_ID: sprintId,
+              IS_COMPLETED_SPRINT: "N",
+              PERSONAL: "N",
+              TIMELINE_MODE: "N",
+            },
+            personal: "N",
           },
-          personal: "N",
-        },
-      });
-      // Past the request the task may exist: every error from here on keeps the agent from creating it twice.
+        })
+        .catch((e: unknown) => {
+          throw new Error(`${errorMessage(e)} — ${CREATE_MAY_EXIST}`);
+        });
       const parsed = boardCreateResponse.safeParse(raw);
-      if (!parsed.success) {
-        throw new Error("bitrix:tasks.kanban addTask returned an unexpected shape — задача могла создаться, проверь доску спринта перед повтором");
-      }
+      if (!parsed.success) throw new Error(`bitrix:tasks.kanban addTask returned an unexpected shape — ${CREATE_MAY_EXIST}`);
       const created = parsed.data.data;
       if (created.columnId != null && created.columnId !== target.id) {
         throw new Error(`задача ${created.id} создана, но в колонке ${created.columnId}, а не «${target.name}» (${target.id})`);
