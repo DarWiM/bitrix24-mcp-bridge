@@ -35,7 +35,7 @@ const BOARD_CREATE = callTarget({
 // The official tasks.task.result.add exists in REST 3.0 only, which the session refuses.
 const RESULT_ADD = callTarget({ action: "tasks.v2.Task.Result.add", method: "POST", bodyType: "json" });
 
-const DESCRIPTION_MAX = 100_000;
+export const DESCRIPTION_MAX = 100_000;
 // Bitrix's documented message limit; past it the portal truncates without an error.
 const MESSAGE_MAX = 20_000;
 const RESULT_MAX = 20_000;
@@ -59,7 +59,13 @@ const usersResponse = z.object({
   ),
 });
 
-async function writeDescription(ctx: OpContext, taskId: number, text: string) {
+// Raw BBCode, `[disk file id=…]` included — what a point-edit has to write back untouched.
+export async function readDescription(ctx: OpContext, taskId: number): Promise<string> {
+  const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
+  return parseResponse(descriptionResponse, raw, "tasks.v2.Task.get (description)").data.description ?? "";
+}
+
+export async function writeDescription(ctx: OpContext, taskId: number, text: string) {
   await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { DESCRIPTION: text } } });
   return { taskId, length: text.length };
 }
@@ -128,7 +134,7 @@ const MEMBERS_HINT =
   "Список читается у каждой задачи заново, записывается целиком и перечитывается; если менять нечего, " +
   "запись не делается (changed: false). Если Bitrix применил не всё, задача ok: false с перечнем. Задачи обрабатываются по очереди; ошибка одной не останавливает остальные.";
 
-const DESCRIPTION_FORMAT =
+export const DESCRIPTION_FORMAT =
   "Формат — BBCode: [b] [i] [u] [s], [url=…]…[/url], [user=ID]Имя[/user], списки [list] / [list=1] " +
   "с пунктами [*], [quote], [code], [spoiler=Заголовок]…[/spoiler], таблицы [table][tr][th]/[td]. " +
   "Вложения [disk file id=…] в описании не трогай — это прикреплённые файлы.";
@@ -144,7 +150,8 @@ export const WRITE_OPERATIONS: Operation[] = [
     name: "task_description_set",
     description:
       "⚠ МУТИРУЮЩИЙ. ЗАМЕНИТЬ описание задачи целиком (text — новое описание; пустая строка очищает). " +
-      "Чтобы ДОПИСАТЬ к существующему — bitrix_task_description_append. Правка видна в истории задачи. " +
+      "Чтобы ДОПИСАТЬ к существующему — bitrix_task_description_append, поправить фрагмент — " +
+      "bitrix_task_description_replace. Правка видна в истории задачи. " +
       DESCRIPTION_FORMAT,
     mutating: true,
     input: { taskId: idArg(), text: z.string().max(DESCRIPTION_MAX) },
@@ -159,8 +166,7 @@ export const WRITE_OPERATIONS: Operation[] = [
     mutating: true,
     input: { taskId: idArg(), text: z.string().min(1).max(DESCRIPTION_MAX) },
     run: async (ctx, a) => {
-      const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: a.taskId } } });
-      const current = (parseResponse(descriptionResponse, raw, "tasks.v2.Task.get (description)").data.description ?? "").trimEnd();
+      const current = (await readDescription(ctx, a.taskId)).trimEnd();
       return writeDescription(ctx, a.taskId, current ? `${current}\n\n${a.text}` : a.text);
     },
   }),
