@@ -8,7 +8,7 @@ export interface OpContext {
   origins: Record<string, string>;
   downloadsDir: string;
   // `portal` sends this one request to another configured portal instead of ctx.portal.
-  call(target: CallTarget, portal?: string): Promise<unknown>;
+  call(target: CallTarget, portal?: string, opts?: CallOptions): Promise<unknown>;
   callBinary(target: CallTarget, destPath: string, portal?: string): Promise<DownloadResult>;
 }
 
@@ -24,6 +24,15 @@ export const BUDGET_TIMEOUT_MS: Record<Exclude<OpBudget, "call">, number> = {
   download: 11 * 60_000,
   long: 5 * 60_000 + 5_000,
 };
+
+export interface CallOptions {
+  // Replaces the daemon's regular per-request timeout for this one request.
+  timeoutMs?: number;
+}
+
+// A file upload of up to ~13 MB of form body on a slow uplink; leaves the rest of a "long"
+// operation about a minute.
+export const UPLOAD_TIMEOUT_MS = 4 * 60_000;
 
 export interface Operation {
   name: string;

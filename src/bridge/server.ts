@@ -150,8 +150,8 @@ export class Bridge {
     return live ? this.extensionVersions.get(live) ?? null : null;
   }
 
-  call(origin: string, target: CallTarget): Promise<unknown> {
-    return this.dispatch(origin, target, CALL_TIMEOUT_MS);
+  call(origin: string, target: CallTarget, timeoutMs = CALL_TIMEOUT_MS): Promise<unknown> {
+    return this.dispatch(origin, target, timeoutMs);
   }
 
   /** Like `call`, but the response body is streamed into `destPath` instead of returned. */

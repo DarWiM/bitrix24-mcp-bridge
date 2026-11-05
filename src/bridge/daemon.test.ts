@@ -226,6 +226,36 @@ describe("Daemon", () => {
     await probe.stop();
   });
 
+  it("hands an operation's own call timeout on to the bridge", async () => {
+    const sock = sockIn();
+    const slowOp = defineOperation({
+      name: "slow",
+      description: "test",
+      mutating: false,
+      input: {},
+      run: (ctx) => ctx.call({ endpoint: "/x", action: null, method: "POST", params: {} }, undefined, { timeoutMs: 50 }),
+    });
+    const d = new Daemon({
+      port: 0, token: "t", sockPath: sock,
+      portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+      ...opDefaults("acme"), registry: createRegistry([slowOp]),
+    });
+    await d.start();
+    try {
+      // An extension that never answers: only the operation's 50 ms can end the call this soon.
+      const ws = new WebSocket(`ws://127.0.0.1:${d.port}`, { headers: { origin: "https://acme.bitrix24.ru" } });
+      await new Promise((r) => ws.on("open", r));
+      ws.send(JSON.stringify({ type: "auth", token: "t" }));
+      await new Promise((r) => setTimeout(r, 50));
+
+      const res = await udsCall(sock, { type: "op", id: "1", portal: "acme", op: "slow", args: {} });
+      expect(res.ok).toBe(false);
+      expect(res.error).toMatch(/timed out/);
+    } finally {
+      await d.stop();
+    }
+  });
+
   it("forwards an operation request's bodyType to the extension", async () => {
     const sock = sockIn();
     const d = new Daemon({

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { errorMessage } from "./batch.js";
 import { currentUserId } from "./board.js";
 import { REST_TASK_GET, numeric, parseResponse, restMethod, reread } from "./calls.js";
-import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
+import { OpInputError, UPLOAD_TIMEOUT_MS, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 
 const STORAGE_LIST = restMethod("disk.storage.getlist");
 const UPLOAD = restMethod("disk.folder.uploadfile");
@@ -72,7 +72,7 @@ export const FILE_OPERATIONS: Operation[] = [
       "После записи файлы задачи перечитываются; если вложения нет — ошибка. " +
       "Ответ: { taskId, diskFileId, name, size, attachmentId }.",
     mutating: true,
-    // Six requests in a row, one of them a body of up to about 13 MB.
+    // Six requests in a row; the upload alone may take UPLOAD_TIMEOUT_MS.
     budget: "long",
     input: { taskId: idArg(), path: z.string().min(1), name: fileNameArg().optional() },
     run: async (ctx, a) => {
@@ -83,18 +83,14 @@ export const FILE_OPERATIONS: Operation[] = [
       await readTaskFiles(ctx, taskId);
       const rootId = await userDiskRoot(ctx);
 
-      const raw = await ctx
-        .call({
-          ...UPLOAD,
-          params: { id: rootId, data: { NAME: fileName }, fileContent: [fileName, bytes.toString("base64")], generateUniqueName: true },
-        })
-        .catch((e: unknown) => {
-          throw new Error(`загрузка на Диск не подтверждена: ${errorMessage(e)} — файл мог остаться в корне твоего Диска, проверь перед повтором`);
-        });
+      // A timed-out or dropped upload may still have reached Disk.
+      const mayBeOnDisk = `файл мог загрузиться на Диск — проверь корневую папку Диска (имя «${fileName}», возможно с суффиксом) перед повтором`;
+      const upload = { id: rootId, data: { NAME: fileName }, fileContent: [fileName, bytes.toString("base64")], generateUniqueName: true };
+      const raw = await ctx.call({ ...UPLOAD, params: upload }, ctx.portal, { timeoutMs: UPLOAD_TIMEOUT_MS }).catch((e: unknown) => {
+        throw new Error(`загрузка не подтверждена: ${errorMessage(e)} — ${mayBeOnDisk}`);
+      });
       const parsed = uploadResponse.safeParse(raw);
-      if (!parsed.success) {
-        throw new Error("disk.folder.uploadfile returned an unexpected shape — файл мог загрузиться в корень твоего Диска, проверь перед повтором");
-      }
+      if (!parsed.success) throw new Error(`disk.folder.uploadfile returned an unexpected shape — ${mayBeOnDisk}`);
       const disk = parsed.data.result;
       const onDisk = `файл «${disk.NAME}» (id ${disk.ID}) остался в корне твоего Диска`;
       if (disk.SIZE !== bytes.length) {

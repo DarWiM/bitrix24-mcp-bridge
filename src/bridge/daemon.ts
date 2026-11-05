@@ -185,7 +185,7 @@ export class Daemon {
       origin: this.origins[alias],
       origins: { ...this.origins },
       downloadsDir: this.opts.downloadsDir,
-      call: async (target, portal = alias) => this.bridge.call(originOf(portal), target),
+      call: async (target, portal = alias, opts) => this.bridge.call(originOf(portal), target, opts?.timeoutMs),
       callBinary: async (target, destPath, portal = alias) => this.bridge.callBinary(originOf(portal), target, destPath),
     };
   }

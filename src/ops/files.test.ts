@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
-import { OpInputError, OpRefusedError, type OpContext, type Operation } from "./operation.js";
+import { OpInputError, OpRefusedError, UPLOAD_TIMEOUT_MS, type OpContext, type Operation } from "./operation.js";
 import { createRegistry, runOperation } from "./registry.js";
 import { OPERATIONS } from "./index.js";
 
-type CallFn = (target: CallTarget, portal?: string) => Promise<unknown>;
+type CallFn = (target: CallTarget, portal?: string, opts?: { timeoutMs?: number }) => Promise<unknown>;
 
 function fakeCtx(callFn: CallFn = async () => ({ result: true })) {
   const call = mock(callFn);
@@ -112,6 +112,8 @@ describe("task_file_attach", () => {
       rest("tasks.task.files.attach", { taskId: 42, fileId: 207687 }),
       rest("tasks.task.get", { taskId: 42, select: ["ID", "UF_TASK_WEBDAV_FILES"] }),
     ]);
+    // Only the upload outlives the regular per-request timeout.
+    expect(call.mock.calls.map((c) => c[2])).toEqual([undefined, undefined, undefined, { timeoutMs: UPLOAD_TIMEOUT_MS }, undefined, undefined]);
     // Only these fields: the upload reply's DOWNLOAD_URL carries the session id.
     expect(result).toEqual({ taskId: 42, diskFileId: 207687, name: "probe.txt", size: CONTENT.length, attachmentId: 22193 });
   });
@@ -188,14 +190,14 @@ describe("task_file_attach", () => {
   });
 
   it("keeps the file contents out of an upload error and says the file may be on Disk", async () => {
-    const { ctx } = fakeCtx(replies(taskFiles(), me, storages, new Error("timeout")));
+    const { ctx } = fakeCtx(replies(taskFiles(), me, storages, new Error("call disk.folder.uploadfile timed out")));
 
     const error = await op("task_file_attach").execute(ctx, { taskId: 42, path: file }).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
-    expect(message).toMatch(/timeout/);
-    expect(message).toMatch(/мог/);
+    expect(message).toMatch(/timed out/);
+    expect(message).toMatch(/мог загрузиться на Диск.*корневую папку Диска.*probe\.txt.*перед повтором/);
     expect(message).not.toContain(BASE64);
     expect(message).not.toContain(CONTENT);
   });
