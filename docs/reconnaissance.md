@@ -109,6 +109,9 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
 | `call_detail` | `GET /call/detail/{callId}?IFRAME=Y&IFRAME_TYPE=SIDE_SLIDER` (HTML) | разбор — `src/ops/callDetail.ts` |
 | `call_recording` | `call_detail` → ссылка записи (`call.Track.download`) → бинарная загрузка | только ссылка с этого же портала |
 | `file_download` | `GET <ссылка портала>` (бинарно) | allowlist путей и `action` — `src/ops/download.ts` |
+| `task_description_set` ⚠ | `/rest/tasks.task.update.json` | `taskId`, `fields[DESCRIPTION]` |
+| `task_description_append` ⚠ | ajax `tasks.v2.Task.get` → `/rest/tasks.task.update.json` | читает сырой BBCode из `data.description`, дописывает через `\n\n` |
+| `chat_send` ⚠ | `/rest/im.message.add.json` | `DIALOG_ID` (`chatId` → `"chat"+id`), `MESSAGE`; ответ `result` = id сообщения |
 
 ---
 

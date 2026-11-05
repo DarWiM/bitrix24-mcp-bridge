@@ -67,6 +67,8 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 | `bitrix_task_views_count` | сколько пользователей просмотрели задачу | `taskId` + `params` | — |
 | `bitrix_task_subtasks` / `bitrix_task_related` | подзадачи / связанные задачи | `taskId` + `params` | `navigation{size}` (дефолт 10) |
 | `bitrix_task_comments` | старые комментарии задачи (форум), §5.6 | `taskId`, `limit?`, `maxPages?`, `beforeId?`, `output?` | `beforeId` — курсор |
+| `bitrix_task_description_set` ⚠ | **заменить** описание задачи целиком (`""` — очистить) | `taskId`, `text` (≤ 100 000) | без `params`; разметка — BBCode описания (ниже) |
+| `bitrix_task_description_append` ⚠ | **дописать** в конец описания через пустую строку; старое (файлы `[disk file id=…]`, таблицы) не трогает | `taskId`, `text` (≤ 100 000) | без `params` |
 | *Проекты* | | | |
 | `bitrix_projects_list` | рабочие группы / проекты | + `params` | верхний уровень: `select[]`, `order{}`, `filter{}`; `start` (шаг 50; `start=(N-1)*50`, `-1` — ответ без `total`) 📖 |
 | `bitrix_project_get` | карточка группы (участники, `CHAT_ID`) | `groupId` + `params` | **обёрнуто**: `params[groupId]`, `params[select][]` |
@@ -80,6 +82,7 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 | `bitrix_chat_history` | листать историю чата вглубь | `chatId`, `beforeId?`, `limit?` + `params` | `beforeId` (§5.1) |
 | `bitrix_chat_mark_read` ⚠ | пометить сообщения прочитанными | `chatId`, `ids[]`, `actionUuid?` + `params` | — |
 | `bitrix_chat_read_all` ⚠ | пометить **все** чаты прочитанными | + `params` | — |
+| `bitrix_chat_send` ⚠ | отправить сообщение (видят все участники чата) | `chatId` \| `dialogId` (ровно одно), `text` (≤ 20 000) | без `params`; разметка — подмножество чата (ниже) |
 | *Люди / поиск* | | | |
 | `bitrix_user_get` | карточка пользователя мессенджера | `userId` + `params` | — |
 | `bitrix_entity_search` | текстовый поиск чатов / людей | `query`, `section?`, `dialog?` + `params` | — |
@@ -91,8 +94,25 @@ Ajax-контроллеры (`/bitrix/services/main/ajax.php`) отвечают 
 | `bitrix_call_recording` | скачать аудиозапись звонка, §5.5 | `callId`, `savePath?`, `overwrite?` | — |
 | `bitrix_file_download` | скачать файл портала на диск, §5.5 | `url`, `savePath?`, `overwrite?` | — |
 
-⚠ — мутирующие; их может выключить пользователь (§1). `bitrix_task_comments` ничего не помечает
-прочитанным и мутирующим не считается.
+⚠ — мутирующие (`bitrix_chat_mark_read`, `bitrix_chat_read_all`, `bitrix_chat_send`,
+`bitrix_task_description_set`, `bitrix_task_description_append`); их может выключить пользователь
+(§1). `bitrix_task_comments` ничего не помечает прочитанным и мутирующим не считается.
+
+**Кто это увидит.** Сообщение `bitrix_chat_send` видят все участники чата; упоминание
+`[user=ID]Имя[/user]` шлёт этому человеку уведомление. Правка описания попадает в историю задачи.
+Чат задачи — `CHAT_ID` из `bitrix_task_get` (или `bitrix_entity_chat { entityType:"TASKS_TASK" }`).
+
+**Разметка текста.**
+
+- **Описание задачи** — полный BBCode: `[b] [i] [u] [s]`, `[url=…]…[/url]`,
+  `[user=ID]Имя[/user]`, списки `[list]` / `[list=1]` с пунктами `[*]`, `[quote]`, `[code]`,
+  `[spoiler=Заголовок]…[/spoiler]`, таблицы `[table][tr][th]/[td]`. Теги `[disk file id=…]` — это
+  прикреплённые файлы, сохраняй их.
+- **Сообщение в чат** — только то, что рендерят и веб, и мобильное приложение: `[b] [i] [u] [s]`,
+  `[url=…]…[/url]`, `[user=ID]Имя[/user]`, `[code]`, `[color=#hex]…[/color]`, `[br]`. Цитата — строка,
+  начинающаяся с `>>`, или блок между двумя строками из дефисов; список — строки, начинающиеся с `•`.
+  `[quote]`, `[list]`, `[spoiler]`, таблицы и Markdown в чате **не рендерятся**.
+- Markdown не рендерится нигде.
 
 ---
 

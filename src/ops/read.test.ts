@@ -44,12 +44,15 @@ describe("OPERATIONS", () => {
       "task_subtasks", "task_related", "task_comments", "projects_list", "project_get", "chats_recent",
       "chat_load", "chat_messages", "chat_history", "chat_mark_read", "chat_read_all", "chat_get_dialog_id",
       "chat_calls", "recent_load", "recent_tail", "entity_selector", "entity_search", "entity_chat",
-      "user_get", "call_detail", "call_recording", "file_download",
+      "user_get", "call_detail", "call_recording", "file_download", "task_description_set",
+      "task_description_append", "chat_send",
     ].sort());
   });
 
-  it("marks only chat_mark_read and chat_read_all as mutating", () => {
-    expect(OPERATIONS.filter((o) => o.mutating).map((o) => o.name).sort()).toEqual(["chat_mark_read", "chat_read_all"]);
+  it("marks exactly the operations that change data as mutating", () => {
+    expect(OPERATIONS.filter((o) => o.mutating).map((o) => o.name).sort()).toEqual([
+      "chat_mark_read", "chat_read_all", "chat_send", "task_description_append", "task_description_set",
+    ]);
   });
 });
 

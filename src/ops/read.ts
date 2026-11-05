@@ -12,7 +12,7 @@ export function callTarget(entry: Pick<CallTarget, "method"> & Partial<CallTarge
 
 const TASKS_LIST = callTarget({ action: "tasks.task.list", method: "POST" });
 const TASK_GET = callTarget({ action: "tasks.task.get", method: "POST" });
-const TASK_V2_GET = callTarget({ action: "tasks.v2.Task.get", method: "POST", bodyType: "json" });
+export const TASK_V2_GET = callTarget({ action: "tasks.v2.Task.get", method: "POST", bodyType: "json" });
 const TASK_SCRUM_INFO = callTarget({ action: "tasks.v2.Scrum.getTaskInfo", method: "POST", bodyType: "json" });
 const TASK_FILES = callTarget({ action: "tasks.v2.File.listObjects", method: "POST", bodyType: "json" });
 const TASK_VIEWS_COUNT = callTarget({ action: "tasks.v2.Task.View.User.count", method: "POST", bodyType: "json" });
