@@ -3,6 +3,7 @@ import type { CallTarget, DownloadResult } from "../../shared/wire.js";
 import { OpInputError, OpRefusedError, type OpContext, type Operation } from "./operation.js";
 import { createRegistry, runOperation } from "./registry.js";
 import { OPERATIONS } from "./index.js";
+import { currentUserId } from "./write.js";
 
 const AJAX = "/bitrix/services/main/ajax.php";
 
@@ -78,7 +79,7 @@ describe("write operations in OPERATIONS", () => {
     expect(op("user_find").mutating).toBe(false);
     for (const name of [
       "task_description_set", "task_description_append", "chat_send", "task_move", "task_result_add",
-      "task_delegate", "task_accomplices", "task_auditors",
+      "task_delegate", "task_accomplices", "task_auditors", "task_to_sprint", "task_to_backlog", "task_create",
     ]) {
       expect(op(name).mutating).toBe(true);
     }
@@ -87,7 +88,7 @@ describe("write operations in OPERATIONS", () => {
   it("takes no agent params", () => {
     for (const name of [
       "task_description_set", "task_description_append", "chat_send", "sprint_columns", "task_move", "task_result_add",
-      "task_delegate", "task_accomplices", "task_auditors", "user_find",
+      "task_delegate", "task_accomplices", "task_auditors", "user_find", "task_to_sprint", "task_to_backlog", "task_create",
     ]) {
       expect(Object.keys(op(name).input)).not.toContain("params");
     }
@@ -105,6 +106,9 @@ describe("write operations in OPERATIONS", () => {
       ["task_delegate", { taskIds: [1], userId: 2 }],
       ["task_accomplices", { taskIds: [1], add: [2] }],
       ["task_auditors", { taskIds: [1], remove: [2] }],
+      ["task_to_sprint", { taskIds: [1] }],
+      ["task_to_backlog", { taskIds: [1] }],
+      ["task_create", { groupId: 1, title: "x" }],
     ];
     for (const [name, args] of calls) {
       const err = await rejection(runOperation(reg, name, args, ctx, { allowMutations: false }));
@@ -625,5 +629,307 @@ describe("user_find", () => {
 
     await expect(op("user_find").execute(ctx, { lastName: "  " })).rejects.toThrow(OpInputError);
     expect(call).not.toHaveBeenCalled();
+  });
+});
+
+const scrumGet = (id: number) => rest("/rest/tasks.api.scrum.task.get.json", { id });
+const scrumUpdate = (id: number, entityId: number) => rest("/rest/tasks.api.scrum.task.update.json", { id, fields: { entityId } });
+const backlogGet = (id: number) => rest("/rest/tasks.api.scrum.backlog.get.json", { id });
+const scrumTask = (entityId: number | string, groupId: number | string = 15) => ({ result: { id: 42, entityId, groupId, epicId: 0 } });
+const backlog = { result: { id: "1", groupId: "15" } };
+const sprintList = rest("/rest/tasks.api.scrum.sprint.list.json", { filter: { GROUP_ID: 15, STATUS: "active" } });
+const stagesList = rest("/rest/tasks.api.scrum.kanban.getStages.json", { sprintId: 7 });
+
+describe("task_to_sprint", () => {
+  const addTask = (taskId: number, stageId: number) => rest("/rest/tasks.api.scrum.kanban.addTask.json", { sprintId: 7, taskId, stageId });
+  const move = (id: number, stageId: number) => rest("/rest/task.stages.movetask.json", { id, stageId });
+  const getTask = (taskId: number) => rest("/rest/tasks.task.get.json", { taskId, select: TASK_STAGE_SELECT });
+
+  it("takes a backlog task into the active sprint, onto the board and into the NEW column by default", async () => {
+    const { ctx, call } = fakeCtx(
+      replies(scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, { result: true }, taskReply("58")),
+    );
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7), addTask(42, 58), move(42, 58), getTask(42),
+    ]);
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: true, sprintId: 7, stageId: 58, column: "Новые", status: 2, fromBacklog: true }],
+    });
+  });
+
+  it("only moves a task that is already in the active sprint", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("7"), backlog, activeSprint, sprintStages, { result: true }, taskReply("61")));
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42], column: "testing" });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([scrumGet(42), backlogGet(15), sprintList, stagesList, move(42, 61), getTask(42)]);
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: true, sprintId: 7, stageId: 61, column: "Testing", status: 2, fromBacklog: false }],
+    });
+  });
+
+  it("looks the project up once per batch and keeps going past a task of another sprint", async () => {
+    const { ctx, call } = fakeCtx(
+      replies(
+        scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, { result: true }, taskReply("59"),
+        scrumTask("6"),
+        scrumTask("7"), { result: true }, taskReply("59"),
+      ),
+    );
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42, 43, 44], column: 59 });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7), addTask(42, 59), move(42, 59), getTask(42),
+      scrumGet(43),
+      scrumGet(44), move(44, 59), getTask(44),
+    ]);
+    expect(result).toEqual({
+      results: [
+        { taskId: 42, ok: true, sprintId: 7, stageId: 59, column: "В работе", status: 2, fromBacklog: true },
+        { taskId: 43, ok: false, error: expect.stringContaining("не в бэклоге и не в активном спринте 7") },
+        { taskId: 44, ok: true, sprintId: 7, stageId: 59, column: "В работе", status: 2, fromBacklog: false },
+      ],
+    });
+  });
+
+  it("fails a placement Bitrix answered true to but did not make", async () => {
+    const { ctx } = fakeCtx(
+      replies(scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, { result: true }, taskReply("981")),
+    );
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: "Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта" }],
+    });
+  });
+
+  it("says the task is already in the sprint when putting it on the board fails", async () => {
+    const first = replies(scrumTask("1"), backlog, activeSprint, sprintStages, { result: true });
+    let n = 0;
+    const { ctx, call } = fakeCtx(async (target) => {
+      if (n++ < 5) return first(target);
+      throw new Error("ACCESS_DENIED");
+    });
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error:
+            "задача перенесена в спринт 7, но не поставлена на его доску (ACCESS_DENIED) — верни её в бэклог (bitrix_task_to_backlog) и повтори",
+        },
+      ],
+    });
+    expect(call).toHaveBeenCalledTimes(6);
+  });
+
+  it("lists the available columns for an unknown name, without writing", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, activeSprint, sprintStages));
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42], column: "Ревью" });
+
+    expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error: 'колонки "Ревью" нет на доске активного спринта; есть: «Новые» (58), «В работе» (59), «Testing» (61), «Готово» (60)',
+        },
+      ],
+    });
+    expect(call).toHaveBeenCalledTimes(4);
+  });
+
+  it("explains when the board has no NEW column and none was given", async () => {
+    const stages = { result: sprintStages.result.filter((s) => s.type !== "NEW") };
+    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, activeSprint, stages));
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: expect.stringContaining("нет колонки типа NEW") }] });
+    expect(call).toHaveBeenCalledTimes(4);
+  });
+
+  it("refuses a task outside any scrum project", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("0", "0")));
+
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: expect.stringContaining("не в scrum-проекте") }] });
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an empty taskIds list before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("task_to_sprint").execute(ctx, { taskIds: [] })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("task_to_backlog", () => {
+  it("moves sprint tasks to the backlog, re-reads them and leaves backlog ones alone", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("7"), backlog, { result: true }, scrumTask("1"), scrumTask("1")));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42, 43] });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([scrumGet(42), backlogGet(15), scrumUpdate(42, 1), scrumGet(42), scrumGet(43)]);
+    expect(result).toEqual({
+      results: [
+        { taskId: 42, ok: true, backlogId: 1, changed: true },
+        { taskId: 43, ok: true, backlogId: 1, changed: false },
+      ],
+    });
+  });
+
+  it("fails a move Bitrix answered true to but did not make", async () => {
+    const { ctx } = fakeCtx(replies(scrumTask("7"), backlog, { result: true }, scrumTask("7")));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: "Bitrix ответил успехом, но задача не в бэклоге (сейчас в 7)" }],
+    });
+  });
+
+  for (const [title, reread, cause] of [
+    ["comes back in an unexpected shape", async () => ({ result: [] }), "tasks.api.scrum.task.get returned an unexpected shape"],
+    ["fails", async () => {
+      throw new Error("extension not connected");
+    }, "extension not connected"],
+  ] as const) {
+    it(`says the move was sent when the re-read ${title}`, async () => {
+      const first = replies(scrumTask("7"), backlog, { result: true });
+      let n = 0;
+      const { ctx } = fakeCtx(async (target) => (n++ < 3 ? first(target) : reread()));
+
+      const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+      expect(result).toEqual({
+        results: [
+          {
+            taskId: 42,
+            ok: false,
+            error: `перенос отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${cause}`,
+          },
+        ],
+      });
+    });
+  }
+
+  it("refuses a task outside any scrum project", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("0", "0")));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({ results: [{ taskId: 42, ok: false, error: expect.stringContaining("не в scrum-проекте") }] });
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("task_create", () => {
+  const KANBAN = `${AJAX}?mode=class&c=bitrix%3Atasks.kanban&action=addTask`;
+  const userCurrent = rest("/rest/user.current.json", {});
+  const me = { result: { ID: "55", NAME: "Пётр" } };
+  const created = (columnId: string) => ({ status: "success", data: { id: "31861", columnId, title: "x" }, errors: [] });
+  const create = (taskName: string, columnId: number): CallTarget => ({
+    endpoint: KANBAN,
+    action: null,
+    method: "POST",
+    bodyType: "form",
+    responseType: "json",
+    params: {
+      taskName,
+      columnId,
+      parentTaskId: 0,
+      beforeItemId: 0,
+      params: {
+        USER_ID: 55,
+        GROUP_ID: 15,
+        GROUP_ID_FORCED: 0,
+        SPRINT_ID: 7,
+        IS_COMPLETED_SPRINT: "N",
+        PERSONAL: "N",
+        TIMELINE_MODE: "N",
+      },
+      personal: "N",
+    },
+  });
+
+  it("creates the task on the active sprint's board in the NEW column by default", async () => {
+    const { ctx, call } = fakeCtx(replies(activeSprint, sprintStages, me, created("58")));
+
+    const result = await op("task_create").execute(ctx, { groupId: "15", title: "  mcp-probe  " });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([sprintList, stagesList, userCurrent, create("mcp-probe", 58)]);
+    expect(result).toEqual({ taskId: 31861, sprintId: 7, stageId: 58, column: "Новые" });
+  });
+
+  it("creates the task in the column given by name", async () => {
+    const { ctx, call } = fakeCtx(replies(activeSprint, sprintStages, me, created("59")));
+
+    const result = await op("task_create").execute(ctx, { groupId: 15, title: "x", column: "в работе" });
+
+    expect(call.mock.calls[3][0]).toEqual(create("x", 59));
+    expect(result).toEqual({ taskId: 31861, sprintId: 7, stageId: 59, column: "В работе" });
+  });
+
+  it("lists the available columns for an unknown one, without creating", async () => {
+    const { ctx, call } = fakeCtx(replies(activeSprint, sprintStages));
+
+    await expect(op("task_create").execute(ctx, { groupId: 15, title: "x", column: 99 })).rejects.toThrow(
+      "колонки 99 нет на доске активного спринта; есть: «Новые» (58)",
+    );
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
+  it("names the created task when Bitrix put it into another column", async () => {
+    const { ctx } = fakeCtx(replies(activeSprint, sprintStages, me, created("60")));
+
+    await expect(op("task_create").execute(ctx, { groupId: 15, title: "x" })).rejects.toThrow(
+      "задача 31861 создана, но в колонке 60, а не «Новые» (58)",
+    );
+  });
+
+  it("fails on an answer without the new task id", async () => {
+    const { ctx } = fakeCtx(replies(activeSprint, sprintStages, me, { status: "success", data: null, errors: [] }));
+
+    await expect(op("task_create").execute(ctx, { groupId: 15, title: "x" })).rejects.toThrow(
+      "bitrix:tasks.kanban addTask returned an unexpected shape — задача могла создаться, проверь доску спринта перед повтором",
+    );
+  });
+
+  it("rejects a blank title before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("task_create").execute(ctx, { groupId: 15, title: "   " })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("currentUserId", () => {
+  it("reads user.current once per operation call", async () => {
+    const first = fakeCtx(async () => ({ result: { ID: "55" } }));
+    const second = fakeCtx(async () => ({ result: { ID: "56" } }));
+
+    expect(await currentUserId(first.ctx)).toBe(55);
+    expect(await currentUserId(first.ctx)).toBe(55);
+    expect(await currentUserId(second.ctx)).toBe(56);
+    expect(first.call).toHaveBeenCalledTimes(1);
+    expect(first.call.mock.calls[0][0]).toEqual(rest("/rest/user.current.json", {}));
+  });
+
+  it("fails on an unexpected shape", async () => {
+    const { ctx } = fakeCtx(async () => ({ result: {} }));
+
+    await expect(currentUserId(ctx)).rejects.toThrow("user.current returned an unexpected shape");
   });
 });
