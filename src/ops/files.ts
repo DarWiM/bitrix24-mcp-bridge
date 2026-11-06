@@ -2,12 +2,13 @@
 // It runs in the daemon, so the path is resolved there, not where the agent works.
 
 import { constants } from "node:fs";
-import { open } from "node:fs/promises";
-import { basename, isAbsolute } from "node:path";
+import { open, realpath } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "./batch.js";
 import { currentUserId } from "./board.js";
 import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, restMethod, reread } from "./calls.js";
+import { runtimePaths } from "../paths.js";
 import { BUDGET_TIMEOUT_MS, OpInputError, UPLOAD_TIMEOUT_MS, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 
 const STORAGE_LIST = restMethod("disk.storage.getlist");
@@ -48,12 +49,31 @@ function fileError(path: string, e: unknown) {
   return new OpInputError(`не удалось прочитать ${path}${typeof code === "string" ? ` (${code})` : ""}`);
 }
 
-// One descriptor for the checks and the read, so that the file read is the file checked.
+// The bridge's own directory holds config.json with the extension's token. Both sides resolved:
+// symlinks, `..` and, on a case-insensitive disk, another spelling must not lead into it.
+async function inBridgeHome(realFile: string) {
+  const { home } = runtimePaths(process.env);
+  const realHome = await realpath(home).catch(() => resolve(home));
+  const rel = relative(realHome, realFile);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// One descriptor for the checks and the read, so that the file read is the file checked: the
+// resolved path is opened without following a symlink swapped in since.
 // Non-blocking: opening a fifo would otherwise wait for a writer; a fifo or a device is refused by
 // the stat anyway, and a huge file is never read.
 async function readLocalFile(path: string) {
   if (!isAbsolute(path)) throw new OpInputError(`path должен быть абсолютным (операция выполняется не в твоём рабочем каталоге): ${path}`);
-  const fh = await open(path, constants.O_RDONLY | constants.O_NONBLOCK).catch((e: unknown) => {
+  const real = await realpath(path).catch((e: unknown) => {
+    throw fileError(path, e);
+  });
+  if (await inBridgeHome(real)) {
+    throw new OpInputError(
+      `${path} — в служебном каталоге моста (там его настройки и токен), оттуда файлы не прикрепляются; ` +
+        "скачанный мостом файл сначала скопируй в другое место",
+    );
+  }
+  const fh = await open(real, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW).catch((e: unknown) => {
     throw fileError(path, e);
   });
   try {
@@ -104,7 +124,8 @@ export const FILE_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. Прикрепить ЛОКАЛЬНЫЙ файл к задаче taskId. Файл УХОДИТ С МАШИНЫ: он загружается в корень " +
       "твоего Диска Битрикс24, затем прикрепляется к задаче — его увидят и смогут скачать все, кто видит задачу. " +
       "Прикрепляй только то, что пользователь явно попросил; любой другой файл — сначала спроси. path — " +
-      "АБСОЛЮТНЫЙ путь к обычному файлу (не каталогу), не пустому, до 10 МБ. name — имя файла в Битрикс24 " +
+      "АБСОЛЮТНЫЙ путь к обычному файлу (не каталогу), не пустому, до 10 МБ; файлы из служебного каталога моста " +
+      "(~/.bitrix24-mcp-bridge, и downloads/ в нём) не прикрепляются. name — имя файла в Битрикс24 " +
       "(необязательно, по умолчанию имя из path; без разделителей пути); если имя на Диске занято, Битрикс24 " +
       "добавит к нему суффикс. Нужно право прикреплять файлы к задаче: тому, кто задачу только видит, " +
       "Битрикс24 может отказать уже после загрузки. Если прикрепить не удалось, файл остаётся на твоём Диске — " +

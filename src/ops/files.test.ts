@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeAll, afterAll, afterEach, setSystemTime } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
@@ -108,6 +108,58 @@ describe("task_file_attach in OPERATIONS", () => {
     const reg = createRegistry(OPERATIONS);
     await expect(runOperation(reg, "task_file_attach", { taskId: 42, path: file }, ctx, { allowMutations: false })).rejects.toThrow(OpRefusedError);
     expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("task_file_attach and the bridge's own directory", () => {
+  const saved = process.env.BITRIX24_MCP_BRIDGE_HOME;
+  let home: string;
+
+  beforeAll(() => {
+    home = join(dir, "bridge-home");
+    mkdirSync(join(home, "downloads"), { recursive: true });
+    writeFileSync(join(home, "config.json"), '{"token":"secret"}');
+    writeFileSync(join(home, "downloads", "report.pdf"), CONTENT);
+    symlinkSync(join(home, "config.json"), join(dir, "innocent.txt"));
+    symlinkSync(home, join(dir, "home-link"));
+  });
+
+  afterAll(() => {
+    if (saved === undefined) delete process.env.BITRIX24_MCP_BRIDGE_HOME;
+    else process.env.BITRIX24_MCP_BRIDGE_HOME = saved;
+  });
+
+  const refused = async (path: string, bridgeHome: string) => {
+    process.env.BITRIX24_MCP_BRIDGE_HOME = bridgeHome;
+    const { ctx, call } = fakeCtx();
+    const attach = op("task_file_attach");
+    await expect(attach.execute(ctx, { taskId: 42, path })).rejects.toThrow(OpInputError);
+    await expect(attach.execute(ctx, { taskId: 42, path })).rejects.toThrow(/служебном каталоге моста/);
+    expect(call).not.toHaveBeenCalled();
+  };
+
+  it("refuses its config.json and anything else in it before any request", async () => {
+    await refused(join(home, "config.json"), home);
+    await refused(join(home, "downloads", "report.pdf"), home);
+    await refused(join(home, "downloads", "..", "config.json"), home);
+  });
+
+  it("refuses a symlink pointing into it", async () => {
+    await refused(join(dir, "innocent.txt"), home);
+  });
+
+  it("refuses a file in it when the bridge's home itself is reached through a symlink", async () => {
+    await refused(join(home, "config.json"), join(dir, "home-link"));
+    await refused(join(dir, "home-link", "config.json"), home);
+  });
+
+  it("still attaches a file next to it, outside it", async () => {
+    process.env.BITRIX24_MCP_BRIDGE_HOME = home;
+    const { ctx, call } = fakeCtx(replies(taskFiles(), me, storages, uploaded(), attached, taskFiles([22193])));
+
+    await op("task_file_attach").execute(ctx, { taskId: 42, path: file });
+
+    expect(call).toHaveBeenCalledTimes(6);
   });
 });
 
