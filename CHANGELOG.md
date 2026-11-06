@@ -1,5 +1,87 @@
 # Changelog
 
+## [1.0.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.5.0...bitrix24-mcp-bridge-v1.0.0) (2026-11-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* remove action catalog and traffic capture pipeline
+* **tools:** bitrix_call and the actions.json catalog are gone; only built-in operations can be called.
+
+### Features
+
+* **core:** add domain operation model and registry ([6816f2c](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/6816f2c8a78b6b986ccacfcce72b51db6a451733))
+* **core:** add task description and chat message operations ([ccfd7d9](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/ccfd7d961f2a94ca210e002eb15f3bf3d6c0b5a9))
+* **core:** attach a local file to a task ([8a813bb](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/8a813bb9553578cc828dc6285467dde2645459ce))
+* **core:** close tasks through Definition of Done and reopen them ([2dd0bc6](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/2dd0bc6a136cee8df2552c6cbf840974e47eb80c))
+* **core:** define read operations ([48088c4](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/48088c445f828982dca72169429f466fdb0a4981))
+* **core:** edit task description fragments, tags, checklist and plan dates ([7d49508](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/7d4950881765d96c900efc966f920e7334e22fb3))
+* **core:** manage related tasks, parent task and Gantt links ([34caa49](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/34caa49853c9807d4e8f70c7823b293b1200fb1d))
+* **core:** manage task responsible, accomplices and auditors ([bef0774](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/bef07743aabd75c8961a2e17289ccae0ab2a4c61))
+* **core:** mark own reminders in the list ([1bc7cdf](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/1bc7cdff0d41d6ed50b5ef5b236da0729d73d4f3))
+* **core:** move tasks between backlog and sprint and create tasks on the board ([f468ecd](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/f468ecd9cbcdb20030d6f6ff33f7234b38e9a5d3))
+* **core:** move tasks between sprint columns and add task results ([f441923](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/f44192334bde6674b408ba579b6a02104bc64d96))
+* **core:** reply, edit and react in chats and post to task chats ([21ccae8](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/21ccae8acbff77afe0035d0cd0f88eb43841fb48))
+* **core:** run hand-off operations over task batches ([ed319dd](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/ed319dd3e68d331bdf93371a4cc68360aeaf0233))
+* **core:** set task priority, deadline, mute state and reminders ([022a340](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/022a340ce9c4ffd464869393eb189c06f097da0e))
+* **daemon:** execute domain operations over the socket ([c0f0363](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/c0f0363a6b29fadab331c83d4490bcc518ab6381))
+* **setup:** add switch to disable mutating operations ([14457b9](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/14457b963a572a43885446369f0403803ff5c634))
+* **setup:** remove obsolete runtime files on upgrade ([f32d65e](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/f32d65ec87ca8f311ee9162426c1ecd67939cd66))
+* **tools:** serve tools from domain operations and drop bitrix_call ([8fdc1bc](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/8fdc1bcdc38fdccc9ac78acc415407339f7b1279))
+
+
+### Bug Fixes
+
+* address final review minors ([d8e976f](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/d8e976f7c6251ebb8052a14f8bff0e472fa934ba))
+* **config:** reject a non-boolean mutations setting ([b06df99](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/b06df996fb8e60945e0c9a41b81bb5ad0b872a0e))
+* **core:** ask for DoD only in scrum projects ([d1b0a62](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/d1b0a62d22fed3e4e662fef5defe043bb64a6f83))
+* **core:** cap maxPages to the long budget ([99bd2b6](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/99bd2b660c1acbf8b8efb2ed1e8b73fe4a12c3ca))
+* **core:** check for a FINISH column right before each board write ([b264c33](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/b264c333045894b34c7714dd2e544cc464258c2a))
+* **core:** describe re-reads, group removal and relation notifications honestly ([a165130](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/a16513083f1bc13c296e8874204a704bbc5672f4))
+* **core:** detect collateral relation loss and keep a way back ([6fb0e7d](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/6fb0e7df5341b01b407500bf6d42765b28b12144))
+* **core:** give each id field its own schema and resolve download portal from the link ([7d89726](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/7d89726c4d6e4cd4c98ff5e2bc29e016612b075a))
+* **core:** give file upload a longer call timeout ([6a0e075](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/6a0e075d764d60d08675ebbdf8857b4206a8d211))
+* **core:** give operations a time budget ([279fbc7](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/279fbc74025e1a79768cc6c7c2dd72f2e75a63a7))
+* **core:** give two-request reads the long budget and cap the deadline reason ([1163dd3](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/1163dd3aee5553bd1491e3db96ed94f95ea23d2f))
+* **core:** guard task creation and sprint placement against retries ([e20a81c](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/e20a81cc985b0e0faaedbc6532e55040e2fbd578))
+* **core:** harden file attach ([d18617b](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/d18617b7483ffc10fde0bf3f7e9e1afeb03d3966))
+* **core:** keep batch verdicts authoritative and within the time budget ([e7efe9e](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/e7efe9e273dece9f2c143ac5674b4178b0c2fe26))
+* **core:** keep chat_calls paging under operation control ([81923b2](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/81923b22cbd7b4c2338b0e652ec3a6eb0c1390cb))
+* **core:** keep the bridge data dir out of file attach ([fb6b30f](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/fb6b30f4236b2a574e34895e60e489799acfd454))
+* **core:** leave slack in the upload budget ([83a84b8](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/83a84b8396b0fc9b9918da71d5b040cd167d321c))
+* **core:** let file attach reuse bridge downloads ([2f4e19d](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/2f4e19d73e5f6c04364dc7944c023d0d0f6f048b))
+* **core:** link Gantt tasks through classic REST ([9109e48](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/9109e48c98436093994bb8eb28fbf89c7339d028))
+* **core:** list only real DoD criteria ([bcade7d](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/bcade7d5b6962bf3d1852861429c14c4e9b29705))
+* **core:** name the env switch in the mutation refusal ([9a1359e](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/9a1359ec479a99cfe9cb3a618bf08600e98b7a76))
+* **core:** never read an unknown project as DoD-free ([9e39acd](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/9e39acd2aa5586ce5eea78768a51f766d345bebc))
+* **core:** re-read descriptions after writing ([d8c8802](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/d8c8802d90e5c76b1e05dc3a29d0ec84d8c1dfb1))
+* **core:** refuse FINISH columns so closing goes through DoD ([36bfe48](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/36bfe485f475fadc847f0e7c2ba15ae82467ae0b))
+* **core:** reject duplicate task ids in batches ([8e060f2](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/8e060f2e19a4af669b3614dac659a7063825ed30))
+* **core:** reject reserved keys in agent params ([f930301](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/f9303010fd788cea0d41a55502e8ff02168c18a6))
+* **core:** say nothing was written when the Gantt pre-read fails ([4b2e20b](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/4b2e20b1ec386ea4b84fdef6276cf29b61967c40))
+* **core:** tighten description matching and checklist edits ([3905300](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/390530012b9286fe1d5751d6d7a8fc6e13408c28))
+* **core:** tighten reminder checks ([0fb1e82](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/0fb1e8227a12f86c8354db79462b47a63221646f))
+* **core:** verify member lists after writing them ([295febd](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/295febd2ab76f03948d712791ac0557a8e4dde78))
+* **core:** verify mute and reminder deletion, compare times to the minute ([43e7bfe](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/43e7bfe310743d2573195798632c740175bda29c))
+* **core:** warn about possible duplicates on write timeouts ([34124b0](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/34124b0018257d6250738ee3eadf191b294095b2))
+* **core:** warn on unrecognised send replies and invisible edit text ([343c675](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/343c675d0e7741537d0cf78e9df7acb7521d19b7))
+* **core:** warn that a description may have changed on write timeout ([ee2395f](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/ee2395f3dfb4091a7b7b1ed0e164a6a58ca055a4))
+* **core:** warn that a failed chat send may have been delivered ([ea277d9](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/ea277d9c065225944b0a33d0b8114ca69ed03ab7))
+* **extension:** keep numeric error codes in error text ([f76bd61](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/f76bd61b4f41adab52b875af812421f68333c285))
+* **extension:** show REST 3.0 error code and message ([4af3cc1](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/4af3cc15cced374f3734ffe19f0dc5e0b5e65858))
+* keep chat_calls order and sync:runtime stop under control ([5731b4a](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/5731b4a6b96ac469d908b5352e7db3a084ed2971))
+* **mcp:** fail requests stranded on a replaced socket ([cbc9b09](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/cbc9b09d62ef49dc7797cacb4133efa5daf29db9))
+* **mcp:** reconnect to a restarted daemon ([1bad694](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/1bad69401b0ca0854898615d75e1a9f62d07868c))
+* **mcp:** recover the daemon connection after a failed handover ([d08e471](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/d08e47108fe8ecfe12ad321ba2cc726b779eee36))
+* **setup:** stop the daemon reliably and show the effective mutation state ([d1e216e](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/d1e216e3954b7c8e3bd54fc5bb7fba5f02aad441))
+* **tools:** reject duplicated action in download links ([9787af0](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/9787af025a3abc8cfd5c50f14182c98c85a0cf36))
+* **tools:** restrict file downloads to portal file links ([c1364af](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/c1364afce0f6406d09874ce9a0457fd127182af1))
+
+
+### Code Refactoring
+
+* remove action catalog and traffic capture pipeline ([67638cd](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/67638cde118f8c5bd23c4533f225d7ed9b935a93))
+
 ## [0.5.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.4.0...bitrix24-mcp-bridge-v0.5.0) (2026-10-01)
 
 
