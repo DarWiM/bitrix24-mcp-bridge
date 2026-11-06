@@ -141,6 +141,7 @@ async function placeInSprint(
   taskId: number,
   { fromBacklog, sprintId, target }: { fromBacklog: boolean; sprintId: number; target: SprintColumn },
 ) {
+  refuseClosingColumns([target]);
   if (fromBacklog) {
     await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: sprintId } } });
     // Without it movetask "succeeds" and changes nothing. It does not set the column itself.

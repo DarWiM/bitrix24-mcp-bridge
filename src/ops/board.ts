@@ -113,23 +113,22 @@ export function targetColumn(columns: SprintColumn[], column: number | string | 
 
 // Bitrix completes a task put into a FINISH column, and Definition of Done is asked for only by the web
 // UI's popup on that move: no operation puts a task there, closing goes through task_close.
-const closesTask = (column: SprintColumn) => column.type.toUpperCase() === "FINISH";
-
-const finishRefusal = (column: SprintColumn) =>
-  `колонка «${column.name}» (${column.id}) завершает задачу — закрыть задачу можно только через bitrix_task_close ` +
-  "(там проверяется Definition of Done); ничего не изменено";
-
-// One column name may resolve to a FINISH column in just one of a batch's projects: the whole call
-// is refused, before any write.
+// A batch's column name may resolve to a FINISH column in just one of its projects, so the whole call
+// is refused before any write; writers check again right before their own write.
 export function refuseClosingColumns(targets: SprintColumn[]) {
-  const closing = targets.find(closesTask);
-  if (closing) throw new OpInputError(finishRefusal(closing));
+  const closing = targets.find((c) => c.type.toUpperCase() === "FINISH");
+  if (closing) {
+    throw new OpInputError(
+      `колонка «${closing.name}» (${closing.id}) завершает задачу — закрыть задачу можно только через bitrix_task_close ` +
+        "(там проверяется Definition of Done); ничего не изменено",
+    );
+  }
 }
 
 // `recovery` is appended when the task did not move: what the caller can do about it depends on
 // how the task got onto the board.
 export async function moveToColumn(ctx: OpContext, taskId: number, target: SprintColumn, recovery?: string) {
-  if (closesTask(target)) throw new Error(finishRefusal(target));
+  refuseClosingColumns([target]);
   await ctx.call({ ...STAGE_MOVE, params: { id: taskId, stageId: target.id } });
   const moved = await readTaskStage(ctx, taskId).catch((e: unknown) => {
     throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь её колонку через bitrix_task_get): ${errorMessage(e)}`);
