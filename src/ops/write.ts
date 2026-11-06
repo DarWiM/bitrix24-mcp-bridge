@@ -212,6 +212,8 @@ export const WRITE_OPERATIONS: Operation[] = [
       "type — NEW / WORK / FINISH; у пользовательских колонок (напр. «Testing») type пустой. " +
       "Не путать с task.stages.get: тот отдаёт старый канбан группы, а не колонки спринта.",
     mutating: false,
+    // Two requests in a row.
+    budget: "long",
     input: { groupId: idArg() },
     run: async (ctx, a) => ({ groupId: a.groupId, ...(await activeSprintColumns(ctx, a.groupId)) }),
   }),

@@ -59,6 +59,10 @@ describe("attribute operations in OPERATIONS", () => {
     for (const name of [...MUTATING, "task_reminders"]) expect(Object.keys(op(name).input)).not.toContain("params");
   });
 
+  it("runs every one under the long budget, task_reminders too: it makes two requests", () => {
+    for (const name of [...MUTATING, "task_reminders"]) expect(op(name).budget).toBe("long");
+  });
+
   it("refuses every mutating one before any request when mutations are off", async () => {
     const { ctx, call } = fakeCtx();
     const reg = createRegistry(OPERATIONS);
@@ -134,6 +138,13 @@ describe("task_deadline", () => {
       json("tasks.v2.Task.get", { task: { id: 42 } }),
     ]);
     expect(result).toEqual({ results: [{ taskId: 42, ok: true, deadline: "2026-11-10T06:00:00.000Z" }] });
+  });
+
+  it("rejects a reason over 1000 characters before any request", async () => {
+    const { ctx, call } = fakeCtx();
+
+    await expect(op("task_deadline").execute(ctx, { taskIds: [42], deadline: null, reason: "a".repeat(1001) })).rejects.toThrow(OpInputError);
+    expect(call).not.toHaveBeenCalled();
   });
 
   it("clears the deadline with 0 and an empty reason when none is given", async () => {

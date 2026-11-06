@@ -22,6 +22,7 @@ const REMINDER_DELETE = v2("tasks.v2.Task.Reminder.delete");
 
 // The only two values the task card was seen to send.
 const PRIORITIES = ["high", "average"] as const;
+const REASON_MAX = 1000;
 const CHANNELS = ["notification", "email"] as const;
 
 const priorityResponse = z.object({ data: z.object({ priority: z.string() }) });
@@ -95,12 +96,12 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
     name: "task_deadline",
     description:
       `⚠ МУТИРУЮЩИЙ. Задать КРАЙНИЙ СРОК задач (taskIds — до 50): deadline — ${DATE_FORMAT}; null — убрать срок. ` +
-      "reason — причина переноса срока, простой текст (необязательно; в портале может быть обязательной). " +
+      `reason — причина переноса срока, простой текст до ${REASON_MAX} символов (необязательно; в портале может быть обязательной). ` +
       "Срок видят все, кто видит задачу; правка видна в истории задачи. После записи срок перечитывается; если " +
       `он другой — ok: false. ${BATCH_NOTE} Ответ: { results: [{ taskId, ok, error?, deadline }] } (UTC).`,
     mutating: true,
     budget: "long",
-    input: { taskIds: taskIdsArg(), deadline: dateArg().nullable(), reason: z.string().optional() },
+    input: { taskIds: taskIdsArg(), deadline: dateArg().nullable(), reason: z.string().max(REASON_MAX).optional() },
     run: (ctx, a) => {
       const deadlineTs = toTs(a.deadline);
       return forEachTask(a.taskIds, async (taskId) => {
@@ -143,6 +144,8 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
       "deadline (относительно срока), recipient — кому (myself — владельцу), userId — чьё напоминание, mine — твоё ли. " +
       "id — для bitrix_task_reminder_set / bitrix_task_reminder_delete; они работают только с напоминаниями mine: true.",
     mutating: false,
+    // Two requests in a row.
+    budget: "long",
     input: { taskId: idArg() },
     run: async (ctx, a) => {
       const userId = await currentUserId(ctx);

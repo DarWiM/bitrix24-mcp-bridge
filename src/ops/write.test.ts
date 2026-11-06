@@ -228,6 +228,10 @@ describe("task_description_append", () => {
 });
 
 describe("sprint_columns", () => {
+  it("runs under the long budget: it makes two requests", () => {
+    expect(op("sprint_columns").budget).toBe("long");
+  });
+
   it("finds the active sprint and returns its columns in board order", async () => {
     const { ctx, call } = fakeCtx(replies(activeSprint, sprintStages));
 
