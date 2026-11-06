@@ -65,8 +65,11 @@ describe("operation registry", () => {
     const reg = createRegistry([op]);
     const err = await rejection(runOperation(reg, "task.write", { taskId: 1 }, ctx, { allowMutations: false }));
     expect(err).toBeInstanceOf(OpRefusedError);
-    expect(err.message).toContain("mutations");
-    expect(err.message).toContain("config.json");
+    expect(err.message).toContain("mutations are disabled");
+    // Either switch may be the one in effect, and the env var wins: naming only one sends the user the wrong way.
+    expect(err.message).toContain("BITRIX_MCP_MUTATIONS");
+    expect(err.message).toContain('"mutations": true in config.json');
+    expect(err.message).toMatch(/BITRIX_MCP_MUTATIONS.*overrides config\.json/);
     expect(calls).toHaveLength(0);
   });
 

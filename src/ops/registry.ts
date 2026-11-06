@@ -28,7 +28,9 @@ export async function runOperation(
   if (!op) throw new OpRefusedError(`unknown operation ${JSON.stringify(name)}`);
   if (op.mutating && !policy.allowMutations) {
     throw new OpRefusedError(
-      `operation ${name} changes data, but mutations are disabled; enable them in config.json to allow it`,
+      `operation ${name} changes data, but mutations are disabled; only the user can enable them: ` +
+        `env BITRIX_MCP_MUTATIONS=on for the daemon, or "mutations": true in config.json (setup → [m]) — ` +
+        `BITRIX_MCP_MUTATIONS, when set, overrides config.json`,
     );
   }
   return op.execute(ctx, rawArgs);
