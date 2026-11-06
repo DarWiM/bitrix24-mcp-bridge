@@ -11,6 +11,7 @@ import {
   moveToColumn,
   perGroup,
   readBacklogId,
+  readGroupStages,
   readScrumTask,
   readTaskStage,
   refuseClosingColumns,
@@ -165,6 +166,23 @@ async function placeInSprint(
   return { sprintId, ...moved, fromBacklog };
 }
 
+const RETRY_TO_BACKLOG = "повтори bitrix_task_to_backlog — у задачи, уже стоящей в бэклоге, он переставит только стадию";
+
+// Moving the scrum item leaves STAGE_ID on the sprint column. movetask answers false for a backlog
+// task; a plain field update does what the UI's drag into the backlog ends up with.
+async function leaveSprintColumn(ctx: OpContext, taskId: number, start: { id: number; name: string }) {
+  await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { STAGE_ID: start.id } } }).catch((e: unknown) => {
+    throw new Error(`задача в бэклоге, но осталась в колонке спринта (${errorMessage(e)}) — ${RETRY_TO_BACKLOG}`);
+  });
+  const { stageId } = await readTaskStage(ctx, taskId).catch((e: unknown) => {
+    throw new Error(`стадия отправлена, но перечитать задачу не удалось (проверь через bitrix_task_get): ${errorMessage(e)}`);
+  });
+  if (stageId !== start.id) {
+    throw new Error(`Bitrix ответил успехом, но задача в стадии ${stageId ?? "?"}, а не «${start.name}» (${start.id}) — ${RETRY_TO_BACKLOG}`);
+  }
+  return { stageId: start.id };
+}
+
 const MEMBERS_HINT =
   "add / remove — массивы userId (найти id по фамилии — bitrix_user_find); нужен хотя бы один непустой. " +
   "Список читается у каждой задачи заново, записывается целиком и перечитывается; если менять нечего, " +
@@ -292,24 +310,33 @@ export const WRITE_OPERATIONS: Operation[] = [
     name: "task_to_backlog",
     description:
       "⚠ МУТИРУЮЩИЙ. Вернуть задачи (taskIds — до 50) в БЭКЛОГ их scrum-проекта; с доски спринта они " +
-      "пропадают — это видят все участники проекта. Задачи, которые уже в бэклоге, не трогаются " +
+      "пропадают — это видят все участники проекта. Задача уходит из колонки спринта в стартовую стадию " +
+      "канбана проекта, как при переносе в веб-интерфейсе. Задача, которая уже в бэклоге, но всё ещё числится " +
+      "в колонке спринта, только переставляется в эту стадию; остальные задачи бэклога не трогаются " +
       "(changed: false). Задачи обрабатываются по очереди; ошибка одной не останавливает остальные. " +
-      "Ответ: { results: [{ taskId, ok, error?, backlogId, changed }] } — положение перечитано после переноса.",
+      "Ответ: { results: [{ taskId, ok, error?, backlogId, stageId, changed }] } — положение и стадия перечитаны после переноса.",
     mutating: true,
     budget: "long",
     input: { taskIds: taskIdsArg() },
     run: async (ctx, a) => {
       const backlogOf = perGroup((groupId) => readBacklogId(ctx, groupId));
+      const stagesOf = perGroup((groupId) => readGroupStages(ctx, groupId));
       return forEachTask(a.taskIds, async (taskId) => {
         const task = await readScrumTask(ctx, taskId);
         const backlogId = await backlogOf(task.groupId);
-        if (task.entityId === backlogId) return { backlogId, changed: false };
+        const stages = await stagesOf(task.groupId);
+        if (task.entityId === backlogId) {
+          const { stageId } = await readTaskStage(ctx, taskId);
+          // 0 turns up on backlog tasks too and is left as Bitrix keeps it.
+          if (!stageId || stages.ids.has(stageId)) return { backlogId, stageId: stageId ?? 0, changed: false };
+          return { backlogId, ...(await leaveSprintColumn(ctx, taskId, stages.start)), changed: true };
+        }
         await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: backlogId } } });
         const after = await readScrumTask(ctx, taskId).catch((e: unknown) => {
           throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${errorMessage(e)}`);
         });
         if (after.entityId !== backlogId) throw new Error(`Bitrix ответил успехом, но задача не в бэклоге (сейчас в ${after.entityId})`);
-        return { backlogId, changed: true };
+        return { backlogId, ...(await leaveSprintColumn(ctx, taskId, stages.start)), changed: true };
       });
     },
   }),
