@@ -62,9 +62,13 @@ export async function readDescription(ctx: OpContext, taskId: number): Promise<s
   return parseResponse(descriptionResponse, raw, "tasks.v2.Task.get (description)").data.description ?? "";
 }
 
-// tasks.task.update answers success without saying what it stored, so the description is read back.
+const DESCRIPTION_MAY_HAVE_CHANGED = "описание могло измениться — сверь через bitrix_task_get_v2 перед повтором";
+
+// tasks.task.update answers success without saying what it stored, so the description is read back;
+// its answer itself is not looked at.
 export async function writeDescription(ctx: OpContext, taskId: number, text: string) {
-  await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { DESCRIPTION: text } } });
+  const write = ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { DESCRIPTION: text } } });
+  await mayHaveHappened(write, z.unknown(), "tasks.task.update", DESCRIPTION_MAY_HAVE_CHANGED);
   const stored = await reread(readDescription(ctx, taskId), "bitrix_task_get_v2");
   if (stored !== text) {
     throw new Error(

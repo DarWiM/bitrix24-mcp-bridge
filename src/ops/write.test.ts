@@ -163,6 +163,17 @@ describe("task_description_set", () => {
     );
   });
 
+  it("warns the description may have changed when the write itself fails, without re-reading", async () => {
+    const { ctx, call } = fakeCtx(async () => {
+      throw new Error("request timed out");
+    });
+
+    await expect(op("task_description_set").execute(ctx, { taskId: 42, text: "x" })).rejects.toThrow(
+      "request timed out — описание могло измениться — сверь через bitrix_task_get_v2 перед повтором",
+    );
+    expect(call).toHaveBeenCalledTimes(1);
+  });
+
   for (const [title, reread, cause] of [
     ["comes back in an unexpected shape", async () => ({ status: "success", data: [] }), "tasks.v2.Task.get (description) returned an unexpected shape"],
     ["fails", async () => {
