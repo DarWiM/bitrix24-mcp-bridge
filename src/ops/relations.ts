@@ -191,27 +191,29 @@ export const RELATION_OPERATIONS: Operation[] = [
       const invalid = (message: string) => new OpInputError(`invalid arguments for task_gantt_link — ${message}`);
       if (a.dependentId === a.taskId) throw invalid("a task cannot depend on itself");
       if (a.remove && a.type !== undefined) throw invalid("type applies only when adding a link");
-      const ganttLink = { taskId: a.taskId, dependentId: a.dependentId };
+      const link = { taskId: a.taskId, dependentId: a.dependentId };
       const pair = { taskIdFrom: a.taskId, taskIdTo: a.dependentId };
       const readAfter = () => reread(hasGanttLinks(ctx, a.dependentId), `bitrix_task_get_v2 задачи ${a.dependentId}`);
 
       if (a.remove) {
         // `result: []` comes back on success too, so only the flag confirms the write.
         await ctx.call({ ...GANTT_DELETE, params: pair });
-        if (!(await readAfter())) return { ...ganttLink, linked: false, confirmed: true };
+        if (!(await readAfter())) return { ...link, linked: false, confirmed: true };
         return {
-          ...ganttLink,
+          ...link,
           linked: false,
           confirmed: false,
           note: "удаление отправлено, но у задачи остаются связи Ганта — подтвердить нельзя",
         };
       }
-      const before = await hasGanttLinks(ctx, a.dependentId);
+      const before = await hasGanttLinks(ctx, a.dependentId).catch((e: unknown) => {
+        throw new Error(`не удалось прочитать связи Ганта задачи ${a.dependentId}: ${errorMessage(e)}; ничего не записано — повтор безопасен`);
+      });
       await ctx.call({ ...GANTT_ADD, params: { ...pair, linkType: FINISH_START } });
       if (!(await readAfter())) throw new Error(`Bitrix ответил успехом, но не применил связь: у задачи ${a.dependentId} нет связей Ганта`);
-      if (!before) return { ...ganttLink, linked: true, confirmed: true };
+      if (!before) return { ...link, linked: true, confirmed: true };
       return {
-        ...ganttLink,
+        ...link,
         linked: true,
         confirmed: false,
         note: "связь отправлена; у задачи уже были связи Ганта — подтвердить именно эту нельзя",

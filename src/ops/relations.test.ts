@@ -340,7 +340,7 @@ describe("task_gantt_link", () => {
     for (const reply of [ganttFlag(null), { status: "success", data: { id: 43 } }, new Error("доступ запрещён")]) {
       const { ctx, call } = fakeCtx(replies(reply));
 
-      await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow();
+      await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/ничего не записано — повтор безопасен$/);
       expect(call).toHaveBeenCalledTimes(1);
     }
   });
