@@ -6,7 +6,7 @@
 import { z } from "zod";
 import { forEachTask, taskIdsArg } from "./batch.js";
 import { currentUserId } from "./board.js";
-import { numeric, parseResponse, reread } from "./calls.js";
+import { mayHaveHappened, numeric, parseResponse, reread } from "./calls.js";
 import { TASK_V2_UPDATE, dateArg, fromTs, sameMinute, toTs } from "./content.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
@@ -69,6 +69,7 @@ async function ownReminder(ctx: OpContext, taskId: number, reminderId: number, n
 const reminderView = (r: Reminder) => ({ id: r.id, at: fromTs(r.nextRemindTs), via: r.remindVia, remindBy: r.remindBy, recipient: r.recipient });
 
 const DATE_FORMAT = 'ISO 8601 со смещением (напр. "2026-11-10T09:00:00+03:00" или "…Z")';
+const REMINDER_MAY_EXIST = "напоминание могло создаться — проверь bitrix_task_reminders перед повтором";
 const BATCH_NOTE = "Задачи обрабатываются по очереди; ошибка одной не останавливает остальные.";
 
 export const ATTRIBUTE_OPERATIONS: Operation[] = [
@@ -173,13 +174,8 @@ export const ATTRIBUTE_OPERATIONS: Operation[] = [
         const userId = await currentUserId(ctx);
         // The id the task card makes up for a reminder not saved yet; Bitrix answers with the real one.
         const draft = { id: `tmp${Date.now()}`, taskId, userId, nextRemindTs, remindBy: "date", remindVia: a.via, recipient: "myself", before: 0 };
-        const parsed = reminderAddResponse.safeParse(await ctx.call({ ...REMINDER_ADD, params: { reminder: draft } }));
-        if (!parsed.success) {
-          throw new Error(
-            "tasks.v2.Task.Reminder.add returned an unexpected shape — напоминание могло создаться, проверь bitrix_task_reminders перед повтором",
-          );
-        }
-        id = parsed.data.data.id;
+        const write = ctx.call({ ...REMINDER_ADD, params: { reminder: draft } });
+        id = (await mayHaveHappened(write, reminderAddResponse, "tasks.v2.Task.Reminder.add", REMINDER_MAY_EXIST)).data.id;
         recipient = draft.recipient;
       } else {
         const current = await ownReminder(ctx, taskId, a.reminderId, "ничего не изменено");

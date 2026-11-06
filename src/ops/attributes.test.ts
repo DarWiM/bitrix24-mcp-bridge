@@ -317,6 +317,19 @@ describe("task_reminder_set", () => {
     expect(call).toHaveBeenCalledTimes(2);
   });
 
+  it("warns that a reminder may exist when the add request itself fails", async () => {
+    let n = 0;
+    const { ctx, call } = fakeCtx(async () => {
+      if (n++ === 0) return ME;
+      throw new Error("request timed out");
+    });
+
+    await expect(op("task_reminder_set").execute(ctx, { taskId: 42, at, via: "notification" })).rejects.toThrow(
+      "request timed out — напоминание могло создаться — проверь bitrix_task_reminders перед повтором",
+    );
+    expect(call).toHaveBeenCalledTimes(2);
+  });
+
   it("fails an added reminder whose channel, kind or recipient is not the one sent", async () => {
     for (const stored of [
       reminder({ remindVia: "notification" }),

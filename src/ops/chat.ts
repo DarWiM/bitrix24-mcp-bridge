@@ -3,8 +3,8 @@
 // says it does.
 
 import { z } from "zod";
-import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
-import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
+import { forEachTask, taskIdsArg } from "./batch.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { callTarget } from "./read.js";
 
@@ -40,14 +40,7 @@ const INVISIBLE = /[\s\u200B-\u200D\u2060\uFEFF]/g;
 
 async function postMessage(ctx: OpContext, dialogId: string, text: string, replyTo?: number) {
   const params = { DIALOG_ID: dialogId, MESSAGE: text, ...(replyTo !== undefined ? { REPLY_ID: replyTo } : {}) };
-  // Neither a timeout, a lost extension nor an unrecognised answer means the portal did not post
-  // it: a blind retry would post it twice.
-  const raw = await ctx.call({ ...MESSAGE_ADD, params }).catch((e: unknown) => {
-    throw new Error(`${errorMessage(e)} — ${SEND_MAY_HAVE_GONE}`);
-  });
-  const parsed = messageResponse.safeParse(raw);
-  if (!parsed.success) throw new Error(`im.message.add returned an unexpected shape — ${SEND_MAY_HAVE_GONE}`);
-  return parsed.data.result;
+  return (await mayHaveHappened(ctx.call({ ...MESSAGE_ADD, params }), messageResponse, "im.message.add", SEND_MAY_HAVE_GONE)).result;
 }
 
 async function readTaskChat(ctx: OpContext, taskId: number) {

@@ -17,7 +17,7 @@ import {
   targetColumn,
   type SprintColumn,
 } from "./board.js";
-import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
@@ -126,6 +126,7 @@ function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITO
 const RETRY_FROM_BACKLOG = "верни её в бэклог (bitrix_task_to_backlog) и повтори";
 const NO_FINISH_COLUMN = "Колонку типа FINISH указать нельзя (Bitrix завершил бы задачу в обход Definition of Done) — закрывай через bitrix_task_close.";
 const CREATE_MAY_EXIST = "задача могла создаться, проверь доску спринта перед повтором";
+const RESULT_MAY_EXIST = "результат мог добавиться — проверь bitrix_task_get / карточку задачи перед повтором";
 
 async function placeInSprint(
   ctx: OpContext,
@@ -306,34 +307,26 @@ export const WRITE_OPERATIONS: Operation[] = [
       const target = targetColumn(columns, a.column);
       refuseClosingColumns([target]);
       const userId = await currentUserId(ctx);
-      // A timeout or a lost extension does not mean the portal did not create the task: every error
-      // from here on keeps the agent from creating it twice.
-      const raw = await ctx
-        .call({
-          ...BOARD_CREATE,
+      const creating = ctx.call({
+        ...BOARD_CREATE,
+        params: {
+          taskName: a.title,
+          columnId: target.id,
+          parentTaskId: 0,
+          beforeItemId: 0,
           params: {
-            taskName: a.title,
-            columnId: target.id,
-            parentTaskId: 0,
-            beforeItemId: 0,
-            params: {
-              USER_ID: userId,
-              GROUP_ID: a.groupId,
-              GROUP_ID_FORCED: 0,
-              SPRINT_ID: sprintId,
-              IS_COMPLETED_SPRINT: "N",
-              PERSONAL: "N",
-              TIMELINE_MODE: "N",
-            },
-            personal: "N",
+            USER_ID: userId,
+            GROUP_ID: a.groupId,
+            GROUP_ID_FORCED: 0,
+            SPRINT_ID: sprintId,
+            IS_COMPLETED_SPRINT: "N",
+            PERSONAL: "N",
+            TIMELINE_MODE: "N",
           },
-        })
-        .catch((e: unknown) => {
-          throw new Error(`${errorMessage(e)} — ${CREATE_MAY_EXIST}`);
-        });
-      const parsed = boardCreateResponse.safeParse(raw);
-      if (!parsed.success) throw new Error(`bitrix:tasks.kanban addTask returned an unexpected shape — ${CREATE_MAY_EXIST}`);
-      const created = parsed.data.data;
+          personal: "N",
+        },
+      });
+      const created = (await mayHaveHappened(creating, boardCreateResponse, "bitrix:tasks.kanban addTask", CREATE_MAY_EXIST)).data;
       if (created.columnId != null && created.columnId !== target.id) {
         throw new Error(`задача ${created.id} создана, но в колонке ${created.columnId}, а не «${target.name}» (${target.id})`);
       }
@@ -353,8 +346,8 @@ export const WRITE_OPERATIONS: Operation[] = [
     input: { taskIds: taskIdsArg(), text: z.string().min(1).max(RESULT_MAX) },
     run: (ctx, a) =>
       forEachTask(a.taskIds, async (taskId) => {
-        const raw = await ctx.call({ ...RESULT_ADD, params: { results: [{ taskId, text: a.text }] } });
-        return { resultId: parseResponse(resultAddResponse, raw, "tasks.v2.Task.Result.add").data[0].id };
+        const write = ctx.call({ ...RESULT_ADD, params: { results: [{ taskId, text: a.text }] } });
+        return { resultId: (await mayHaveHappened(write, resultAddResponse, "tasks.v2.Task.Result.add", RESULT_MAY_EXIST)).data[0].id };
       }),
   }),
   defineOperation({

@@ -362,6 +362,8 @@ describe("task_move", () => {
 });
 
 describe("task_result_add", () => {
+  const RESULT_MAY_EXIST = "результат мог добавиться — проверь bitrix_task_get / карточку задачи перед повтором";
+
   it("sends tasks.v2.Task.Result.add as json per task and returns each new result id", async () => {
     const { ctx, call } = fakeCtx(
       replies(
@@ -377,8 +379,25 @@ describe("task_result_add", () => {
     expect(result).toEqual({
       results: [
         { taskId: 42, ok: true, resultId: 913 },
-        { taskId: 43, ok: false, error: "tasks.v2.Task.Result.add returned an unexpected shape" },
+        { taskId: 43, ok: false, error: `tasks.v2.Task.Result.add returned an unexpected shape — ${RESULT_MAY_EXIST}` },
         { taskId: 44, ok: true, resultId: 915 },
+      ],
+    });
+  });
+
+  it("warns the result may exist when the add request itself fails, and goes on with the next task", async () => {
+    let n = 0;
+    const { ctx } = fakeCtx(async () => {
+      if (n++ === 0) throw new Error("request timed out");
+      return { status: "success", data: [{ id: 914, taskId: 43, text: "Готово" }], errors: [] };
+    });
+
+    const result = await op("task_result_add").execute(ctx, { taskIds: [42, 43], text: "Готово" });
+
+    expect(result).toEqual({
+      results: [
+        { taskId: 42, ok: false, error: `request timed out — ${RESULT_MAY_EXIST}` },
+        { taskId: 43, ok: true, resultId: 914 },
       ],
     });
   });

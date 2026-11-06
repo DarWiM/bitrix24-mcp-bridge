@@ -7,7 +7,7 @@ import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { errorMessage } from "./batch.js";
 import { currentUserId } from "./board.js";
-import { REST_TASK_GET, numeric, parseResponse, restMethod, reread } from "./calls.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, restMethod, reread } from "./calls.js";
 import { BUDGET_TIMEOUT_MS, OpInputError, UPLOAD_TIMEOUT_MS, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 
 const STORAGE_LIST = restMethod("disk.storage.getlist");
@@ -124,28 +124,18 @@ export const FILE_OPERATIONS: Operation[] = [
       await readTaskFiles(ctx, taskId);
       const rootId = await userDiskRoot(ctx);
 
-      // A timed-out or dropped upload may still have reached Disk.
       const mayBeOnDisk = `файл мог загрузиться на Диск — проверь корневую папку Диска (имя «${fileName}», возможно с суффиксом) перед повтором`;
       const upload = { id: rootId, data: { NAME: fileName }, fileContent: [fileName, bytes.toString("base64")], generateUniqueName: true };
-      const raw = await ctx.call({ ...UPLOAD, params: upload }, ctx.portal, { timeoutMs: uploadTimeout(startedAt) }).catch((e: unknown) => {
-        throw new Error(`загрузка не подтверждена: ${errorMessage(e)} — ${mayBeOnDisk}`);
-      });
-      const parsed = uploadResponse.safeParse(raw);
-      if (!parsed.success) throw new Error(`disk.folder.uploadfile returned an unexpected shape — ${mayBeOnDisk}`);
-      const disk = parsed.data.result;
+      const uploading = ctx.call({ ...UPLOAD, params: upload }, ctx.portal, { timeoutMs: uploadTimeout(startedAt) });
+      const disk = (await mayHaveHappened(uploading, uploadResponse, "disk.folder.uploadfile", mayBeOnDisk)).result;
       const onDisk = `файл «${disk.NAME}» (id ${disk.ID}) — в корне твоего Диска`;
       if (disk.SIZE !== bytes.length) {
         throw new Error(`на Диск загружено ${disk.SIZE} байт вместо ${bytes.length} — к задаче не прикреплён, ${onDisk}`);
       }
 
-      // Neither a timeout nor an unrecognised answer means nothing was attached: a retry could attach twice.
       const mayBeAttached = `вложение могло создаться — проверь bitrix_task_files перед повтором; ${onDisk}`;
-      const attachRaw = await ctx.call({ ...ATTACH, params: { taskId, fileId: disk.ID } }).catch((e: unknown) => {
-        throw new Error(`прикрепление к задаче ${taskId} не подтверждено: ${errorMessage(e)} — ${mayBeAttached}`);
-      });
-      const attachment = attachResponse.safeParse(attachRaw);
-      if (!attachment.success) throw new Error(`tasks.task.files.attach returned an unexpected shape — ${mayBeAttached}`);
-      const { attachmentId } = attachment.data.result;
+      const attaching = ctx.call({ ...ATTACH, params: { taskId, fileId: disk.ID } });
+      const { attachmentId } = (await mayHaveHappened(attaching, attachResponse, "tasks.task.files.attach", mayBeAttached)).result;
 
       const files = await reread(readTaskFiles(ctx, taskId), "bitrix_task_files").catch((e: unknown) => {
         throw new Error(`${errorMessage(e)}; ${onDisk}`);

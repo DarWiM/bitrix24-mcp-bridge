@@ -18,6 +18,23 @@ export function parseResponse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, ra
   return parsed.data;
 }
 
+// Neither a timeout, a lost extension nor an unrecognised answer means the portal did not do the
+// write: `unconfirmed` says what may have happened and what to check, so that a blind retry does not
+// do it twice.
+export async function mayHaveHappened<T>(
+  write: Promise<unknown>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  method: string,
+  unconfirmed: string,
+): Promise<T> {
+  const raw = await write.catch((e: unknown) => {
+    throw new Error(`${errorMessage(e)} — ${unconfirmed}`);
+  });
+  const parsed = schema.safeParse(raw);
+  if (!parsed.success) throw new Error(`${method} returned an unexpected shape — ${unconfirmed}`);
+  return parsed.data;
+}
+
 // The write went out: a failed re-read must not read as a failed write.
 export const reread = <T>(read: Promise<T>, checkWith: string) =>
   read.catch((e: unknown) => {
