@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { materializedVersion, refreshMaterializedExtension } from "./config-core.js";
+import { materializedVersion, refreshMaterializedExtension, syncMaterializedExtension } from "./config-core.js";
 import type { ServerConfig } from "./config-core.js";
 
 const temps: string[] = [];
@@ -57,5 +57,45 @@ describe("refreshMaterializedExtension", () => {
     const { home, staticExtDir } = installed(null);
     expect(refreshMaterializedExtension({ home, config, staticExtDir })).toBeNull();
     expect(existsSync(join(home, "extension"))).toBe(false);
+  });
+});
+
+describe("syncMaterializedExtension", () => {
+  function runtimeHome(opts: { extension: boolean; config: boolean }) {
+    const { home, staticExtDir } = installed(opts.extension ? "0.4.0" : null);
+    if (opts.config) writeFileSync(join(home, "config.json"), JSON.stringify(config));
+    mkdirSync(join(home, "downloads"), { recursive: true });
+    writeFileSync(join(home, "downloads", "call.mp3"), "audio");
+    return { home, staticExtDir };
+  }
+
+  it("re-materializes a set-up extension from the runtime config, stamped with the given version", () => {
+    const { home, staticExtDir } = runtimeHome({ extension: true, config: true });
+
+    expect(syncMaterializedExtension({ home, staticExtDir, version: "0.5.0" })).toBe(join(home, "extension"));
+
+    expect(readFileSync(join(home, "extension", "connector.js"), "utf8")).toBe("// connector.js v2");
+    expect(JSON.parse(readFileSync(join(home, "extension", "config.json"), "utf8"))).toEqual({ token: config.token, port: config.port });
+    const manifest = JSON.parse(readFileSync(join(home, "extension", "manifest.json"), "utf8"));
+    expect(manifest.version).toBe("0.5.0");
+    expect(manifest.host_permissions).toEqual(["https://acme.bitrix24.ru/*"]);
+    expect(readFileSync(join(home, "downloads", "call.mp3"), "utf8")).toBe("audio");
+  });
+
+  it("does not create an extension that was never set up", () => {
+    const { home, staticExtDir } = runtimeHome({ extension: false, config: true });
+
+    expect(syncMaterializedExtension({ home, staticExtDir, version: "0.5.0" })).toBeNull();
+
+    expect(existsSync(join(home, "extension"))).toBe(false);
+    expect(readFileSync(join(home, "downloads", "call.mp3"), "utf8")).toBe("audio");
+  });
+
+  it("leaves the extension alone without a runtime config.json", () => {
+    const { home, staticExtDir } = runtimeHome({ extension: true, config: false });
+
+    expect(syncMaterializedExtension({ home, staticExtDir, version: "0.5.0" })).toBeNull();
+
+    expect(readFileSync(join(home, "extension", "connector.js"), "utf8")).toBe("// old bundle");
   });
 });

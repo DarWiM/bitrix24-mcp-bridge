@@ -11,7 +11,6 @@ describe("runtimePaths", () => {
     expect(p.configJson).toBe(join(p.home, "config.json"));
     expect(p.sock).toBe(join(p.home, "bridge.sock"));
     expect(p.lock).toBe(join(p.home, "bridge.lock"));
-    expect(p.actionsJson).toBe(join(p.home, "actions.json"));
     expect(p.extensionDir).toBe(join(p.home, "extension"));
   });
 

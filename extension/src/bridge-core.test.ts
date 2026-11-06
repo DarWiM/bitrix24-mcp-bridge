@@ -84,6 +84,23 @@ describe("interpret", () => {
     expect(r.error).toContain("QUERY_LIMIT_EXCEEDED");
     expect(r.error).toContain("too many");
   });
+  it("keeps a numeric ajax error code", () => {
+    expect(interpret({ errors: [{ code: 5, message: "x" }] }).error).toBe("5: x");
+  });
+  it("keeps a numeric classic REST error code", () => {
+    expect(interpret({ error: 100, error_description: "d" }).error).toBe("100: d");
+  });
+  it("treats a zero code as absent and falls back to the message", () => {
+    expect(interpret({ errors: [{ code: 0, message: "m" }] }).error).toBe("m");
+  });
+  it("uses the message of a REST 3.0 error object that has no code", () => {
+    expect(interpret({ error: { message: "only message" } }).error).toBe("only message");
+  });
+  it("reads code and message from a REST 3.0 error object", () => {
+    const r = interpret({ error: { code: "BITRIX_REST_V3_EXCEPTION_ACCESSDENIEDEXCEPTION", message: "Доступ запрещен" } });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe("BITRIX_REST_V3_EXCEPTION_ACCESSDENIEDEXCEPTION: Доступ запрещен");
+  });
 });
 
 describe("applyPathParams", () => {

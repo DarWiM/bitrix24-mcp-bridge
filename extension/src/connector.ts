@@ -26,12 +26,8 @@ import {
   parseConfig,
   buildSessidRequest,
   parseSessidResponse,
-  parseCaptureForward,
   type BridgeConfig,
 } from "./bridge-protocol.ts";
-
-// Gates the capture relay listener; stripped from normal builds via esbuild `define`.
-declare const __BITRIX_CAPTURE__: boolean;
 
 // Minimal ambient for the one chrome API we use (no @types/chrome dependency).
 declare const chrome: { runtime: { getURL(path: string): string; getManifest(): { version?: string } } };
@@ -146,18 +142,6 @@ function connect(config: BridgeConfig): void {
   ws.addEventListener("close", () => {
     if (socket === ws) socket = null;
     setTimeout(() => connect(config), RECONNECT_MS); // auto-reconnect
-  });
-}
-
-// Capture build only: relay MAIN-observed capture entries to the daemon.
-if (__BITRIX_CAPTURE__) {
-  window.addEventListener("message", (ev: MessageEvent) => {
-    if (ev.source !== window) return;
-    const fwd = parseCaptureForward(ev.data);
-    if (!fwd) return;
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type: "capture", call: fwd.call }));
-    }
   });
 }
 

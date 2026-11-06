@@ -71,6 +71,17 @@ describe("Bridge", () => {
     expect(closed).toBe(true);
   });
 
+  it("times a call out after the timeout it is given, leaving other calls on the regular one", async () => {
+    bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [] });
+    await bridge.start();
+    await connect(TOKEN); // never answers
+    await new Promise((r) => setTimeout(r, 50));
+    const regular = bridge.call("", target).then(() => "answered", () => "rejected");
+    await expect(bridge.call("", target, 50)).rejects.toThrow(/timed out/);
+    const after = await Promise.race([regular, new Promise((r) => setTimeout(() => r("pending"), 200))]);
+    expect(after).toBe("pending");
+  });
+
   it("rejects promptly (not after the 30s timeout) when send() throws after socket selection", async () => {
     bridge = new Bridge({ port: PORT, token: TOKEN, allowedOrigins: [] });
     await bridge.start();

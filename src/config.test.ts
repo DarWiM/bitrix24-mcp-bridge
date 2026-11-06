@@ -1,12 +1,8 @@
 import { describe, it, expect } from "bun:test";
-import { isAbsolute } from "node:path";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, loadConfigState } from "./config.js";
-import { runtimePaths } from "./paths.js";
-import { createInitialConfig, writeServerConfig } from "./setup/config-core.js";
-import { loadCatalog } from "./catalog/catalog.js";
 
 describe("loadConfig", () => {
   it("builds a single-portal config from env (dev)", () => {
@@ -44,37 +40,55 @@ describe("loadConfig", () => {
     expect(cfg.bitrixOrigin).toBe("https://acme.bitrix24.ru");
   });
 
-  it("anchors an explicit relative catalog path at the project root", () => {
-    const cfg = loadConfig({
-      BITRIX_MCP_TOKEN: "secret",
-      BITRIX_ORIGIN: "https://portal.bitrix24.ru",
-      BITRIX24_MCP_BRIDGE_HOME: "/tmp/br24-does-not-exist",
-      BITRIX_CATALOG: "actions.json",
+  describe("allowMutations", () => {
+    const withFile = (file: object) => {
+      const home = mkdtempSync(join(tmpdir(), "br24-"));
+      writeFileSync(join(home, "config.json"), JSON.stringify({
+        token: "t",
+        portals: { acme: { origin: "https://acme.bitrix24.ru" } },
+        ...file,
+      }));
+      return home;
+    };
+
+    it("defaults to true", () => {
+      expect(loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({}) }).allowMutations).toBe(true);
     });
-    expect(isAbsolute(cfg.catalogPath)).toBe(true);
-    expect(cfg.catalogPath.endsWith("/actions.json")).toBe(true);
-    expect(cfg.catalogPath).not.toBe(runtimePaths({ BITRIX24_MCP_BRIDGE_HOME: "/tmp/br24-does-not-exist" }).actionsJson);
+
+    it("file mutations:false disables", () => {
+      expect(loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({ mutations: false }) }).allowMutations).toBe(false);
+    });
+
+    it("rejects a non-boolean file value instead of leaving mutations enabled", () => {
+      for (const bad of ["false", "off", 0]) {
+        expect(() => loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({ mutations: bad }) })).toThrow(/"mutations"/);
+      }
+    });
+
+    it("env wins over the file in both directions", () => {
+      const off = loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({}), BITRIX_MCP_MUTATIONS: "off" });
+      expect(off.allowMutations).toBe(false);
+      const on = loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({ mutations: false }), BITRIX_MCP_MUTATIONS: "ON" });
+      expect(on.allowMutations).toBe(true);
+    });
+
+    it("rejects an unknown env value, naming the variable", () => {
+      expect(() => loadConfig({ BITRIX24_MCP_BRIDGE_HOME: withFile({}), BITRIX_MCP_MUTATIONS: "maybe" }))
+        .toThrow(/BITRIX_MCP_MUTATIONS/);
+    });
   });
 
-  it("defaults the catalog path to the runtime home when nothing is configured", () => {
-    const env = { BITRIX24_MCP_BRIDGE_HOME: "/tmp/br24-does-not-exist" };
-    const cfg = loadConfig({
-      BITRIX_MCP_TOKEN: "secret",
-      BITRIX_ORIGIN: "https://portal.bitrix24.ru",
-      ...env,
-    });
-    expect(cfg.catalogPath).toBe(runtimePaths(env).actionsJson);
-  });
-
-  it("end-to-end: a setup-seeded actions.json at the runtime home is the catalog loadConfig resolves and loadCatalog can read", () => {
-    const home = mkdtempSync(join(tmpdir(), "br24-e2e-"));
-    const serverConfig = createInitialConfig({ origin: "https://acme.bitrix24.ru", alias: "acme" });
-    writeServerConfig(home, serverConfig);
-    writeFileSync(join(home, "actions.json"), JSON.stringify({ ping: { action: "ping" } }));
-
+  it("ignores the retired catalog keys left in an existing config.json", () => {
+    const home = mkdtempSync(join(tmpdir(), "br24-"));
+    writeFileSync(join(home, "config.json"), JSON.stringify({
+      token: "file-token",
+      catalog: "actions.json",
+      portals: { acme: { origin: "https://acme.bitrix24.ru/", catalog: "acme.json" } },
+    }));
     const cfg = loadConfig({ BITRIX24_MCP_BRIDGE_HOME: home });
-    expect(cfg.catalogPath).toBe(join(home, "actions.json"));
-    expect(() => loadCatalog(cfg.catalogPath)).not.toThrow();
+    expect(cfg.token).toBe("file-token");
+    expect(cfg.portals.acme).toEqual({ origin: "https://acme.bitrix24.ru" });
+    expect(cfg).not.toHaveProperty("catalogPath");
   });
 
   it("throws when no token is available", () => {
@@ -96,7 +110,7 @@ describe("loadConfig", () => {
     writeFileSync(join(home, "config.json"), JSON.stringify({
       token: "file-token",
       portals: {
-        acme: { catalog: "acme.json" },
+        acme: {},
       },
     }));
     expect(() => loadConfig({ BITRIX24_MCP_BRIDGE_HOME: home })).toThrow(/origin/i);

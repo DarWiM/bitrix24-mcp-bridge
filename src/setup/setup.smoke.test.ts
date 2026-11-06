@@ -31,7 +31,7 @@ describe("setup first-run smoke", () => {
     expect(cfg.portals.acme.origin).toBe("https://acme.bitrix24.ru");
     expect(cfg.token).toMatch(/^[0-9a-f]{64}$/);
 
-    expect(existsSync(join(home, "actions.json"))).toBe(true);
+    expect(existsSync(join(home, "actions.json"))).toBe(false); // no catalog is seeded any more
 
     const manifest = JSON.parse(readFileSync(join(home, "extension/manifest.json"), "utf8"));
     expect(manifest.content_scripts[0].matches).toEqual(["https://acme.bitrix24.ru/*"]);

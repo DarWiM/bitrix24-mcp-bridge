@@ -1,9 +1,14 @@
 import { createServer, Server, Socket } from "node:net";
 import { existsSync, mkdirSync, unlinkSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
+import { z } from "zod";
 import { Bridge } from "./server.js";
 import { encodeFrame, FrameDecoder } from "./frame.js";
 import type { CallResult } from "./protocol.js";
+import { OPERATIONS } from "../ops/index.js";
+import { OpRefusedError, type OpContext } from "../ops/operation.js";
+import { createRegistry, runOperation, type Registry } from "../ops/registry.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 export interface PortalConnection {
   alias: string;
@@ -19,7 +24,15 @@ export interface DaemonOptions {
   portals: Record<string, { origin: string }>;
   sockPath: string;
   idleMs?: number;
+  defaultPortal: string;
+  downloadsDir: string;
+  allowMutations: boolean;
+  registry?: Registry;
 }
+
+// Frames come straight off the socket as untyped JSON: every field is checked where it is used.
+const udsRequest = z.object({ type: z.unknown(), id: z.unknown(), portal: z.unknown(), op: z.unknown(), args: z.unknown() });
+type UdsRequest = z.infer<typeof udsRequest>;
 
 export class DaemonAlreadyRunning extends Error {
   constructor(sock: string) { super(`a daemon is already running on ${sock}`); }
@@ -27,6 +40,8 @@ export class DaemonAlreadyRunning extends Error {
 
 export class Daemon {
   private bridge: Bridge;
+  private registry: Registry;
+  private origins: Record<string, string>;
   private uds?: Server;
   private clients = new Set<Socket>();
   private idleTimer?: NodeJS.Timeout;
@@ -39,6 +54,8 @@ export class Daemon {
       token: opts.token,
       allowedOrigins: Object.values(opts.portals).map((p) => p.origin),
     });
+    this.registry = opts.registry ?? createRegistry(OPERATIONS);
+    this.origins = Object.fromEntries(Object.entries(opts.portals).map(([alias, p]) => [alias, p.origin]));
   }
 
   get port(): number {
@@ -88,44 +105,7 @@ export class Daemon {
       // A malformed frame must never crash the daemon (that would kill routing for
       // every portal). Drop the bad data for this connection and keep serving.
       try {
-        for (const msg of dec.push(chunk) as any[]) {
-          if (msg?.type === "shutdown") {
-            // setImmediate alone is not a flush barrier — sequence stop() on the WRITE
-            // CALLBACK so sock.destroy() can never race the buffered ack.
-            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { stopping: true } }), () => {
-              setImmediate(() => void this.stop());
-            });
-            continue;
-          }
-          if (msg?.type === "status") {
-            const connected = this.bridge.connectedOrigins();
-            const portals: PortalConnection[] = Object.entries(this.opts.portals).map(
-              ([alias, p]) => ({
-                alias,
-                origin: p.origin,
-                connected: connected.includes(p.origin),
-                extensionVersion: this.bridge.extensionVersion(p.origin),
-              }),
-            );
-            sock.write(encodeFrame({ type: "result", id: msg.id, ok: true, data: { portals } }));
-            continue;
-          }
-          if (msg?.type !== "call") continue;
-          const origin = this.resolveOrigin(msg.portal);
-          const reply = (r: CallResult) => sock.write(encodeFrame(r));
-          if (!origin) {
-            reply({ type: "result", id: msg.id, ok: false, error: `unknown portal "${msg.portal}"` });
-            continue;
-          }
-          const target = { endpoint: msg.endpoint, action: msg.action, method: msg.method, params: msg.params, bodyType: msg.bodyType, responseType: msg.responseType };
-          // savePath stays daemon-side: the browser has no business knowing local paths.
-          const run = msg.responseType === "binary" && typeof msg.savePath === "string"
-            ? this.bridge.callBinary(origin, target, msg.savePath)
-            : this.bridge.call(origin, target);
-          run
-            .then((data) => reply({ type: "result", id: msg.id, ok: true, data }))
-            .catch((e) => reply({ type: "result", id: msg.id, ok: false, error: e instanceof Error ? e.message : String(e) }));
-        }
+        for (const frame of dec.push(chunk)) this.onRequest(sock, frame);
       } catch (e) {
         console.error(`[daemon] dropping malformed UDS data: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -134,10 +114,80 @@ export class Daemon {
     sock.on("error", () => { this.clients.delete(sock); this.armIdle(); });
   }
 
-  private resolveOrigin(portal: string | undefined): string | undefined {
-    const entries = Object.entries(this.opts.portals);
-    if (!portal) return entries.length === 1 ? entries[0][1].origin : undefined;
-    return this.opts.portals[portal]?.origin;
+  private onRequest(sock: Socket, frame: unknown) {
+    const parsed = udsRequest.safeParse(frame);
+    // Without a string id no client can be waiting on a reply, so there is no one to answer.
+    if (!parsed.success || typeof parsed.data.id !== "string") {
+      console.error("[daemon] dropping UDS request without a string id");
+      return;
+    }
+    const req = parsed.data;
+    const id = parsed.data.id;
+    const reply = (r: CallResult) => sock.write(encodeFrame(r));
+    switch (req.type) {
+      case "shutdown":
+        // setImmediate alone is not a flush barrier — sequence stop() on the WRITE
+        // CALLBACK so sock.destroy() can never race the buffered ack.
+        sock.write(encodeFrame({ type: "result", id, ok: true, data: { stopping: true } }), () => {
+          setImmediate(() => void this.stop());
+        });
+        return;
+      case "status": {
+        const connected = this.bridge.connectedOrigins();
+        const portals: PortalConnection[] = Object.entries(this.opts.portals).map(
+          ([alias, p]) => ({
+            alias,
+            origin: p.origin,
+            connected: connected.includes(p.origin),
+            extensionVersion: this.bridge.extensionVersion(p.origin),
+          }),
+        );
+        reply({ type: "result", id, ok: true, data: { portals, version: PACKAGE_VERSION, mutations: this.opts.allowMutations } });
+        return;
+      }
+      case "op":
+        this.handleOp(id, req, reply);
+        return;
+      default:
+        // A client waiting on this id would otherwise hang until its own timeout. The likely sender
+        // is a client from another version still running in an agent session.
+        reply({
+          type: "result",
+          id,
+          ok: false,
+          error:
+            `unsupported request type ${String(req.type)} — this daemon is ${PACKAGE_VERSION}; ` +
+            "restart the agent session / update the MCP client",
+        });
+    }
+  }
+
+  private handleOp(id: string, frame: UdsRequest, reply: (r: CallResult) => void) {
+    const fail = (e: unknown) => reply({ type: "result", id, ok: false, error: e instanceof Error ? e.message : String(e) });
+    if (typeof frame.op !== "string") return fail("invalid op request: op must be a string");
+    if (frame.portal !== undefined && typeof frame.portal !== "string") return fail("invalid op request: portal must be a string");
+    // An empty portal means "the default", like an absent one.
+    const alias = frame.portal || this.opts.defaultPortal;
+    if (!Object.hasOwn(this.origins, alias)) return fail(`unknown portal "${alias}"`);
+    runOperation(this.registry, frame.op, frame.args, this.opContext(alias), { allowMutations: this.opts.allowMutations })
+      .then((data) => reply({ type: "result", id, ok: true, data }))
+      .catch(fail);
+  }
+
+  private opContext(alias: string): OpContext {
+    // hasOwn, not a plain lookup: an alias like "constructor" must not resolve to a prototype member.
+    const originOf = (portal: string) => {
+      if (!Object.hasOwn(this.origins, portal)) throw new OpRefusedError(`unknown portal "${portal}"`);
+      return this.origins[portal];
+    };
+    return {
+      portal: alias,
+      origin: this.origins[alias],
+      origins: { ...this.origins },
+      downloadsDir: this.opts.downloadsDir,
+      call: async (target, portal = alias, opts) => this.bridge.call(originOf(portal), target, opts?.timeoutMs),
+      callBinary: async (target, destPath, portal = alias) => this.bridge.callBinary(originOf(portal), target, destPath),
+    };
   }
 
   private armIdle() {

@@ -1,11 +1,11 @@
 import { createInterface } from "node:readline/promises";
 import type { Interface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { existsSync, copyFileSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { runtimePaths } from "../paths.js";
 import type { RuntimePaths } from "../paths.js";
-import { PROJECT_ROOT } from "../config.js";
+import { parseMutationsEnv, PROJECT_ROOT } from "../config.js";
 import {
   createInitialConfig,
   readServerConfig,
@@ -14,9 +14,9 @@ import {
   validateOrigin,
 } from "./config-core.js";
 import type { ServerConfig } from "./config-core.js";
-import { applySetupCommand } from "./setup-reducer.js";
+import { applySetupCommand, toggleMutations } from "./setup-reducer.js";
 import type { SetupCommand, SetupResult } from "./setup-reducer.js";
-import { requestDaemonShutdown } from "../bridge/uds-client.js";
+import { stopDaemon } from "../bridge/uds-client.js";
 
 type Ask = (query: string) => Promise<string>;
 
@@ -38,10 +38,6 @@ function staticExtDir(): string {
   return join(PROJECT_ROOT, "extension/dist");
 }
 
-function actionsExample(): string {
-  return join(PROJECT_ROOT, "actions.example.json");
-}
-
 function defaultAlias(origin: string): string {
   try {
     const label = new URL(origin).hostname.split(".")[0];
@@ -49,12 +45,6 @@ function defaultAlias(origin: string): string {
   } catch {
     return "portal";
   }
-}
-
-function seedActions(paths: RuntimePaths): void {
-  if (existsSync(paths.actionsJson)) return;
-  mkdirSync(paths.home, { recursive: true });
-  copyFileSync(actionsExample(), paths.actionsJson);
 }
 
 function printManualSteps(paths: RuntimePaths): void {
@@ -71,14 +61,27 @@ function printManualSteps(paths: RuntimePaths): void {
   );
 }
 
-function printState(config: ServerConfig, paths: RuntimePaths): void {
-  stdout.write(`\nConfig: ${paths.configJson}\nPort: ${config.port}   Default portal: ${config.defaultPortal}\nPortals:\n`);
+// The env var wins over config.json in the bridge, so the menu must not show a value nobody uses.
+export function mutationsLine(config: ServerConfig, envValue: string | undefined): string {
+  const fromFile = config.mutations === false ? "off" : "on";
+  let fromEnv: boolean | undefined;
+  try {
+    fromEnv = parseMutationsEnv(envValue);
+  } catch {
+    return `Mutations: ${fromFile} (config.json); BITRIX_MCP_MUTATIONS="${envValue}" is invalid, expected "on" or "off"`;
+  }
+  if (fromEnv === undefined) return `Mutations: ${fromFile}`;
+  return `Mutations: ${fromEnv ? "on" : "off"} (env BITRIX_MCP_MUTATIONS overrides config.json)`;
+}
+
+function printState(config: ServerConfig, paths: RuntimePaths, env: NodeJS.ProcessEnv): void {
+  stdout.write(`\nConfig: ${paths.configJson}\nPort: ${config.port}   Default portal: ${config.defaultPortal}\n${mutationsLine(config, env.BITRIX_MCP_MUTATIONS)}\nPortals:\n`);
   for (const [alias, p] of Object.entries(config.portals)) {
     stdout.write(`  - ${alias}: ${p.origin}${alias === config.defaultPortal ? "   (default)" : ""}\n`);
   }
 }
 
-export async function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupResult): Promise<void> {
+export async function applyEffects(paths: RuntimePaths, config: ServerConfig, result: SetupResult, stopTimeoutMs?: number): Promise<void> {
   if (result.effects.includes("write-config")) writeServerConfig(paths.home, config);
   if (result.effects.includes("materialize-extension")) {
     materializeExtension({ home: paths.home, config, staticExtDir: staticExtDir() });
@@ -91,12 +94,14 @@ export async function applyEffects(paths: RuntimePaths, config: ServerConfig, re
     stdout.write("  → Reopen the portal tab to pick up the new port/token.\n");
   }
   if (result.effects.includes("restart-daemon")) {
-    const stopped = await requestDaemonShutdown(paths.sock);
-    stdout.write(
-      stopped
-        ? "\n  → daemon остановлен; поднимется с новым config при следующем вызове агента.\n"
-        : "\n  → работающий daemon не найден; новый config подхватится при следующем вызове агента.\n",
-    );
+    if (!existsSync(paths.sock)) {
+      stdout.write("\n  → работающий daemon не найден; новый config подхватится при следующем вызове агента.\n");
+    } else if (await stopDaemon(paths.sock, stopTimeoutMs)) {
+      // Also true when another client was already stopping it: what matters is that it is gone.
+      stdout.write("\n  → daemon остановлен; поднимется с новым config при следующем вызове агента.\n");
+    } else {
+      stdout.write(`\n  → daemon не остановился (сокет ${paths.sock} на месте); новый config подхватится только после его перезапуска.\n`);
+    }
   }
 }
 
@@ -131,14 +136,13 @@ async function firstRun(ask: Ask, paths: RuntimePaths): Promise<void> {
   }
 
   writeServerConfig(paths.home, config);
-  seedActions(paths);
   materializeExtension({ home: paths.home, config, staticExtDir: staticExtDir() });
 
-  stdout.write(`\nWrote ${paths.configJson}\nSeeded ${paths.actionsJson}\nExtension materialized at ${paths.extensionDir}\n`);
+  stdout.write(`\nWrote ${paths.configJson}\nExtension materialized at ${paths.extensionDir}\n`);
   printManualSteps(paths);
 }
 
-async function promptCommand(ask: Ask, choice: string): Promise<SetupCommand | null> {
+async function promptCommand(ask: Ask, choice: string, current: ServerConfig): Promise<SetupCommand | null> {
   switch (choice) {
     case "a": {
       const origin = (await ask("New portal origin: ")).trim();
@@ -156,6 +160,8 @@ async function promptCommand(ask: Ask, choice: string): Promise<SetupCommand | n
       return { kind: "set-default", alias: (await ask("Alias to make default: ")).trim() };
     case "p":
       return { kind: "set-port", port: Number((await ask("New port: ")).trim()) };
+    case "m":
+      return toggleMutations(current);
     case "t":
       return { kind: "rotate-token" };
     case "u":
@@ -165,17 +171,17 @@ async function promptCommand(ask: Ask, choice: string): Promise<SetupCommand | n
   }
 }
 
-async function editMenu(ask: Ask, paths: RuntimePaths, initial: ServerConfig): Promise<void> {
+async function editMenu(ask: Ask, paths: RuntimePaths, initial: ServerConfig, env: NodeJS.ProcessEnv): Promise<void> {
   let current = initial;
   for (;;) {
-    printState(current, paths);
+    printState(current, paths, env);
     const choice = (
       await ask(
-        "\n[a]dd portal  [r]emove portal  [e]dit portal  [d]efault portal  [p]ort  [t]oken rotate  [u]pdate extension  [q]uit: ",
+        "\n[a]dd portal  [r]emove portal  [e]dit portal  [d]efault portal  [p]ort  [m]utations on/off  [t]oken rotate  [u]pdate extension  [q]uit: ",
       )
     ).trim().toLowerCase();
     if (choice === "q" || choice === "") break;
-    const command = await promptCommand(ask, choice);
+    const command = await promptCommand(ask, choice, current);
     if (!command) {
       stdout.write("Unknown choice.\n");
       continue;
@@ -201,7 +207,7 @@ export async function runSetup(env: NodeJS.ProcessEnv = process.env): Promise<vo
     if (!existing) {
       await firstRun(ask, paths);
     } else {
-      await editMenu(ask, paths, existing);
+      await editMenu(ask, paths, existing, env);
     }
   } finally {
     rl.close();

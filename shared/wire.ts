@@ -22,7 +22,17 @@ export interface AuthMessage {
   version?: string;
 }
 
+// Daemon → extension (WS only). The UDS socket refuses this frame: callers name an operation instead.
 export type CallRequest = CallTarget & { type: "call"; id: string; portal?: string };
+
+// MCP client → daemon (UDS only): run a named domain operation; the daemon builds the calls.
+export interface OpRequest {
+  type: "op";
+  id: string;
+  portal?: string;
+  op: string;
+  args: unknown;
+}
 
 export interface CallResult {
   type: "result";
@@ -56,24 +66,8 @@ export interface DownloadResult {
   fileName: string | null;
 }
 
-// Sent by the extension's capture build while recording (see src/capture-server.ts).
-export interface CapturedEntry {
-  endpoint: string;
-  action: string | null;
-  method: "GET" | "POST";
-  transport: "ajax" | "rest" | "other";
-  bodyType: "json" | "form";
-  sampleParams: Record<string, unknown>;
-}
-
-export interface CaptureMessage {
-  type: "capture";
-  call: CapturedEntry;
-}
-
 export type ExtensionMessage =
   | AuthMessage
   | CallResult
-  | CaptureMessage
   | BinaryBeginMessage
   | BinaryChunkMessage;

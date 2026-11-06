@@ -82,12 +82,8 @@ node_modules
 dist
 *.local
 .bitrix24-mcp
-captured.har
 .env
 extension/dist/
-extension/dev/
-actions.json
-actions.draft.json
 
 # OS / editor junk
 .DS_Store
@@ -97,9 +93,8 @@ actions.draft.json
 .env*
 !.env.example
 
-# HAR captures (keep the synthetic test fixture)
+# HAR captures
 *.har
-!src/catalog/fixtures/sample.har
 
 # Test coverage output
 coverage/

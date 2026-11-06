@@ -11,8 +11,10 @@
   прочитать токен, не зная динамический (`use_dynamic_url`) URL ресурса `config.json`.
 - **`sessid-shim.js`** — `world: MAIN`, крошечный. Единственная причина быть в MAIN — доступ к
   `window.BX.bitrix_sessid()`. Отвечает на `postMessage`-запрос коннектора свежим `sessid`.
-  Никакого токена и сокета. В capture-сборке он же ставит перехват трафика страницы и пересылает
-  записи коннектору (тот отправляет их в daemon).
+  Никакого токена и сокета.
+
+Расширение только исполняет запросы, которые строит daemon для встроенных операций моста; само оно
+трафик страницы не перехватывает и не записывает.
 
 ## Откуда берётся расширение
 
@@ -28,8 +30,8 @@
 - `manifest.json` — генерируется **программно** (`buildManifest`) под сконфигурированные
   порталы: `matches` / `host_permissions` = `<origin>/*` каждого портала (least-privilege на
   origin), `content_scripts` (ISOLATED `connector.js` + MAIN `sessid-shim.js`) и запись
-  `web_accessible_resources` для `config.json` с `use_dynamic_url: true`. Отдельного
-  файла-шаблона манифеста больше нет.
+  `web_accessible_resources` для `config.json` с `use_dynamic_url: true`. Это единственный
+  источник манифеста — шаблона в репозитории нет.
 
 daemon читает серверный `config.json` только на старте, поэтому `setup` сам останавливает
 работающий daemon после правки — следующий вызов агента поднимет новый с актуальным конфигом.
@@ -48,19 +50,21 @@ daemon читает серверный `config.json` только на стар�
 
 Исходники (TypeScript) — в `extension/src/`: `bridge-core.ts` (чистые хелперы),
 `bridge-protocol.ts` (чистые: разбор `config.json` + протокол `postMessage`, покрыты
-юнит-тестами), `connector.ts`, `sessid-shim.ts`, `capture.ts`, тесты.
+юнит-тестами), `connector.ts`, `sessid-shim.ts`, тесты.
 `extension/config.example.json` — пример схемы `config.json` (`{ token, port }`).
 
 Типы браузерной среды — в `extension/tsconfig.json` (отдельный от серверного, с `lib: DOM`);
 проверка: `bun run typecheck` гоняет и сервер, и расширение.
 
 ```bash
-bun run build:ext     # dev-сборка пер-пользовательского расширения в extension/dev/
+bun run build:ext:static   # статичные бандлы → extension/dist/
+bun run sync:runtime       # пересобрать и обновить расширение в ~/.bitrix24-mcp-bridge/extension/
 ```
 
-`build:ext` — dev-удобство для мейнтейнера (собирает в `extension/dev/`, gitignored). Обычному
-пользователю оно не нужно: продовое расширение приходит статичными бандлами в пакете и
-материализуется через `setup`.
+Отдельной dev-сборки нет: мейнтейнер работает с тем же расширением, что развернул `setup`.
+`bun run sync:runtime` пересобирает статичные бандлы и заново материализует расширение из
+runtime-`config.json` (если `setup` его ещё не создавал — шаг пропускается); затем перезагрузи
+расширение на `chrome://extensions` и вкладку портала.
 
 ### Почему `config.json` в `web_accessible_resources`
 
@@ -84,7 +88,7 @@ extension ID — не секрет и не является границей б�
   единственная защита loopback-порта WebSocket; всё, что на машине может достучаться до
   `127.0.0.1` и знает токен, может управлять мостом.
 - `config.json` пер-пользовательский и **не коммитится**: он живёт в
-  `~/.bitrix24-mcp-bridge/extension/` (вне репозитория), а dev-сборка (`extension/dev/`) —
-  в `.gitignore`. В репозитории — только `config.example.json`.
+  `~/.bitrix24-mcp-bridge/extension/` (вне репозитория). В репозитории — только
+  `config.example.json`.
 - daemon отклоняет WS-подключения, у которых браузерный `Origin` не входит в набор
   сконфигурированных порталов (defense-in-depth).
