@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { errorMessage } from "./batch.js";
 import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
-import type { OpContext } from "./operation.js";
+import { OpInputError, type OpContext } from "./operation.js";
 
 const SPRINT_LIST = restMethod("tasks.api.scrum.sprint.list");
 const SPRINT_STAGES = restMethod("tasks.api.scrum.kanban.getStages");
@@ -111,9 +111,25 @@ export function targetColumn(columns: SprintColumn[], column: number | string | 
   throw new Error(`колонки ${JSON.stringify(column)} нет на доске активного спринта; есть: ${available}`);
 }
 
+// Bitrix completes a task put into a FINISH column, and Definition of Done is asked for only by the web
+// UI's popup on that move: no operation puts a task there, closing goes through task_close.
+const closesTask = (column: SprintColumn) => column.type.toUpperCase() === "FINISH";
+
+const finishRefusal = (column: SprintColumn) =>
+  `колонка «${column.name}» (${column.id}) завершает задачу — закрыть задачу можно только через bitrix_task_close ` +
+  "(там проверяется Definition of Done); ничего не изменено";
+
+// One column name may resolve to a FINISH column in just one of a batch's projects: the whole call
+// is refused, before any write.
+export function refuseClosingColumns(targets: SprintColumn[]) {
+  const closing = targets.find(closesTask);
+  if (closing) throw new OpInputError(finishRefusal(closing));
+}
+
 // `recovery` is appended when the task did not move: what the caller can do about it depends on
 // how the task got onto the board.
 export async function moveToColumn(ctx: OpContext, taskId: number, target: SprintColumn, recovery?: string) {
+  if (closesTask(target)) throw new Error(finishRefusal(target));
   await ctx.call({ ...STAGE_MOVE, params: { id: taskId, stageId: target.id } });
   const moved = await readTaskStage(ctx, taskId).catch((e: unknown) => {
     throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь её колонку через bitrix_task_get): ${errorMessage(e)}`);

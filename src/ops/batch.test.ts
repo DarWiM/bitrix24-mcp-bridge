@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { z } from "zod";
-import { MAX_BATCH, forEachTask, taskIdsArg } from "./batch.js";
+import { MAX_BATCH, forEachTask, forEachTaskVetted, taskIdsArg } from "./batch.js";
 import { BUDGET_TIMEOUT_MS } from "./operation.js";
 
 describe("forEachTask", () => {
@@ -100,6 +100,81 @@ describe("forEachTask", () => {
     });
 
     expect(batch.results).toEqual([{ taskId: 5, ok: false, error: "boom" }]);
+  });
+});
+
+describe("forEachTaskVetted", () => {
+  it("prepares every task before applying any, vets what was prepared and keeps a failed task's error", async () => {
+    const steps: string[] = [];
+    let vetted: number[] = [];
+
+    const batch = await forEachTaskVetted([1, 2, 3], {
+      prepare: async (taskId) => {
+        steps.push(`prepare ${taskId}`);
+        if (taskId === 2) throw new Error("задача 2 не в проекте");
+        return taskId * 10;
+      },
+      vet: (prepared) => {
+        vetted = prepared;
+      },
+      apply: async (taskId, prepared) => {
+        steps.push(`apply ${taskId}`);
+        return { prepared };
+      },
+    });
+
+    expect(steps).toEqual(["prepare 1", "prepare 2", "prepare 3", "apply 1", "apply 3"]);
+    expect(vetted).toEqual([10, 30]);
+    expect(batch.results).toEqual([
+      { taskId: 1, ok: true, prepared: 10 },
+      { taskId: 2, ok: false, error: "задача 2 не в проекте" },
+      { taskId: 3, ok: true, prepared: 30 },
+    ]);
+  });
+
+  it("applies nothing when the vet refuses", async () => {
+    const applied: number[] = [];
+
+    const run = forEachTaskVetted([1, 2], {
+      prepare: async (taskId) => taskId,
+      vet: () => {
+        throw new Error("refused");
+      },
+      apply: async (taskId) => {
+        applied.push(taskId);
+        return {};
+      },
+    });
+
+    await expect(run).rejects.toThrow("refused");
+    expect(applied).toEqual([]);
+  });
+
+  it("gives the second pass only what the first one left of the budget", async () => {
+    let clock = 0;
+    const applied: number[] = [];
+
+    // Budget 40 s; preparing takes 6 s per task, so the writes have 28 s — under the 30 s reserve.
+    const batch = await forEachTaskVetted(
+      [1, 2],
+      {
+        prepare: async () => {
+          clock += 6_000;
+        },
+        vet: () => {},
+        apply: async (taskId) => {
+          applied.push(taskId);
+          return {};
+        },
+      },
+      { budgetMs: 40_000, now: () => clock },
+    );
+
+    expect(applied).toEqual([]);
+    expect(batch.results).toEqual([
+      { taskId: 1, ok: false, error: expect.stringContaining("истекло время пакета") },
+      { taskId: 2, ok: false, error: expect.stringContaining("истекло время пакета") },
+    ]);
   });
 });
 

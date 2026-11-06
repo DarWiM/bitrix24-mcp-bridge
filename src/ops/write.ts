@@ -3,7 +3,7 @@
 // says it does.
 
 import { z } from "zod";
-import { MAX_BATCH, errorMessage, forEachTask, taskIdsArg } from "./batch.js";
+import { MAX_BATCH, errorMessage, forEachTask, forEachTaskVetted, taskIdsArg } from "./batch.js";
 import {
   activeSprintColumns,
   columnArg,
@@ -13,7 +13,9 @@ import {
   readBacklogId,
   readScrumTask,
   readTaskStage,
+  refuseClosingColumns,
   targetColumn,
+  type SprintColumn,
 } from "./board.js";
 import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
@@ -122,7 +124,32 @@ function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITO
 }
 
 const RETRY_FROM_BACKLOG = "верни её в бэклог (bitrix_task_to_backlog) и повтори";
+const NO_FINISH_COLUMN = "Колонку типа FINISH указать нельзя (Bitrix завершил бы задачу в обход Definition of Done) — закрывай через bitrix_task_close.";
 const CREATE_MAY_EXIST = "задача могла создаться, проверь доску спринта перед повтором";
+
+async function placeInSprint(
+  ctx: OpContext,
+  taskId: number,
+  { fromBacklog, sprintId, target }: { fromBacklog: boolean; sprintId: number; target: SprintColumn },
+) {
+  if (fromBacklog) {
+    await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: sprintId } } });
+    // Without it movetask "succeeds" and changes nothing. It does not set the column itself.
+    await ctx.call({ ...BOARD_ADD, params: { sprintId, taskId, stageId: target.id } }).catch((e: unknown) => {
+      throw new Error(`задача перенесена в спринт ${sprintId}, но не поставлена на его доску (${errorMessage(e)}) — ${RETRY_FROM_BACKLOG}`);
+    });
+    const placed = await readScrumTask(ctx, taskId).catch((e: unknown) => {
+      throw new Error(`перенос в спринт отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${errorMessage(e)}`);
+    });
+    if (placed.entityId !== sprintId) {
+      throw new Error(`Bitrix ответил успехом, но задача не в спринте ${sprintId} (сейчас в ${placed.entityId})`);
+    }
+  }
+  // Once in the sprint a retry takes the "already in the sprint" branch and never adds the task to
+  // the board, so a task left off it has to go back to the backlog first.
+  const moved = await moveToColumn(ctx, taskId, target, fromBacklog ? RETRY_FROM_BACKLOG : undefined);
+  return { sprintId, ...moved, fromBacklog };
+}
 
 const MEMBERS_HINT =
   "add / remove — массивы userId (найти id по фамилии — bitrix_user_find); нужен хотя бы один непустой. " +
@@ -175,20 +202,25 @@ export const WRITE_OPERATIONS: Operation[] = [
     description:
       "⚠ МУТИРУЮЩИЙ. Перенести задачи (taskIds — до 50) в колонку доски активного спринта их проекта. " +
       "column — id колонки или её название (без учёта регистра); список колонок — bitrix_sprint_columns. " +
+      `${NO_FINISH_COLUMN} Если колонка хоть у одной задачи — FINISH, отказ всего вызова, ни одна задача не тронута. ` +
       "Работает только для задач, которые уже на доске спринта (не в бэклоге). Перенос может " +
-      "переоткрыть закрытую задачу — смотри status в ответе. Задачи переносятся по очереди; ошибка одной " +
-      "не останавливает остальные. Ответ: { results: [{ taskId, ok, error?, stageId, column, status }] }.",
+      "переоткрыть закрытую задачу — смотри status в ответе. Сначала читаются все задачи, затем они переносятся по " +
+      "очереди; ошибка одной не останавливает остальные. Ответ: { results: [{ taskId, ok, error?, stageId, column, status }] }.",
     mutating: true,
     // Up to five requests per task.
     budget: "long",
     input: { taskIds: taskIdsArg(), column: columnArg() },
     run: async (ctx, a) => {
       const sprintOf = perGroup((groupId) => activeSprintColumns(ctx, groupId));
-      return forEachTask(a.taskIds, async (taskId) => {
-        const task = await readTaskStage(ctx, taskId);
-        if (!task.groupId) throw new Error(`задача ${taskId} не в проекте — колонки спринта есть только у задач scrum-проекта`);
-        const { columns } = await sprintOf(task.groupId);
-        return moveToColumn(ctx, taskId, targetColumn(columns, a.column));
+      return forEachTaskVetted(a.taskIds, {
+        prepare: async (taskId) => {
+          const task = await readTaskStage(ctx, taskId);
+          if (!task.groupId) throw new Error(`задача ${taskId} не в проекте — колонки спринта есть только у задач scrum-проекта`);
+          const { columns } = await sprintOf(task.groupId);
+          return targetColumn(columns, a.column);
+        },
+        vet: refuseClosingColumns,
+        apply: (taskId, target) => moveToColumn(ctx, taskId, target),
       });
     },
   }),
@@ -198,10 +230,11 @@ export const WRITE_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. Поставить задачи (taskIds — до 50) на доску АКТИВНОГО спринта их scrum-проекта: " +
       "задача из бэклога переносится в спринт и ставится в колонку, задача, уже стоящая в активном спринте, " +
       "просто переносится в колонку. column — id колонки или её название (без учёта регистра); без него — " +
-      "колонка типа NEW; список колонок — bitrix_sprint_columns. Задачи других спринтов (запланированных, " +
+      `колонка типа NEW; список колонок — bitrix_sprint_columns. ${NO_FINISH_COLUMN} Если колонка хоть у одной ` +
+      "задачи — FINISH, отказ всего вызова, ни одна задача не тронута. Задачи других спринтов (запланированных, " +
       "завершённых) не трогаются — ошибка. Изменение видят все участники проекта на scrum-доске; перенос может " +
-      "переоткрыть закрытую задачу — смотри status в ответе. Задачи обрабатываются по очереди; ошибка одной " +
-      "не останавливает остальные. Ответ: { results: [{ taskId, ok, error?, sprintId, stageId, column, status, " +
+      "переоткрыть закрытую задачу — смотри status в ответе. Сначала читаются все задачи, затем они обрабатываются " +
+      "по очереди; ошибка одной не останавливает остальные. Ответ: { results: [{ taskId, ok, error?, sprintId, stageId, column, status, " +
       "fromBacklog }] } — после переноса колонка перечитывается, а у задачи из бэклога перечитывается ещё и то, " +
       "что она теперь в спринте.",
     mutating: true,
@@ -211,34 +244,22 @@ export const WRITE_OPERATIONS: Operation[] = [
     run: async (ctx, a) => {
       const backlogOf = perGroup((groupId) => readBacklogId(ctx, groupId));
       const sprintOf = perGroup((groupId) => activeSprintColumns(ctx, groupId));
-      return forEachTask(a.taskIds, async (taskId) => {
-        const task = await readScrumTask(ctx, taskId);
-        const backlogId = await backlogOf(task.groupId);
-        const { sprintId, columns } = await sprintOf(task.groupId);
-        const target = targetColumn(columns, a.column);
-        const fromBacklog = task.entityId === backlogId;
-        if (fromBacklog) {
-          await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: sprintId } } });
-          // Without it movetask "succeeds" and changes nothing. It does not set the column itself.
-          await ctx.call({ ...BOARD_ADD, params: { sprintId, taskId, stageId: target.id } }).catch((e: unknown) => {
-            throw new Error(`задача перенесена в спринт ${sprintId}, но не поставлена на его доску (${errorMessage(e)}) — ${RETRY_FROM_BACKLOG}`);
-          });
-          const placed = await readScrumTask(ctx, taskId).catch((e: unknown) => {
-            throw new Error(`перенос в спринт отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${errorMessage(e)}`);
-          });
-          if (placed.entityId !== sprintId) {
-            throw new Error(`Bitrix ответил успехом, но задача не в спринте ${sprintId} (сейчас в ${placed.entityId})`);
+      return forEachTaskVetted(a.taskIds, {
+        prepare: async (taskId) => {
+          const task = await readScrumTask(ctx, taskId);
+          const backlogId = await backlogOf(task.groupId);
+          const { sprintId, columns } = await sprintOf(task.groupId);
+          const fromBacklog = task.entityId === backlogId;
+          if (!fromBacklog && task.entityId !== sprintId) {
+            throw new Error(
+              `задача ${taskId} не в бэклоге и не в активном спринте ${sprintId} (сейчас в ${task.entityId}) — ` +
+                "переносить задачи между спринтами эта операция не умеет",
+            );
           }
-        } else if (task.entityId !== sprintId) {
-          throw new Error(
-            `задача ${taskId} не в бэклоге и не в активном спринте ${sprintId} (сейчас в ${task.entityId}) — ` +
-              "переносить задачи между спринтами эта операция не умеет",
-          );
-        }
-        // Once in the sprint a retry takes the "already in the sprint" branch and never adds the
-        // task to the board, so a task left off it has to go back to the backlog first.
-        const moved = await moveToColumn(ctx, taskId, target, fromBacklog ? RETRY_FROM_BACKLOG : undefined);
-        return { sprintId, ...moved, fromBacklog };
+          return { fromBacklog, sprintId, target: targetColumn(columns, a.column) };
+        },
+        vet: (prepared) => refuseClosingColumns(prepared.map((p) => p.target)),
+        apply: (taskId, prepared) => placeInSprint(ctx, taskId, prepared),
       });
     },
   }),
@@ -272,7 +293,7 @@ export const WRITE_OPERATIONS: Operation[] = [
     description:
       "⚠ МУТИРУЮЩИЙ. Создать задачу в scrum-проекте groupId сразу на доске АКТИВНОГО спринта — как кнопкой «+» " +
       "на доске. title — название, простой текст (BBCode в названии не работает). column — id колонки или её " +
-      "название (без учёта регистра); без него — колонка типа NEW; список — bitrix_sprint_columns. Задача " +
+      `название (без учёта регистра); без него — колонка типа NEW; список — bitrix_sprint_columns. ${NO_FINISH_COLUMN} Задача ` +
       "создаётся от твоего имени, её видят все участники проекта; остальные поля — по умолчанию Bitrix, " +
       "задавай их потом отдельными операциями (bitrix_task_description_set, bitrix_task_delegate, " +
       "bitrix_task_accomplices, bitrix_task_auditors, …). Ответ: { taskId, sprintId, stageId, column }.",
@@ -283,6 +304,7 @@ export const WRITE_OPERATIONS: Operation[] = [
     run: async (ctx, a) => {
       const { sprintId, columns } = await activeSprintColumns(ctx, a.groupId);
       const target = targetColumn(columns, a.column);
+      refuseClosingColumns([target]);
       const userId = await currentUserId(ctx);
       // A timeout or a lost extension does not mean the portal did not create the task: every error
       // from here on keeps the agent from creating it twice.

@@ -71,6 +71,15 @@ const COLUMNS = [
   { id: 60, name: "Готово", type: "FINISH" },
 ];
 const TASK_STAGE_SELECT = ["ID", "GROUP_ID", "STAGE_ID", "STATUS"];
+const finishRefusal = (column: string, id: number) =>
+  `колонка «${column}» (${id}) завершает задачу — закрыть задачу можно только через bitrix_task_close ` +
+  "(там проверяется Definition of Done); ничего не изменено";
+// Ways to name the FINISH column «Готово» (60) of sprintStages.
+const FINISH_COLUMNS = [
+  ["its name, ignoring case", "  готово "],
+  ["its id", 60],
+  ["its id as a digit string", "60"],
+] as const;
 
 describe("write operations in OPERATIONS", () => {
   it("registers sprint_columns and user_find as reads and the others as mutating", () => {
@@ -209,12 +218,43 @@ describe("task_move", () => {
   const move = (id: number, stageId: number) => rest("/rest/task.stages.movetask.json", { id, stageId });
 
   it("resolves the column by name ignoring case, moves the task and returns the re-read stage and status", async () => {
-    const { ctx, call } = fakeCtx(replies(taskReply("59"), activeSprint, sprintStages, { result: true }, taskReply("60", "5")));
+    const { ctx, call } = fakeCtx(replies(taskReply("59"), activeSprint, sprintStages, { result: true }, taskReply("61", "3")));
 
-    const result = await op("task_move").execute(ctx, { taskIds: [42], column: "  готово " });
+    const result = await op("task_move").execute(ctx, { taskIds: [42], column: "  testing " });
 
-    expect(call.mock.calls.map((c) => c[0])).toEqual([getTask(42), sprintList, stagesList, move(42, 60), getTask(42)]);
-    expect(result).toEqual({ results: [{ taskId: 42, ok: true, stageId: 60, column: "Готово", status: 5 }] });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([getTask(42), sprintList, stagesList, move(42, 61), getTask(42)]);
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, stageId: 61, column: "Testing", status: 3 }] });
+  });
+
+  for (const [title, column] of FINISH_COLUMNS) {
+    it(`refuses the FINISH column given by ${title} before any write, so closing goes through DoD`, async () => {
+      const { ctx, call } = fakeCtx(replies(taskReply("59"), activeSprint, sprintStages));
+
+      const e = await rejection(op("task_move").execute(ctx, { taskIds: [42], column }));
+
+      expect(e).toBeInstanceOf(OpInputError);
+      expect(e.message).toBe(finishRefusal("Готово", 60));
+      expect(call.mock.calls.map((c) => c[0])).toEqual([getTask(42), sprintList, stagesList]);
+    });
+  }
+
+  it("refuses the whole batch, no task moved, when the column closes tasks in any of its projects", async () => {
+    const otherSprintList = rest("/rest/tasks.api.scrum.sprint.list.json", { filter: { GROUP_ID: 16, STATUS: "active" } });
+    const otherStagesList = rest("/rest/tasks.api.scrum.kanban.getStages.json", { sprintId: 8 });
+    const otherStages = { result: [{ id: "70", name: "testing", sort: "100", type: "FINISH", sprintId: "8" }] };
+    const { ctx, call } = fakeCtx(
+      replies(
+        taskReply("58"), activeSprint, sprintStages,
+        taskReply("58", "2", "16"), { result: [{ id: 8, status: "active" }] }, otherStages,
+        taskReply("0", "2", "0"),
+      ),
+    );
+
+    const e = await rejection(op("task_move").execute(ctx, { taskIds: [42, 43, 44], column: "Testing" }));
+
+    expect(e).toBeInstanceOf(OpInputError);
+    expect(e.message).toBe(finishRefusal("testing", 70));
+    expect(call.mock.calls.map((c) => c[0])).toEqual([getTask(42), sprintList, stagesList, getTask(43), otherSprintList, otherStagesList, getTask(44)]);
   });
 
   it("resolves the column by id", async () => {
@@ -235,21 +275,23 @@ describe("task_move", () => {
     expect(result).toEqual({ results: [{ taskId: 42, ok: true, stageId: 59, column: "В работе", status: 2 }] });
   });
 
-  it("moves a batch in order, looks the sprint columns up once per project and keeps going past a failed task", async () => {
+  it("reads the whole batch first, then moves it in order, looks the sprint columns up once per project and keeps going past a failed task", async () => {
     const { ctx, call } = fakeCtx(
       replies(
-        taskReply("58"), activeSprint, sprintStages, { result: true }, taskReply("61"),
-        taskReply("58"), { result: true }, taskReply("58"),
-        taskReply("59"), { result: true }, taskReply("61", "5"),
+        taskReply("58"), activeSprint, sprintStages, taskReply("58"), taskReply("59"),
+        { result: true }, taskReply("61"),
+        { result: true }, taskReply("58"),
+        { result: true }, taskReply("61", "5"),
       ),
     );
 
     const result = await op("task_move").execute(ctx, { taskIds: [42, 43, 44], column: "Testing" });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
-      getTask(42), sprintList, stagesList, move(42, 61), getTask(42),
-      getTask(43), move(43, 61), getTask(43),
-      getTask(44), move(44, 61), getTask(44),
+      getTask(42), sprintList, stagesList, getTask(43), getTask(44),
+      move(42, 61), getTask(42),
+      move(43, 61), getTask(43),
+      move(44, 61), getTask(44),
     ]);
     expect(result).toEqual({
       results: [
@@ -297,7 +339,7 @@ describe("task_move", () => {
       let n = 0;
       const { ctx } = fakeCtx(async (target) => (n++ < 4 ? first(target) : reread()));
 
-      const result = await op("task_move").execute(ctx, { taskIds: [42], column: "Готово" });
+      const result = await op("task_move").execute(ctx, { taskIds: [42], column: "Testing" });
 
       expect(result).toEqual({
         results: [
@@ -629,23 +671,21 @@ describe("task_to_sprint", () => {
     });
   });
 
-  it("looks the project up once per batch and keeps going past a task of another sprint", async () => {
+  it("reads the whole batch first, looks the project up once and keeps going past a task of another sprint", async () => {
     const { ctx, call } = fakeCtx(
       replies(
-        scrumTask("1"), backlog, activeSprint, sprintStages, { result: true }, { result: true }, scrumTask("7"), { result: true },
-        taskReply("59"),
-        scrumTask("6"),
-        scrumTask("7"), { result: true }, taskReply("59"),
+        scrumTask("1"), backlog, activeSprint, sprintStages, scrumTask("6"), scrumTask("7"),
+        { result: true }, { result: true }, scrumTask("7"), { result: true }, taskReply("59"),
+        { result: true }, taskReply("59"),
       ),
     );
 
     const result = await op("task_to_sprint").execute(ctx, { taskIds: [42, 43, 44], column: 59 });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
-      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumUpdate(42, 7), addTask(42, 59), scrumGet(42), move(42, 59),
-      getTask(42),
-      scrumGet(43),
-      scrumGet(44), move(44, 59), getTask(44),
+      scrumGet(42), backlogGet(15), sprintList, stagesList, scrumGet(43), scrumGet(44),
+      scrumUpdate(42, 7), addTask(42, 59), scrumGet(42), move(42, 59), getTask(42),
+      move(44, 59), getTask(44),
     ]);
     expect(result).toEqual({
       results: [
@@ -681,7 +721,7 @@ describe("task_to_sprint", () => {
   it("gives no backlog recipe when a task already in the sprint did not move", async () => {
     const { ctx } = fakeCtx(replies(scrumTask("7"), backlog, activeSprint, sprintStages, { result: true }, taskReply("58")));
 
-    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42], column: "Готово" });
+    const result = await op("task_to_sprint").execute(ctx, { taskIds: [42], column: "Testing" });
 
     expect(result).toEqual({
       results: [{ taskId: 42, ok: false, error: "Bitrix ответил true, но задача не переехала — вероятно, её нет на доске спринта" }],
@@ -757,6 +797,18 @@ describe("task_to_sprint", () => {
     });
     expect(call).toHaveBeenCalledTimes(6);
   });
+
+  for (const [title, column] of FINISH_COLUMNS) {
+    it(`refuses the FINISH column given by ${title} before any write, so closing goes through DoD`, async () => {
+      const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, activeSprint, sprintStages, scrumTask("7")));
+
+      const e = await rejection(op("task_to_sprint").execute(ctx, { taskIds: [42, 43], column }));
+
+      expect(e).toBeInstanceOf(OpInputError);
+      expect(e.message).toBe(finishRefusal("Готово", 60));
+      expect(call.mock.calls.map((c) => c[0])).toEqual([scrumGet(42), backlogGet(15), sprintList, stagesList, scrumGet(43)]);
+    });
+  }
 
   it("lists the available columns for an unknown name, without writing", async () => {
     const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, activeSprint, sprintStages));
@@ -917,6 +969,18 @@ describe("task_create", () => {
     );
     expect(call).toHaveBeenCalledTimes(2);
   });
+
+  for (const [title, column] of FINISH_COLUMNS) {
+    it(`refuses the FINISH column given by ${title} before creating, so closing goes through DoD`, async () => {
+      const { ctx, call } = fakeCtx(replies(activeSprint, sprintStages));
+
+      const e = await rejection(op("task_create").execute(ctx, { groupId: 15, title: "x", column }));
+
+      expect(e).toBeInstanceOf(OpInputError);
+      expect(e.message).toBe(finishRefusal("Готово", 60));
+      expect(call.mock.calls.map((c) => c[0])).toEqual([sprintList, stagesList]);
+    });
+  }
 
   it("names the created task when Bitrix put it into another column", async () => {
     const { ctx } = fakeCtx(replies(activeSprint, sprintStages, me, created("60")));

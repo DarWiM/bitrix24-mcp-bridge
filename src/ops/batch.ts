@@ -70,3 +70,30 @@ export async function forEachTask<T extends object>(
   }
   return { results };
 }
+
+// Two passes: the reads of every task first, so that the caller can refuse the whole call on what
+// they found before any task is touched; then the writes, in what the reads left of the budget.
+// A task the first pass failed keeps that error.
+export async function forEachTaskVetted<P, T extends object>(
+  taskIds: number[],
+  steps: {
+    prepare: (taskId: number) => Promise<P>;
+    vet: (prepared: P[]) => void;
+    apply: (taskId: number, prepared: P) => Promise<T>;
+  },
+  { budgetMs = BUDGET_TIMEOUT_MS.long, now = Date.now }: BatchOptions = {},
+): Promise<BatchResult<T>> {
+  const startedAt = now();
+  const { results } = await forEachTask(taskIds, async (taskId) => ({ prepared: await steps.prepare(taskId) }), { budgetMs, now });
+  steps.vet(results.flatMap((r) => (r.ok ? [r.prepared] : [])));
+  const firstPass = new Map(results.map((r) => [r.taskId, r]));
+  return forEachTask(
+    taskIds,
+    async (taskId) => {
+      const first = firstPass.get(taskId);
+      if (!first?.ok) throw new Error(first?.error ?? SKIPPED);
+      return steps.apply(taskId, first.prepared);
+    },
+    { budgetMs: budgetMs - (now() - startedAt), now },
+  );
+}

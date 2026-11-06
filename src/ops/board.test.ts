@@ -1,6 +1,6 @@
 import { describe, it, expect, mock } from "bun:test";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
-import { currentUserId } from "./board.js";
+import { currentUserId, moveToColumn } from "./board.js";
 import type { OpContext } from "./operation.js";
 
 function fakeCtx(callFn: (target: CallTarget) => Promise<unknown>) {
@@ -42,4 +42,15 @@ describe("currentUserId", () => {
 
     await expect(currentUserId(ctx)).rejects.toThrow("user.current returned an unexpected shape");
   });
+});
+
+describe("moveToColumn", () => {
+  for (const type of ["FINISH", "finish"]) {
+    it(`never sends a task into a column of type ${type}: Bitrix would close it past Definition of Done`, async () => {
+      const { ctx, call } = fakeCtx(async () => ({ result: true }));
+
+      await expect(moveToColumn(ctx, 42, { id: 60, name: "Готово", type })).rejects.toThrow("колонка «Готово» (60) завершает задачу");
+      expect(call).not.toHaveBeenCalled();
+    });
+  }
 });
