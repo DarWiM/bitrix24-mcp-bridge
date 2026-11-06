@@ -49,13 +49,18 @@ function fileError(path: string, e: unknown) {
   return new OpInputError(`не удалось прочитать ${path}${typeof code === "string" ? ` (${code})` : ""}`);
 }
 
-// The bridge's own directory holds config.json with the extension's token. Both sides resolved:
-// symlinks, `..` and, on a case-insensitive disk, another spelling must not lead into it.
-async function inBridgeHome(realFile: string) {
-  const { home } = runtimePaths(process.env);
-  const realHome = await realpath(home).catch(() => resolve(home));
-  const rel = relative(realHome, realFile);
+async function within(dir: string, realFile: string) {
+  const realDir = await realpath(dir).catch(() => resolve(dir));
+  const rel = relative(realDir, realFile);
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// The bridge's own directory holds config.json with the extension's token; only what the bridge
+// downloaded from the portal may go back to it. Every side is resolved: symlinks, `..` and, on a
+// case-insensitive disk, another spelling must not lead elsewhere in it.
+async function inBridgeHome(realFile: string) {
+  const { home, downloadsDir } = runtimePaths(process.env);
+  return (await within(home, realFile)) && !(await within(downloadsDir, realFile));
 }
 
 // One descriptor for the checks and the read, so that the file read is the file checked: the
@@ -69,8 +74,8 @@ async function readLocalFile(path: string) {
   });
   if (await inBridgeHome(real)) {
     throw new OpInputError(
-      `${path} — в служебном каталоге моста (там его настройки и токен), оттуда файлы не прикрепляются; ` +
-        "скачанный мостом файл сначала скопируй в другое место",
+      `${path} — в служебном каталоге моста (там его настройки и токен), оттуда прикрепляются только файлы, ` +
+        "скачанные мостом (downloads/)",
     );
   }
   const fh = await open(real, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW).catch((e: unknown) => {
@@ -124,8 +129,8 @@ export const FILE_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. Прикрепить ЛОКАЛЬНЫЙ файл к задаче taskId. Файл УХОДИТ С МАШИНЫ: он загружается в корень " +
       "твоего Диска Битрикс24, затем прикрепляется к задаче — его увидят и смогут скачать все, кто видит задачу. " +
       "Прикрепляй только то, что пользователь явно попросил; любой другой файл — сначала спроси. path — " +
-      "АБСОЛЮТНЫЙ путь к обычному файлу (не каталогу), не пустому, до 10 МБ; файлы из служебного каталога моста " +
-      "(~/.bitrix24-mcp-bridge, и downloads/ в нём) не прикрепляются. name — имя файла в Битрикс24 " +
+      "АБСОЛЮТНЫЙ путь к обычному файлу (не каталогу), не пустому, до 10 МБ; из служебного каталога моста " +
+      "(~/.bitrix24-mcp-bridge) прикрепляются только скачанные мостом файлы (downloads/ в нём). name — имя файла в Битрикс24 " +
       "(необязательно, по умолчанию имя из path; без разделителей пути); если имя на Диске занято, Битрикс24 " +
       "добавит к нему суффикс. Нужно право прикреплять файлы к задаче: тому, кто задачу только видит, " +
       "Битрикс24 может отказать уже после загрузки. Если прикрепить не удалось, файл остаётся на твоём Диске — " +

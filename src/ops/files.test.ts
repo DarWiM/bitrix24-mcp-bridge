@@ -120,7 +120,9 @@ describe("task_file_attach and the bridge's own directory", () => {
     mkdirSync(join(home, "downloads"), { recursive: true });
     writeFileSync(join(home, "config.json"), '{"token":"secret"}');
     writeFileSync(join(home, "downloads", "report.pdf"), CONTENT);
+    writeFileSync(join(home, "notes.txt"), CONTENT);
     symlinkSync(join(home, "config.json"), join(dir, "innocent.txt"));
+    symlinkSync(join(home, "config.json"), join(home, "downloads", "config-link.txt"));
     symlinkSync(home, join(dir, "home-link"));
   });
 
@@ -138,14 +140,26 @@ describe("task_file_attach and the bridge's own directory", () => {
     expect(call).not.toHaveBeenCalled();
   };
 
-  it("refuses its config.json and anything else in it before any request", async () => {
+  it("refuses its config.json and anything else in it outside downloads/ before any request", async () => {
     await refused(join(home, "config.json"), home);
-    await refused(join(home, "downloads", "report.pdf"), home);
+    await refused(join(home, "notes.txt"), home);
     await refused(join(home, "downloads", "..", "config.json"), home);
+    await refused(join(home, "downloads", "..", "notes.txt"), home);
   });
 
-  it("refuses a symlink pointing into it", async () => {
+  it("refuses a symlink pointing into it, also one inside downloads/", async () => {
     await refused(join(dir, "innocent.txt"), home);
+    await refused(join(home, "downloads", "config-link.txt"), home);
+  });
+
+  it("attaches a file it downloaded, from downloads/", async () => {
+    process.env.BITRIX24_MCP_BRIDGE_HOME = home;
+    const { ctx, call } = fakeCtx(replies(taskFiles(), me, storages, uploaded({ NAME: "report.pdf" }), attached, taskFiles([22193])));
+
+    const result = await op("task_file_attach").execute(ctx, { taskId: 42, path: join(home, "downloads", "report.pdf") });
+
+    expect(call).toHaveBeenCalledTimes(6);
+    expect(result).toMatchObject({ taskId: 42, name: "report.pdf", attachmentId: 22193 });
   });
 
   it("refuses a file in it when the bridge's home itself is reached through a symlink", async () => {
