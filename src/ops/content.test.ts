@@ -76,14 +76,15 @@ const description = (text: string | null) => ({ status: "success", data: { id: 4
 describe("task_description_replace", () => {
   it("replaces the single match and keeps everything around it byte for byte", async () => {
     const current = "Шаг 1\r\n[disk file id=22081]\n[b]Статус:[/b] в работе  \n\n";
-    const { ctx, call } = fakeCtx(replies(description(current), { result: { task: {} } }));
+    const expected = "Шаг 1\r\n[disk file id=22081]\n[b]Статус:[/b] готово $& $1  \n\n";
+    const { ctx, call } = fakeCtx(replies(description(current), { result: { task: {} } }, description(expected)));
 
     const result = await op("task_description_replace").execute(ctx, { taskId: "42", find: "в работе", replace: "готово $& $1" });
 
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenCalledTimes(3);
     expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.get", { task: { id: 42 } }));
-    const expected = "Шаг 1\r\n[disk file id=22081]\n[b]Статус:[/b] готово $& $1  \n\n";
     expect(call.mock.calls[1][0]).toEqual(rest("/rest/tasks.task.update.json", { taskId: 42, fields: { DESCRIPTION: expected } }));
+    expect(call.mock.calls[2][0]).toEqual(json("tasks.v2.Task.get", { task: { id: 42 } }));
     expect(result).toEqual({ taskId: 42, replaced: 1, length: expected.length });
   });
 
@@ -102,7 +103,7 @@ describe("task_description_replace", () => {
   });
 
   it("replaces non-overlapping matches left to right with all: true", async () => {
-    const { ctx, call } = fakeCtx(replies(description("aaa"), { result: true }));
+    const { ctx, call } = fakeCtx(replies(description("aaa"), { result: true }, description("ba")));
 
     const result = await op("task_description_replace").execute(ctx, { taskId: 42, find: "aa", replace: "b", all: true });
 
@@ -111,12 +112,20 @@ describe("task_description_replace", () => {
   });
 
   it("replaces every match with all: true", async () => {
-    const { ctx, call } = fakeCtx(replies(description("[*]todo\n[*]todo"), { result: true }));
+    const { ctx, call } = fakeCtx(replies(description("[*]todo\n[*]todo"), { result: true }, description("[*]\n[*]")));
 
     const result = await op("task_description_replace").execute(ctx, { taskId: 42, find: "todo", replace: "", all: true });
 
     expect(call.mock.calls[1][0].params).toEqual({ taskId: 42, fields: { DESCRIPTION: "[*]\n[*]" } });
     expect(result).toEqual({ taskId: 42, replaced: 2, length: 7 });
+  });
+
+  it("fails when the re-read description is not the one written", async () => {
+    const { ctx } = fakeCtx(replies(description("ab"), { result: true }, description("ab")));
+
+    await expect(op("task_description_replace").execute(ctx, { taskId: 42, find: "a", replace: "x" })).rejects.toThrow(
+      "Bitrix ответил успехом, но описание после записи другое (символов отправлено: 2, сейчас: 2) — сверь через bitrix_task_get_v2",
+    );
   });
 
   for (const current of ["другой текст", "", null]) {

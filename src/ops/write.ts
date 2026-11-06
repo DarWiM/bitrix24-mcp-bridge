@@ -17,7 +17,7 @@ import {
   targetColumn,
   type SprintColumn,
 } from "./board.js";
-import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, restMethod } from "./calls.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, reread, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
@@ -62,9 +62,17 @@ export async function readDescription(ctx: OpContext, taskId: number): Promise<s
   return parseResponse(descriptionResponse, raw, "tasks.v2.Task.get (description)").data.description ?? "";
 }
 
+// tasks.task.update answers success without saying what it stored, so the description is read back.
 export async function writeDescription(ctx: OpContext, taskId: number, text: string) {
   await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { DESCRIPTION: text } } });
-  return { taskId, length: text.length };
+  const stored = await reread(readDescription(ctx, taskId), "bitrix_task_get_v2");
+  if (stored !== text) {
+    throw new Error(
+      `Bitrix ответил успехом, но описание после записи другое (символов отправлено: ${text.length}, сейчас: ${stored.length}) — ` +
+        "сверь через bitrix_task_get_v2",
+    );
+  }
+  return { taskId, length: stored.length };
 }
 
 async function readResponsible(ctx: OpContext, taskId: number) {
@@ -157,6 +165,10 @@ const MEMBERS_HINT =
   "Список читается у каждой задачи заново, записывается целиком и перечитывается; если менять нечего, " +
   "запись не делается (changed: false). Если Bitrix применил не всё, задача ok: false с перечнем. Задачи обрабатываются по очереди; ошибка одной не останавливает остальные.";
 
+const DESCRIPTION_REREAD =
+  "После записи описание перечитывается; если оно не то, что записано, — ошибка. Ответ: { taskId, length } — length " +
+  "перечитанного описания. ";
+
 export const DESCRIPTION_FORMAT =
   "Формат — BBCode: [b] [i] [u] [s], [url=…]…[/url], [user=ID]Имя[/user], списки [list] / [list=1] " +
   "с пунктами [*], [quote], [code], [spoiler=Заголовок]…[/spoiler], таблицы [table][tr][th]/[td]. " +
@@ -169,8 +181,10 @@ export const WRITE_OPERATIONS: Operation[] = [
       "⚠ МУТИРУЮЩИЙ. ЗАМЕНИТЬ описание задачи целиком (text — новое описание; пустая строка очищает). " +
       "Чтобы ДОПИСАТЬ к существующему — bitrix_task_description_append, поправить фрагмент — " +
       "bitrix_task_description_replace. Правка видна в истории задачи. " +
+      DESCRIPTION_REREAD +
       DESCRIPTION_FORMAT,
     mutating: true,
+    budget: "long",
     input: { taskId: idArg(), text: z.string().max(DESCRIPTION_MAX) },
     run: (ctx, a) => writeDescription(ctx, a.taskId, a.text),
   }),
@@ -179,8 +193,11 @@ export const WRITE_OPERATIONS: Operation[] = [
     description:
       "⚠ МУТИРУЮЩИЙ. ДОПИСАТЬ text в конец описания задачи через пустую строку; всё, что уже есть " +
       "(файлы [disk file id=…], таблицы, списки), остаётся как было. Правка видна в истории задачи. " +
+      DESCRIPTION_REREAD +
       DESCRIPTION_FORMAT,
     mutating: true,
+    // A read, the write and a re-read.
+    budget: "long",
     input: { taskId: idArg(), text: z.string().min(1).max(DESCRIPTION_MAX) },
     run: async (ctx, a) => {
       const current = (await readDescription(ctx, a.taskId)).trimEnd();

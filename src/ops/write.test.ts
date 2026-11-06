@@ -125,24 +125,59 @@ describe("write operations in OPERATIONS", () => {
   });
 });
 
+const v2Description = (description: string | null) => ({ status: "success", data: { id: 42, description } });
+
+describe("description operations", () => {
+  it("run under the long budget: a read, a write and a re-read do not fit one request's", () => {
+    for (const name of ["task_description_set", "task_description_append", "task_description_replace"]) expect(op(name).budget).toBe("long");
+  });
+});
+
 describe("task_description_set", () => {
-  it("sends classic tasks.task.update with the DESCRIPTION field", async () => {
-    const { ctx, call } = fakeCtx();
+  it("sends classic tasks.task.update with the DESCRIPTION field, re-reads it and returns the re-read length", async () => {
+    const { ctx, call } = fakeCtx(replies({ result: { task: {} } }, v2Description("[b]Итог[/b]")));
 
     const result = await op("task_description_set").execute(ctx, { taskId: "42", text: "[b]Итог[/b]" });
 
-    expect(call).toHaveBeenCalledTimes(1);
-    expect(call.mock.calls[0][0]).toEqual(rest("/rest/tasks.task.update.json", { taskId: 42, fields: { DESCRIPTION: "[b]Итог[/b]" } }));
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      rest("/rest/tasks.task.update.json", { taskId: 42, fields: { DESCRIPTION: "[b]Итог[/b]" } }),
+      json("tasks.v2.Task.get", { task: { id: 42 } }),
+    ]);
     expect(result).toEqual({ taskId: 42, length: 11 });
   });
 
   it("accepts an empty text to clear the description", async () => {
-    const { ctx, call } = fakeCtx();
+    const { ctx, call } = fakeCtx(replies({ result: true }, v2Description(null)));
 
-    await op("task_description_set").execute(ctx, { taskId: 42, text: "" });
+    const result = await op("task_description_set").execute(ctx, { taskId: 42, text: "" });
 
     expect(call.mock.calls[0][0].params).toEqual({ taskId: 42, fields: { DESCRIPTION: "" } });
+    expect(result).toEqual({ taskId: 42, length: 0 });
   });
+
+  it("fails when the re-read description is not the one written", async () => {
+    const { ctx } = fakeCtx(replies({ result: true }, v2Description("[b]Ит")));
+
+    await expect(op("task_description_set").execute(ctx, { taskId: 42, text: "[b]Итог[/b]" })).rejects.toThrow(
+      "Bitrix ответил успехом, но описание после записи другое (символов отправлено: 11, сейчас: 5) — сверь через bitrix_task_get_v2",
+    );
+  });
+
+  for (const [title, reread, cause] of [
+    ["comes back in an unexpected shape", async () => ({ status: "success", data: [] }), "tasks.v2.Task.get (description) returned an unexpected shape"],
+    ["fails", async () => {
+      throw new Error("request timed out");
+    }, "request timed out"],
+  ] as const) {
+    it(`says the write was sent when the re-read ${title}`, async () => {
+      let n = 0;
+      const { ctx } = fakeCtx(async () => (n++ === 0 ? { result: true } : reread()));
+
+      await expect(op("task_description_set").execute(ctx, { taskId: 42, text: "x" })).rejects.toThrow(
+        `запись отправлена, но перечитать не удалось (проверь через bitrix_task_get_v2): ${cause}`,
+      );
+    });
+  }
 
   it("rejects a text over 100 000 characters before any request", async () => {
     const { ctx, call } = fakeCtx();
@@ -155,20 +190,21 @@ describe("task_description_set", () => {
 describe("task_description_append", () => {
   it("reads the raw description and writes it back with the new text after a blank line", async () => {
     const current = "Описание\n[disk file id=22081]\n[list][*]пункт[/list]\n\n";
-    const { ctx, call } = fakeCtx(replies({ status: "success", data: { id: 42, description: current } }, { result: { task: {} } }));
+    const expected = "Описание\n[disk file id=22081]\n[list][*]пункт[/list]\n\nДописано";
+    const { ctx, call } = fakeCtx(replies(v2Description(current), { result: { task: {} } }, v2Description(expected)));
 
     const result = await op("task_description_append").execute(ctx, { taskId: 42, text: "Дописано" });
 
-    expect(call).toHaveBeenCalledTimes(2);
+    expect(call).toHaveBeenCalledTimes(3);
     expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.get", { task: { id: 42 } }));
-    const expected = "Описание\n[disk file id=22081]\n[list][*]пункт[/list]\n\nДописано";
     expect(call.mock.calls[1][0]).toEqual(rest("/rest/tasks.task.update.json", { taskId: 42, fields: { DESCRIPTION: expected } }));
+    expect(call.mock.calls[2][0]).toEqual(json("tasks.v2.Task.get", { task: { id: 42 } }));
     expect(result).toEqual({ taskId: 42, length: expected.length });
   });
 
   for (const description of ["", null, "  \n"]) {
     it(`writes just the new text when the current description is ${JSON.stringify(description)}`, async () => {
-      const { ctx, call } = fakeCtx(replies({ status: "success", data: { id: 42, description } }, { result: true }));
+      const { ctx, call } = fakeCtx(replies(v2Description(description), { result: true }, v2Description("Первый абзац")));
 
       await op("task_description_append").execute(ctx, { taskId: 42, text: "Первый абзац" });
 

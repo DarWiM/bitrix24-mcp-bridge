@@ -82,9 +82,12 @@ export const CONTENT_OPERATIONS: Operation[] = [
       "с учётом регистра и переводов строк. Нет совпадений — ошибка; несколько (считая и перекрывающиеся, " +
       'как "aa" в "aaa") — ошибка с их числом, если не передан all: true. all заменяет все НЕперекрывающиеся ' +
       'вхождения слева направо ("aaa", find "aa" → одна замена). Всё вне фрагмента остаётся как было. Правка ' +
-      "видна в истории задачи. Ответ: { taskId, replaced, length } — replaced — сколько замен сделано. " +
+      "видна в истории задачи. После записи описание перечитывается; если оно не то, что записано, — ошибка. " +
+      "Ответ: { taskId, replaced, length } — replaced — сколько замен сделано, length — длина перечитанного описания. " +
       DESCRIPTION_FORMAT,
     mutating: true,
+    // A read, the write and a re-read.
+    budget: "long",
     input: {
       taskId: idArg(),
       find: z.string().min(1).max(DESCRIPTION_MAX),
