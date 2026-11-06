@@ -206,10 +206,9 @@ describe("task_close — step 1", () => {
           name: "Продуктовая задача",
           required: true,
           items: [
-            { title: "Критерии готовности" },
-            { title: "Задача проверена (выполнено тестирование или результат согласован с постановщиком)" },
-            { title: "Задача принята владельцем продукта" },
-            { title: "Подготовлено описание или документация (при необходимости)" },
+            { title: "Задача проверена (выполнено тестирование или результат согласован с постановщиком)", group: "Критерии готовности" },
+            { title: "Задача принята владельцем продукта", group: "Критерии готовности" },
+            { title: "Подготовлено описание или документация (при необходимости)", group: "Критерии готовности" },
           ],
         },
         { id: 3, name: "Техническая задача", required: false, items: [] },
@@ -222,6 +221,30 @@ describe("task_close — step 1", () => {
     const { ctx } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(true), SETTINGS, listPage(tricky), listPage([])));
     const out = await op("task_close").execute(ctx, { taskId: 31981 });
     expect(out).toMatchObject({ types: [{ id: 1, items: [{ title: 'Код в {скобках} и "кавычках" }' }] }, { id: 3, items: [] }] });
+  });
+
+  it("lists a group's criteria at any depth, and a top-level criterion without a group", async () => {
+    const nested = { ...leaf(5, 105, "Тесты", 0), DESCENDANTS: [leaf(6, 107, "Юнит", 0)] };
+    const tree = [{ ...CRITERIA[0], DESCENDANTS: [nested] }, leaf(7, 109, "Без группы", 1)];
+    const { ctx } = fakeCtx(replies(task("2"), SCRUM, ajaxOk(true), SETTINGS, listPage(tree), listPage([])));
+    const out = await op("task_close").execute(ctx, { taskId: 31981 });
+    expect(out).toEqual({
+      taskId: 31981,
+      needsConfirmation: true,
+      types: [
+        {
+          id: 1,
+          name: "Продуктовая задача",
+          required: true,
+          items: [
+            { title: "Тесты", group: "Критерии готовности" },
+            { title: "Юнит", group: "Критерии готовности" },
+            { title: "Без группы" },
+          ],
+        },
+        { id: 3, name: "Техническая задача", required: false, items: [] },
+      ],
+    });
   });
 
   it("fails without closing when the criteria cannot be found in the page", async () => {

@@ -111,6 +111,15 @@ async function readTypes(ctx: OpContext, groupId: number, taskId: number) {
 
 const flatten = (items: DodItem[]): DodItem[] => items.flatMap((item) => [item, ...flatten(item.children)]);
 
+// A top-level node with children is a checklist group («Критерии готовности»), not a criterion to
+// agree to; it is still saved with the tree in step 2.
+const criteriaToShow = (items: DodItem[]) =>
+  items.flatMap((item) =>
+    item.children.length === 0
+      ? [{ title: item.title }]
+      : flatten(item.children).map(({ title }) => ({ title, group: item.title })),
+  );
+
 // What the checklist sends when every box is ticked: the whole tree, parents before children, each
 // node under an id of the client's own making.
 function completedTree(items: DodItem[], parentNodeId: string | 0 = 0): Array<Record<string, unknown>> {
@@ -148,8 +157,9 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
     description:
       "⚠ МУТИРУЮЩИЙ. Закрыть (завершить) задачу. Definition of Done (DoD) scrum-проекта НЕ обходится — " +
       "закрытие в два вызова. Шаг 1: { taskId }. Если задача не в scrum-проекте или DoD для неё не нужен, она сразу закрывается. Если нужен — " +
-      "задача НЕ закрывается, ответ { taskId, needsConfirmation: true, types: [{ id, name, required, items: [{ title }] }] } — " +
-      "типы задач проекта (required — DoD для типа обязателен) и критерии готовности каждого. Покажи пользователю " +
+      "задача НЕ закрывается, ответ { taskId, needsConfirmation: true, types: [{ id, name, required, items: [{ title, group? }] }] } — " +
+      "типы задач проекта (required — DoD для типа обязателен) и критерии готовности каждого (group — название " +
+      "группы чек-листа, в которой критерий; сама группа критерием не считается). Покажи пользователю " +
       "критерии и получи его ЯВНОЕ согласие отметить их выполненными для выбранного типа; без согласия шаг 2 не " +
       "вызывай и сам за пользователя не решай. Шаг 2: { taskId, typeId, confirmItems: true } — все критерии типа " +
       "отмечаются выполненными, затем задача закрывается. После закрытия статус перечитывается; если задача не " +
@@ -179,7 +189,7 @@ export const LIFECYCLE_OPERATIONS: Operation[] = [
           if (parseResponse(necessaryResponse, raw, "doD.isNecessary").data) {
             const types = [];
             for (const type of await readTypes(ctx, groupId, taskId)) {
-              const items = flatten(await readCriteria(ctx, groupId, taskId, type.id)).map(({ title }) => ({ title }));
+              const items = criteriaToShow(await readCriteria(ctx, groupId, taskId, type.id));
               types.push({ id: type.id, name: type.name, required: type.dodRequired === "Y", items });
             }
             if (types.length === 0) throw new Error("Bitrix требует DoD, но не вернул ни одного типа задач — закрой задачу в интерфейсе");

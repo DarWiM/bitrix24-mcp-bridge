@@ -172,7 +172,8 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
   отказ, а не закрытие без DoD (без DoD закрывается только задача с проектом `0` / `null`). Типы — `doD.getSettings {groupId, taskId, saveRequest:"N"}` → `types[{id, name, dodRequired}]`.
   Критерии — `doD.getList {groupId, taskId, typeId}` → `data.html`, внутри скрипта страницы JSON-дерево
   `Object.assign(renderTo, {…"items":{"DESCENDANTS":[…]}})` с `FIELDS.{COPIED_ID, PARENT_ID, TITLE,
-  SORT_INDEX, IS_IMPORTANT}`. Отметка — `doD.saveList {typeId, taskId, groupId, items[i][NODE_ID|
+  SORT_INDEX, IS_IMPORTANT}`; узел верхнего уровня с потомками — группа чек-листа («Критерии готовности»),
+  не критерий: агенту показываются только её потомки. Отметка — `doD.saveList {typeId, taskId, groupId, items[i][NODE_ID|
   PARENT_NODE_ID|COPIED_ID|PARENT_ID|TITLE|SORT_INDEX|IS_COMPLETE|IS_IMPORTANT]}`: всё дерево, родитель
   раньше детей, `NODE_ID` — случайная строка клиента, у детей `PARENT_NODE_ID` = `NODE_ID` родителя. Затем
   `tasks.v2.Task.Status.complete`. Официальный `tasks.task.complete` не используется: он может закрыть
