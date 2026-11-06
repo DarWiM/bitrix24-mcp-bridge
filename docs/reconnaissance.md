@@ -134,7 +134,7 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
 | `user_find` | `/rest/user.get.json` | `FILTER{LAST_NAME}`; находит и неактивных (а фильтр `ACTIVE:false` не находит никого) |
 | `task_related_edit` ⚠ | ajax `tasks.v2.Task.Relation.Related.list` → `.Related.add` / `.Related.delete` → `list` | json `{taskId, tasks:[{id}], noOverride:false}` (у `delete` без `noOverride`); `list` — `withSubTasks:false`, `navigation{size:100}`; полная страница → отказ (список мог обрезаться) |
 | `task_parent` ⚠ | `tasks.task.get` (`PARENT_ID`) → ajax `tasks.v2.Task.Relation.Child.delete` у старого родителя → `.Child.add` у нового → `tasks.task.get` | json `{taskId: <родитель>, tasks:[{id: <задача>}]}`, у `add` ещё `noOverride:false, relationKind:"parent"` |
-| `task_gantt_link` ⚠ | ajax `tasks.v2.Task.Gantt.Dependence.check` → `.add`; или `.delete` | json `{"ganttLink":{taskId, dependentId}}` (+ `type:"finish_start"` у `add`); успех — только `data: true`, читающего метода нет |
+| `task_gantt_link` ⚠ | добавление: ajax `tasks.v2.Task.get` → `/rest/task.dependence.add.json` → `tasks.v2.Task.get`; удаление: `/rest/task.dependence.delete.json` → `tasks.v2.Task.get` | форма `{taskIdFrom, taskIdTo}` (+ `linkType: 2` — «окончание → начало» — у `add`); ответ `result: []` и при успехе — не подтверждение; проверка — `data.containsGanttLinks` зависимой задачи (ниже) |
 | `chat_send` ⚠ | `/rest/im.message.add.json` | `DIALOG_ID` (`chatId` → `"chat"+id`), `MESSAGE`, `REPLY_ID?`; ответ `result` = id сообщения |
 | `chat_message_edit` ⚠ | `/rest/im.message.update.json` | `{MESSAGE_ID, MESSAGE}` → `result: true`; пустой текст удалил бы сообщение — мост такой не пропускает |
 | `chat_reaction` ⚠ | ajax `im.v2.Chat.Message.Reaction.add` | форма `{messageId, reaction}` → `data.result`; REST-метода реакций через сессию нет |
@@ -177,6 +177,15 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
   раньше детей, `NODE_ID` — случайная строка клиента, у детей `PARENT_NODE_ID` = `NODE_ID` родителя. Затем
   `tasks.v2.Task.Status.complete`. Официальный `tasks.task.complete` не используется: он может закрыть
   задачу мимо DoD.
+- **Связи Ганта.** Внутренний `tasks.v2.Task.Gantt.Dependence.{check,add,delete}` (его шлёт UI) на
+  проверенном портале отвечает `22002 Internal server error` на любое тело (числа / строки, с `type` и без,
+  json / форма) и любую пару задач — поэтому классический `task.dependence.{add,delete}`. Читающего метода
+  нет: есть только булев `containsGanttLinks` верхнего уровня ответа `tasks.v2.Task.get` (у `data.parent`
+  он `null`). После `add` он становится `true` у **зависимой** задачи (`taskIdTo`; у предшественника
+  остаётся `false`), после `delete` — `false`. Флаг общий для всех связей задачи, поэтому `add` читает
+  его до и после: был `false` → должен стать `true`, иначе ошибка; был `true` → связь отправлена, но
+  подтвердить именно её нельзя. `delete`: стал `false` — подтверждено, остался `true` — подтвердить
+  нельзя.
 - **Диск через сессию.** Хранилище пользователя — `disk.storage.getlist {filter{ENTITY_TYPE:"user",
   ENTITY_ID: <user.current>}}` → `ROOT_OBJECT_ID`; загрузка — `disk.folder.uploadfile {id: <корень>,
   data{NAME}, fileContent:[имя, base64], generateUniqueName:true}` формой (10 МБ файла ≈ 13 МБ тела; этому

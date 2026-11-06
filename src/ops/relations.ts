@@ -5,18 +5,19 @@
 
 import { z } from "zod";
 import { MAX_BATCH, errorMessage } from "./batch.js";
-import { REST_TASK_GET, numeric, parseResponse } from "./calls.js";
+import { REST_TASK_GET, numeric, parseResponse, reread, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
-import { TASK_RELATED, callTarget } from "./read.js";
+import { TASK_RELATED, TASK_V2_GET, callTarget } from "./read.js";
 
 const v2 = (action: string) => callTarget({ action, method: "POST", bodyType: "json" });
 const RELATED_ADD = v2("tasks.v2.Task.Relation.Related.add");
 const RELATED_DELETE = v2("tasks.v2.Task.Relation.Related.delete");
 const CHILD_ADD = v2("tasks.v2.Task.Relation.Child.add");
 const CHILD_DELETE = v2("tasks.v2.Task.Relation.Child.delete");
-const GANTT_CHECK = v2("tasks.v2.Task.Gantt.Dependence.check");
-const GANTT_ADD = v2("tasks.v2.Task.Gantt.Dependence.add");
-const GANTT_DELETE = v2("tasks.v2.Task.Gantt.Dependence.delete");
+// The v2 Gantt.Dependence actions answer 22002 for any body on the portal checked, so classic REST.
+const GANTT_ADD = restMethod("task.dependence.add");
+const GANTT_DELETE = restMethod("task.dependence.delete");
+const FINISH_START = 2;
 
 // `ids` is required: an unexpected shape read as "nothing related" would turn a removal into a no-op.
 const relatedResponse = z.object({ data: z.object({ ids: z.array(numeric) }) });
@@ -24,8 +25,9 @@ const relatedResponse = z.object({ data: z.object({ ids: z.array(numeric) }) });
 const parentResponse = z.object({
   result: z.object({ task: z.object({ parentId: numeric.nullable().transform((id) => id || null) }) }),
 });
-// There is no read for Gantt links, so only this answer tells a done write from an ignored one.
-const confirmedResponse = z.object({ data: z.literal(true) });
+// The only read of Gantt links: one flag over all of the task's links, set on the dependent task.
+// Required: an unexpected shape read as "no links" would confirm a removal that did not happen.
+const ganttFlagResponse = z.object({ data: z.object({ containsGanttLinks: z.boolean() }) });
 
 const RELATED_PAGE = 100;
 const RELATED_RECHECK = "состояние связей неизвестно — перечитай их через bitrix_task_related перед повтором";
@@ -45,7 +47,11 @@ async function readParent(ctx: OpContext, taskId: number) {
   return parseResponse(parentResponse, raw, "tasks.task.get").result.task.parentId;
 }
 
-const confirmed = (raw: unknown) => confirmedResponse.safeParse(raw).success;
+async function hasGanttLinks(ctx: OpContext, taskId: number) {
+  const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
+  return parseResponse(ganttFlagResponse, raw, "tasks.v2.Task.get (containsGanttLinks)").data.containsGanttLinks;
+}
+
 const taskList = (ids: number[]) => ids.map((id) => ({ id }));
 const relatedIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
 
@@ -164,13 +170,16 @@ export const RELATION_OPERATIONS: Operation[] = [
     name: "task_gantt_link",
     description:
       "⚠ МУТИРУЮЩИЙ. Связь задач на диаграмме Ганта «окончание → начало»: dependentId начинается после " +
-      "завершения taskId. По умолчанию связь добавляется (сначала Bitrix проверяет, допустима ли она, — " +
-      "при отказе ничего не записывается); remove: true — удалить связь. type — только \"finish_start\" " +
-      "(по умолчанию) и только при добавлении. Прочие связи задач не трогаются. Связь видят все, кто видит " +
-      "задачи; уведомляет ли Bitrix участников — не проверено. Прочитать связи Ганта инструментом нельзя: успех — это подтверждение Bitrix. " +
-      "Ответ: { taskId, dependentId, linked }.",
+      "завершения taskId. По умолчанию связь добавляется; remove: true — удалить связь. type — только " +
+      "\"finish_start\" (по умолчанию) и только при добавлении. Прочие связи задач не трогаются. Прочитать " +
+      "отдельную связь нельзя: Bitrix сообщает только, есть ли у задачи dependentId хоть одна связь Ганта, — " +
+      "по нему запись и проверяется. confirmed: true — подтверждено: после добавления связи появились, после " +
+      "удаления не осталось ни одной. confirmed: false и note — подтвердить нельзя: при добавлении у задачи уже " +
+      "были связи Ганта, при удалении у неё остаются другие. Если связей после добавления нет — ошибка. Связь " +
+      "видят все, кто видит задачи; уведомляет ли Bitrix участников — не проверено. " +
+      "Ответ: { taskId, dependentId, linked, confirmed, note? }.",
     mutating: true,
-    // Two requests in a row.
+    // Up to three requests in a row.
     budget: "long",
     input: {
       taskId: idArg(),
@@ -183,20 +192,30 @@ export const RELATION_OPERATIONS: Operation[] = [
       if (a.dependentId === a.taskId) throw invalid("a task cannot depend on itself");
       if (a.remove && a.type !== undefined) throw invalid("type applies only when adding a link");
       const ganttLink = { taskId: a.taskId, dependentId: a.dependentId };
+      const pair = { taskIdFrom: a.taskId, taskIdTo: a.dependentId };
+      const readAfter = () => reread(hasGanttLinks(ctx, a.dependentId), `bitrix_task_get_v2 задачи ${a.dependentId}`);
 
       if (a.remove) {
-        if (!confirmed(await ctx.call({ ...GANTT_DELETE, params: { ganttLink } }))) {
-          throw new Error("запрос отправлен, но Bitrix не подтвердил удаление связи — проверь диаграмму Ганта");
-        }
-        return { ...ganttLink, linked: false };
+        // `result: []` comes back on success too, so only the flag confirms the write.
+        await ctx.call({ ...GANTT_DELETE, params: pair });
+        if (!(await readAfter())) return { ...ganttLink, linked: false, confirmed: true };
+        return {
+          ...ganttLink,
+          linked: false,
+          confirmed: false,
+          note: "удаление отправлено, но у задачи остаются связи Ганта — подтвердить нельзя",
+        };
       }
-      if (!confirmed(await ctx.call({ ...GANTT_CHECK, params: { ganttLink } }))) {
-        throw new Error("Bitrix не разрешает эту связь (проверка не пройдена) — ничего не записано");
-      }
-      if (!confirmed(await ctx.call({ ...GANTT_ADD, params: { ganttLink: { ...ganttLink, type: a.type ?? "finish_start" } } }))) {
-        throw new Error("запрос отправлен, но Bitrix не подтвердил связь — проверь диаграмму Ганта");
-      }
-      return { ...ganttLink, linked: true };
+      const before = await hasGanttLinks(ctx, a.dependentId);
+      await ctx.call({ ...GANTT_ADD, params: { ...pair, linkType: FINISH_START } });
+      if (!(await readAfter())) throw new Error(`Bitrix ответил успехом, но не применил связь: у задачи ${a.dependentId} нет связей Ганта`);
+      if (!before) return { ...ganttLink, linked: true, confirmed: true };
+      return {
+        ...ganttLink,
+        linked: true,
+        confirmed: false,
+        note: "связь отправлена; у задачи уже были связи Ганта — подтвердить именно эту нельзя",
+      };
     },
   }),
 ];

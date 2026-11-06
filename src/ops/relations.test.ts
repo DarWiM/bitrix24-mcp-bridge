@@ -300,50 +300,73 @@ describe("task_parent", () => {
   });
 });
 
-const ok = { status: "success", data: true };
-const link = (extra: Record<string, unknown> = {}) => ({ ganttLink: { taskId: 42, dependentId: 43, ...extra } });
+// The dependent task's flag covers all of its Gantt links: the only read there is.
+const ganttFlag = (containsGanttLinks: unknown) => ({ status: "success", data: { id: 43, containsGanttLinks, parent: { containsGanttLinks: null } } });
+const flagRead = json("tasks.v2.Task.get", { task: { id: 43 } });
+const pair = { taskIdFrom: 42, taskIdTo: 43 };
+const DONE = { result: [] };
 
 describe("task_gantt_link", () => {
-  it("checks the link first and then adds it as finish → start", async () => {
-    const { ctx, call } = fakeCtx(replies(ok, ok));
+  it("adds the link finish → start through classic REST and sees the flag turn on", async () => {
+    const { ctx, call } = fakeCtx(replies(ganttFlag(false), DONE, ganttFlag(true)));
 
     const result = await op("task_gantt_link").execute(ctx, { taskId: "42", dependentId: "43" });
 
-    expect(call).toHaveBeenCalledTimes(2);
-    expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.Gantt.Dependence.check", link()));
-    expect(call.mock.calls[1][0]).toEqual(json("tasks.v2.Task.Gantt.Dependence.add", link({ type: "finish_start" })));
-    expect(result).toEqual({ taskId: 42, dependentId: 43, linked: true });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      flagRead,
+      rest("/rest/task.dependence.add.json", { ...pair, linkType: 2 }),
+      flagRead,
+    ]);
+    expect(result).toEqual({ taskId: 42, dependentId: 43, linked: true, confirmed: true });
   });
 
-  it("does not add a link the check refuses", async () => {
-    for (const reply of [{ status: "success", data: false }, { status: "success", data: null }]) {
+  it("fails when the flag stays off after the add", async () => {
+    const { ctx } = fakeCtx(replies(ganttFlag(false), DONE, ganttFlag(false)));
+
+    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/не применил/);
+  });
+
+  it("says the add cannot be confirmed when the dependent task already had Gantt links", async () => {
+    const { ctx, call } = fakeCtx(replies(ganttFlag(true), DONE, ganttFlag(true)));
+
+    const result = await op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 });
+
+    expect(call).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({ taskId: 42, dependentId: 43, linked: true, confirmed: false });
+    expect(result).toHaveProperty("note", expect.stringMatching(/уже были связи Ганта/));
+  });
+
+  it("writes nothing when the flag cannot be read first", async () => {
+    for (const reply of [ganttFlag(null), { status: "success", data: { id: 43 } }, new Error("доступ запрещён")]) {
       const { ctx, call } = fakeCtx(replies(reply));
 
-      await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/ничего не записано/);
+      await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow();
       expect(call).toHaveBeenCalledTimes(1);
     }
   });
 
-  it("fails when the add is not confirmed", async () => {
-    const { ctx } = fakeCtx(replies(ok, { status: "success", data: false }));
+  it("tells a sent add from a failed one when the re-read fails", async () => {
+    const { ctx } = fakeCtx(replies(ganttFlag(false), DONE, new Error("сеть")));
 
-    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/не подтвердил/);
+    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/запись отправлена.*bitrix_task_get_v2/);
   });
 
-  it("removes the link without a check", async () => {
-    const { ctx, call } = fakeCtx(replies(ok));
+  it("removes the link and sees the flag turn off", async () => {
+    const { ctx, call } = fakeCtx(replies(DONE, ganttFlag(false)));
 
     const result = await op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43, remove: true });
 
-    expect(call).toHaveBeenCalledTimes(1);
-    expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.Gantt.Dependence.delete", link()));
-    expect(result).toEqual({ taskId: 42, dependentId: 43, linked: false });
+    expect(call.mock.calls.map((c) => c[0])).toEqual([rest("/rest/task.dependence.delete.json", pair), flagRead]);
+    expect(result).toEqual({ taskId: 42, dependentId: 43, linked: false, confirmed: true });
   });
 
-  it("fails when the removal is not confirmed", async () => {
-    const { ctx } = fakeCtx(replies({ status: "success", data: false }));
+  it("says the removal cannot be confirmed while the dependent task keeps Gantt links", async () => {
+    const { ctx } = fakeCtx(replies(DONE, ganttFlag(true)));
 
-    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43, remove: true })).rejects.toThrow(/не подтвердил/);
+    const result = await op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43, remove: true });
+
+    expect(result).toMatchObject({ taskId: 42, dependentId: 43, linked: false, confirmed: false });
+    expect(result).toHaveProperty("note", expect.stringMatching(/остаются связи Ганта/));
   });
 
   it("rejects a self-link, an unknown type or a type on removal before any request", async () => {

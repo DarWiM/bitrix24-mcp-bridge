@@ -53,7 +53,8 @@
 - [ ] Напоминания: `bitrix_task_reminder_set` без `reminderId` → в `bitrix_task_reminders` с `mine: true`;
   правка с `reminderId`; `bitrix_task_reminder_delete` → пропало. `at` в прошлом → ошибка аргументов.
 - [ ] Связи: `bitrix_task_related_edit` add / remove, `bitrix_task_parent` с id и с `null`,
-  `bitrix_task_gantt_link` добавить / `remove: true`; прочие связи задачи не изменились.
+  `bitrix_task_gantt_link` добавить / `remove: true` на задачах без других связей Ганта → `confirmed: true`;
+  прочие связи задачи не изменились.
 - [ ] Чат: `bitrix_chat_send` с `replyTo` → показан ответом; `bitrix_chat_message_edit` своего сообщения;
   `bitrix_chat_reaction { reaction: "like" }`; `bitrix_task_chat_post` по двум тестовым задачам.
 
