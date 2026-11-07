@@ -44,7 +44,7 @@
   прежний список плюс новый (сверь с `bitrix_task_get` / `bitrix_task_get_v2`); тот же `add` ещё раз →
   `changed: false`; `remove` последнего → пустой список.
 - [ ] Scrum: задача из бэклога → `bitrix_task_to_sprint` → `fromBacklog: true`, колонка `NEW`;
-  `bitrix_task_move` в другую колонку; `bitrix_task_to_backlog` → `changed: true` и `stageId` — стадия «Новые» канбана проекта (задача пропала с доски спринта), повтор → `changed: false`.
+  `bitrix_task_move` в другую колонку; `bitrix_task_to_backlog` → `changed: true`, `stageId` — стадия «Новые» канбана проекта и `board` — снята с доски спринта; задача пропала с доски «Активный спринт» (проверить глазами: привязку к доске прочитать нечем), повтор → `changed: false`.
   `bitrix_task_create` → задача на доске в колонке `NEW`.
 - [ ] DoD: `bitrix_task_close { taskId }` в scrum-проекте с DoD → `needsConfirmation: true`, задача **не**
   закрыта; `{ taskId, typeId, confirmItems: true }` → `status: 5`; `bitrix_task_reopen` → снова открыта.

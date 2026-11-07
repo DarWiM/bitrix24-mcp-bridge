@@ -10,6 +10,7 @@ import {
   currentUserId,
   moveToColumn,
   perGroup,
+  readActiveSprintId,
   readBacklogId,
   readGroupStages,
   readScrumTask,
@@ -28,6 +29,8 @@ const USER_GET = restMethod("user.get");
 // Changes only the container (backlog / sprint): the task is not on the sprint board yet.
 const SCRUM_TASK_UPDATE = restMethod("tasks.api.scrum.task.update");
 const BOARD_ADD = restMethod("tasks.api.scrum.kanban.addTask");
+const BOARD_DELETE = restMethod("tasks.api.scrum.kanban.deleteTask");
+const boardDeleteResponse = z.object({ result: z.boolean() });
 // What the board's own «+» sends: the task is born in the sprint column, as when created in the UI.
 const BOARD_CREATE = callTarget({
   endpoint: "/bitrix/services/main/ajax.php?mode=class&c=bitrix%3Atasks.kanban&action=addTask",
@@ -166,7 +169,21 @@ async function placeInSprint(
   return { sprintId, ...moved, fromBacklog };
 }
 
-const RETRY_TO_BACKLOG = "повтори bitrix_task_to_backlog — у задачи, уже стоящей в бэклоге, он переставит только стадию";
+const RETRY_TO_BACKLOG =
+  "повтори bitrix_task_to_backlog — задачу, уже стоящую в бэклоге, он только снимет с доски спринта и переставит в стадию";
+
+// The sprint board keeps its own link to a task: moving the scrum item to the backlog leaves it, and
+// the board goes on showing the task. No read exposes that link (task cards and lists show such a task
+// as a plain backlog one), so Bitrix's answer is all that confirms the removal.
+async function leaveSprintBoard(ctx: OpContext, taskId: number, sprintId: number) {
+  const raw = await ctx.call({ ...BOARD_DELETE, params: { sprintId, taskId } }).catch((e: unknown) => {
+    throw new Error(`задача в бэклоге, но может остаться на доске спринта ${sprintId} (${errorMessage(e)}) — ${RETRY_TO_BACKLOG}`);
+  });
+  if (!parseResponse(boardDeleteResponse, raw, "tasks.api.scrum.kanban.deleteTask").result) {
+    throw new Error(`Bitrix не снял задачу с доски спринта ${sprintId} (ответ false) — ${RETRY_TO_BACKLOG}`);
+  }
+  return `снята с доски спринта ${sprintId} — подтверждено только ответом Bitrix: привязку к доске прочитать нечем`;
+}
 
 // Moving the scrum item leaves STAGE_ID on the sprint column. movetask answers false for a backlog
 // task; a plain field update does what the UI's drag into the backlog ends up with.
@@ -310,33 +327,40 @@ export const WRITE_OPERATIONS: Operation[] = [
     name: "task_to_backlog",
     description:
       "⚠ МУТИРУЮЩИЙ. Вернуть задачи (taskIds — до 50) в БЭКЛОГ их scrum-проекта; с доски спринта они " +
-      "пропадают — это видят все участники проекта. Задача уходит из колонки спринта в стартовую стадию " +
-      "канбана проекта, как при переносе в веб-интерфейсе. Задача, которая уже в бэклоге, но всё ещё числится " +
-      "в колонке спринта, только переставляется в эту стадию; остальные задачи бэклога не трогаются " +
-      "(changed: false). Задачи обрабатываются по очереди; ошибка одной не останавливает остальные. " +
-      "Ответ: { results: [{ taskId, ok, error?, backlogId, stageId, changed }] } — положение и стадия перечитаны после переноса.",
+      "пропадают — это видят все участники проекта. Задача снимается с доски активного спринта и уходит из " +
+      "колонки спринта в стартовую стадию канбана проекта, как при переносе в веб-интерфейсе. Задача, которая уже " +
+      "в бэклоге, тоже снимается с доски активного спринта (Bitrix мог оставить её там) и, если числится в колонке " +
+      "спринта, переставляется в эту стадию. Бэклог и стадия перечитываются после записи; снятие с доски " +
+      "подтверждает только ответ Bitrix — прочитать привязку задачи к доске нечем (поле board ответа). " +
+      "changed — изменились бэклог или стадия. Задачи обрабатываются по очереди; ошибка одной не останавливает " +
+      "остальные. Ответ: { results: [{ taskId, ok, error?, backlogId, stageId, changed, board? }] }.",
     mutating: true,
     budget: "long",
     input: { taskIds: taskIdsArg() },
     run: async (ctx, a) => {
       const backlogOf = perGroup((groupId) => readBacklogId(ctx, groupId));
       const stagesOf = perGroup((groupId) => readGroupStages(ctx, groupId));
+      const activeSprintOf = perGroup((groupId) => readActiveSprintId(ctx, groupId));
       return forEachTask(a.taskIds, async (taskId) => {
         const task = await readScrumTask(ctx, taskId);
         const backlogId = await backlogOf(task.groupId);
         const stages = await stagesOf(task.groupId);
-        if (task.entityId === backlogId) {
-          const { stageId } = await readTaskStage(ctx, taskId);
-          // 0 turns up on backlog tasks too and is left as Bitrix keeps it.
-          if (!stageId || stages.ids.has(stageId)) return { backlogId, stageId: stageId ?? 0, changed: false };
-          return { backlogId, ...(await leaveSprintColumn(ctx, taskId, stages.start)), changed: true };
+        const sprintId = await activeSprintOf(task.groupId);
+        const moved = task.entityId !== backlogId;
+        if (moved) {
+          await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: backlogId } } });
+          const after = await readScrumTask(ctx, taskId).catch((e: unknown) => {
+            throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${errorMessage(e)}`);
+          });
+          if (after.entityId !== backlogId) throw new Error(`Bitrix ответил успехом, но задача не в бэклоге (сейчас в ${after.entityId})`);
         }
-        await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: backlogId } } });
-        const after = await readScrumTask(ctx, taskId).catch((e: unknown) => {
-          throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${errorMessage(e)}`);
-        });
-        if (after.entityId !== backlogId) throw new Error(`Bitrix ответил успехом, но задача не в бэклоге (сейчас в ${after.entityId})`);
-        return { backlogId, ...(await leaveSprintColumn(ctx, taskId, stages.start)), changed: true };
+        // Read before any write, so that a deleted task (its scrum item still answers) is refused untouched.
+        const current = moved ? undefined : (await readTaskStage(ctx, taskId)).stageId;
+        // Only an active sprint has a board; planned and finished ones hold no link to drop.
+        const board = sprintId === null ? undefined : await leaveSprintBoard(ctx, taskId, sprintId);
+        // 0 turns up on backlog tasks too and is left as Bitrix keeps it.
+        if (!moved && (!current || stages.ids.has(current))) return { backlogId, stageId: current ?? 0, changed: false, board };
+        return { backlogId, ...(await leaveSprintColumn(ctx, taskId, stages.start)), changed: true, board };
       });
     },
   }),

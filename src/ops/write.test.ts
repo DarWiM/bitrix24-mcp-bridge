@@ -933,67 +933,88 @@ describe("task_to_backlog", () => {
       "983": { ID: "983", TITLE: "Выполняются", SORT: "200", SYSTEM_TYPE: null },
     },
   };
+  const noActiveSprint = { result: [] };
   const stageUpdate = (taskId: number, stageId: number) => rest("/rest/tasks.task.update.json", { taskId, fields: { STAGE_ID: stageId } });
   const getTask = (taskId: number) => rest("/rest/tasks.task.get.json", { taskId, select: TASK_STAGE_SELECT });
+  const boardDelete = (taskId: number) => rest("/rest/tasks.api.scrum.kanban.deleteTask.json", { sprintId: 7, taskId });
+  const OFF_BOARD = "снята с доски спринта 7 — подтверждено только ответом Bitrix: привязку к доске прочитать нечем";
+  const RETRY =
+    "повтори bitrix_task_to_backlog — задачу, уже стоящую в бэклоге, он только снимет с доски спринта и переставит в стадию";
+  // The four reads every task starts with: its scrum item, then — once per project — backlog, stages, active sprint.
+  const reads = (entityId: string, sprint: unknown = activeSprint) => [scrumTask(entityId), backlog, groupStages, sprint];
 
-  it("moves a sprint task to the backlog and out of its sprint column, re-reading both", async () => {
+  it("moves a sprint task to the backlog, off the sprint board and out of its column, re-reading what it can", async () => {
     const { ctx, call } = fakeCtx(
-      replies(scrumTask("7"), backlog, groupStages, { result: true }, scrumTask("1"), { result: { task: {} } }, taskReply("981")),
+      replies(...reads("7"), { result: true }, scrumTask("1"), { result: true }, { result: { task: {} } }, taskReply("981")),
     );
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
-      scrumGet(42), backlogGet(15), groupStagesGet(15), scrumUpdate(42, 1), scrumGet(42), stageUpdate(42, 981), getTask(42),
+      scrumGet(42), backlogGet(15), groupStagesGet(15), sprintList, scrumUpdate(42, 1), scrumGet(42), boardDelete(42),
+      stageUpdate(42, 981), getTask(42),
     ]);
-    expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: true }] });
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: true, board: OFF_BOARD }] });
   });
 
-  it("only moves the stage of a backlog task still sitting in a sprint column", async () => {
-    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply("2397"), { result: { task: {} } }, taskReply("981")));
+  it("takes a backlog task stuck in a sprint column off the board and moves its stage", async () => {
+    const { ctx, call } = fakeCtx(replies(...reads("1"), taskReply("2397"), { result: true }, { result: { task: {} } }, taskReply("981")));
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
-      scrumGet(42), backlogGet(15), groupStagesGet(15), getTask(42), stageUpdate(42, 981), getTask(42),
+      scrumGet(42), backlogGet(15), groupStagesGet(15), sprintList, getTask(42), boardDelete(42), stageUpdate(42, 981), getTask(42),
     ]);
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: true, board: OFF_BOARD }] });
+  });
+
+  // A backlog task in a project stage can still sit on the board (left there by a bare container move),
+  // and no read tells — so it is taken off every time.
+  for (const stageId of ["981", "983", "0"]) {
+    it(`takes a backlog task in stage ${stageId} off the board and leaves its stage alone`, async () => {
+      const { ctx, call } = fakeCtx(replies(...reads("1"), taskReply(stageId), { result: true }));
+
+      const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+      expect(call.mock.calls.map((c) => c[0])).toEqual([scrumGet(42), backlogGet(15), groupStagesGet(15), sprintList, getTask(42), boardDelete(42)]);
+      expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: Number(stageId), changed: false, board: OFF_BOARD }] });
+    });
+  }
+
+  it("leaves the board alone when the project has no active sprint", async () => {
+    const { ctx, call } = fakeCtx(replies(...reads("7", noActiveSprint), { result: true }, scrumTask("1"), { result: { task: {} } }, taskReply("981")));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(call.mock.calls.map((c) => c[0])).not.toContainEqual(boardDelete(42));
     expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: true }] });
   });
 
   it("says a deleted task is gone, though its scrum item still answers, and writes nothing", async () => {
-    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, { result: [] }));
+    const { ctx, call } = fakeCtx(replies(...reads("1"), { result: [] }));
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
-    expect(call).toHaveBeenCalledTimes(4);
+    expect(call).toHaveBeenCalledTimes(5);
     expect(result).toEqual({
       results: [{ taskId: 42, ok: false, error: "задача 42 не найдена или нет доступа (удалена или скрыта от тебя)" }],
     });
   });
 
-  for (const stageId of ["981", "983", "0"]) {
-    it(`leaves a backlog task in stage ${stageId} alone`, async () => {
-      const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply(stageId)));
-
-      const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
-
-      expect(call).toHaveBeenCalledTimes(4);
-      expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: Number(stageId), changed: false }] });
-    });
-  }
-
-  it("reads the backlog and the project stages once per project", async () => {
-    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply("981"), scrumTask("1"), taskReply("983")));
+  it("reads the backlog, the project stages and the active sprint once per project", async () => {
+    const { ctx, call } = fakeCtx(
+      replies(...reads("1"), taskReply("981"), { result: true }, scrumTask("1"), taskReply("983"), { result: true }),
+    );
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42, 43] });
 
     expect(call.mock.calls.map((c) => c[0])).toEqual([
-      scrumGet(42), backlogGet(15), groupStagesGet(15), getTask(42), scrumGet(43), getTask(43),
+      scrumGet(42), backlogGet(15), groupStagesGet(15), sprintList, getTask(42), boardDelete(42), scrumGet(43), getTask(43), boardDelete(43),
     ]);
     expect(result).toEqual({
       results: [
-        { taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: false },
-        { taskId: 43, ok: true, backlogId: 1, stageId: 983, changed: false },
+        { taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: false, board: OFF_BOARD },
+        { taskId: 43, ok: true, backlogId: 1, stageId: 983, changed: false, board: OFF_BOARD },
       ],
     });
   });
@@ -1015,26 +1036,26 @@ describe("task_to_backlog", () => {
   }
 
   it("fails a move Bitrix answered true to but did not make", async () => {
-    const { ctx, call } = fakeCtx(replies(scrumTask("7"), backlog, groupStages, { result: true }, scrumTask("7")));
+    const { ctx, call } = fakeCtx(replies(...reads("7"), { result: true }, scrumTask("7")));
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
-    expect(call).toHaveBeenCalledTimes(5);
+    expect(call).toHaveBeenCalledTimes(6);
     expect(result).toEqual({
       results: [{ taskId: 42, ok: false, error: "Bitrix ответил успехом, но задача не в бэклоге (сейчас в 7)" }],
     });
   });
 
   for (const [title, reread, cause] of [
-    ["comes back in an unexpected shape", async () => ({ result: [] }), "tasks.api.scrum.task.get returned an unexpected shape"],
+    ["comes back in an unexpected shape", async () => ({ result: {} }), "tasks.api.scrum.task.get returned an unexpected shape"],
     ["fails", async () => {
       throw new Error("extension not connected");
     }, "extension not connected"],
   ] as const) {
     it(`says the move was sent when the re-read ${title}`, async () => {
-      const first = replies(scrumTask("7"), backlog, groupStages, { result: true });
+      const first = replies(...reads("7"), { result: true });
       let n = 0;
-      const { ctx } = fakeCtx(async (target) => (n++ < 4 ? first(target) : reread()));
+      const { ctx } = fakeCtx(async (target) => (n++ < 5 ? first(target) : reread()));
 
       const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
@@ -1050,50 +1071,61 @@ describe("task_to_backlog", () => {
     });
   }
 
-  it("says the task stayed in the sprint column when the stage write fails, and how to fix it", async () => {
-    const first = replies(scrumTask("7"), backlog, groupStages, { result: true }, scrumTask("1"));
+  it("says the task may still be on the board when taking it off fails, and how to fix it", async () => {
+    const first = replies(...reads("7"), { result: true }, scrumTask("1"));
     let n = 0;
     const { ctx } = fakeCtx(async (target) => {
-      if (n++ < 5) return first(target);
+      if (n++ < 6) return first(target);
       throw new Error("ACCESS_DENIED");
     });
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
     expect(result).toEqual({
-      results: [
-        {
-          taskId: 42,
-          ok: false,
-          error:
-            "задача в бэклоге, но осталась в колонке спринта (ACCESS_DENIED) — повтори bitrix_task_to_backlog — у задачи, уже стоящей в бэклоге, он переставит только стадию",
-        },
-      ],
+      results: [{ taskId: 42, ok: false, error: `задача в бэклоге, но может остаться на доске спринта 7 (ACCESS_DENIED) — ${RETRY}` }],
     });
   });
 
-  it("fails a stage write Bitrix answered to but did not apply", async () => {
-    const { ctx } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply("2397"), { result: { task: {} } }, taskReply("2397")));
+  it("fails when Bitrix answers false to taking the task off the board", async () => {
+    const { ctx } = fakeCtx(replies(...reads("1"), taskReply("981"), { result: false }));
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
     expect(result).toEqual({
-      results: [
-        {
-          taskId: 42,
-          ok: false,
-          error:
-            "Bitrix ответил успехом, но задача в стадии 2397, а не «Новые» (981) — повтори bitrix_task_to_backlog — у задачи, уже стоящей в бэклоге, он переставит только стадию",
-        },
-      ],
+      results: [{ taskId: 42, ok: false, error: `Bitrix не снял задачу с доски спринта 7 (ответ false) — ${RETRY}` }],
+    });
+  });
+
+  it("says the task stayed in the sprint column when the stage write fails, and how to fix it", async () => {
+    const first = replies(...reads("7"), { result: true }, scrumTask("1"), { result: true });
+    let n = 0;
+    const { ctx } = fakeCtx(async (target) => {
+      if (n++ < 7) return first(target);
+      throw new Error("ACCESS_DENIED");
+    });
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: `задача в бэклоге, но осталась в колонке спринта (ACCESS_DENIED) — ${RETRY}` }],
+    });
+  });
+
+  it("fails a stage write Bitrix answered to but did not apply", async () => {
+    const { ctx } = fakeCtx(replies(...reads("1"), taskReply("2397"), { result: true }, { result: { task: {} } }, taskReply("2397")));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: `Bitrix ответил успехом, но задача в стадии 2397, а не «Новые» (981) — ${RETRY}` }],
     });
   });
 
   it("says the stage was sent when its re-read fails", async () => {
-    const first = replies(scrumTask("1"), backlog, groupStages, taskReply("2397"), { result: { task: {} } });
+    const first = replies(...reads("1"), taskReply("2397"), { result: true }, { result: { task: {} } });
     let n = 0;
     const { ctx } = fakeCtx(async (target) => {
-      if (n++ < 5) return first(target);
+      if (n++ < 7) return first(target);
       throw new Error("extension not connected");
     });
 
