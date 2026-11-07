@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "bitrix24-mcp-bridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP bridge server for Bitrix24 — exposes tasks, projects, chats and calls from your live browser session to MCP clients like Claude Code.",
   "license": "MIT",
   "repository": {
