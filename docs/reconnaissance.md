@@ -142,7 +142,7 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
 | `sprint_columns` | `/rest/tasks.api.scrum.sprint.list.json` → `/rest/tasks.api.scrum.kanban.getStages.json` | `filter{GROUP_ID, STATUS:"active"}`, затем `sprintId`; не `task.stages.get` — он про канбан группы |
 | `task_move` ⚠ | `/rest/tasks.task.get.json` → `sprint_columns` → `/rest/task.stages.movetask.json` → `/rest/tasks.task.get.json` | `movetask {id, stageId}`; перечитывает `STAGE_ID` — пустой `true` для задачи вне доски спринта → ошибка |
 | `task_to_sprint` ⚠ | `/rest/tasks.api.scrum.task.get.json` → `tasks.api.scrum.backlog.get` → `sprint_columns` → из бэклога: `tasks.api.scrum.task.update` → `tasks.api.scrum.kanban.addTask` → `scrum.task.get`; затем `task.stages.movetask` → `tasks.task.get` | `task.update {id, fields{entityId: sprintId}}` меняет только контейнер; `addTask {sprintId, taskId, stageId}` ставит на доску, но колонку не меняет — без него `movetask` отвечает пустым `true` |
-| `task_to_backlog` ⚠ | `scrum.task.get` → `backlog.get` → `scrum.task.update` → `scrum.task.get` | `{id, fields{entityId: backlogId}}`; `backlog.get {id: groupId}` |
+| `task_to_backlog` ⚠ | `scrum.task.get` → `backlog.get` → `task.stages.get` → `scrum.task.update` → `scrum.task.get` → `tasks.task.update` → `tasks.task.get` | `{id, fields{entityId: backlogId}}`; `backlog.get {id: groupId}`; затем `STAGE_ID` → стадия `SYSTEM_TYPE: "NEW"` из `task.stages.get {entityId: groupId}` и перечитать `STAGE_ID`. Задача уже в бэклоге, но со `STAGE_ID` не из стадий группы (и не `0`) — только смена стадии |
 | `task_create` ⚠ | `sprint_columns` → `user.current` → ajax `bitrix:tasks.kanban` `addTask` | что шлёт «+» доски; endpoint `/bitrix/services/main/ajax.php?mode=class&c=bitrix%3Atasks.kanban&action=addTask`, форма `{taskName, columnId, parentTaskId:0, beforeItemId:0, params{USER_ID, GROUP_ID, GROUP_ID_FORCED:0, SPRINT_ID, IS_COMPLETED_SPRINT:"N", PERSONAL:"N", TIMELINE_MODE:"N"}, personal:"N"}` → `data{id, columnId}` |
 | `task_result_add` ⚠ | ajax `tasks.v2.Task.Result.add` | json `{"results":[{taskId,text}]}`; ответ `data[0].id`. Официальный `tasks.task.result.add` — только REST 3.0, через сессию отказ |
 | `task_file_attach` ⚠ | `tasks.task.get` → `user.current` → `/rest/disk.storage.getlist.json` → `/rest/disk.folder.uploadfile.json` → `/rest/tasks.task.files.attach.json` → `tasks.task.get` | Диск — ниже |
@@ -167,6 +167,11 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
 - **Колонки спринта** — `tasks.api.scrum.kanban.getStages {sprintId}`; `task.stages.get {entityId}`
   отдаёт старый канбан группы. Активный спринт — `tasks.api.scrum.sprint.list` по `STATUS:"active"`, не по
   датам. Для задачи не на доске `tasks.task.get` показывает стадию канбана группы.
+- **Бэклог и стадия.** `tasks.api.scrum.task.update {entityId: backlogId}` меняет только контейнер:
+  `STAGE_ID` остаётся колонкой спринта, и доска спринта продолжает показывать задачу там. UI при переносе
+  в бэклог (`tasks.scrum.updateItemSort` с `signedParameters` страницы доски) ставит стадию `SYSTEM_TYPE:
+  "NEW"` канбана группы («Новые»). `task.stages.movetask` в неё для задачи бэклога отвечает `false` и
+  ничего не меняет; работает `tasks.task.update {taskId, fields{STAGE_ID}}` — задача остаётся в бэклоге.
 - **DoD.** Нужен ли он — `doD.isNecessary {groupId, taskId}` (строгий `data: boolean`), и только в группе
   с `TYPE: "scrum"` (`workgroup.get`); неизвестный `TYPE` или ответ `tasks.task.get` без поля проекта —
   отказ, а не закрытие без DoD (без DoD закрывается только задача с проектом `0` / `null`). Типы — `doD.getSettings {groupId, taskId, saveRequest:"N"}` → `types[{id, name, dodRequired}]`.
@@ -186,7 +191,10 @@ Dev-запуск (`bun run src/index.ts`) не сверяет версию с da
   остаётся `false`), после `delete` — `false`. Флаг общий для всех связей задачи, поэтому `add` читает
   его до и после: был `false` → должен стать `true`, иначе ошибка; был `true` → связь отправлена, но
   подтвердить именно её нельзя. `delete`: стал `false` — подтверждено, остался `true` — подтвердить
-  нельзя.
+  нельзя. Ловушка: повторный `add` уже существующей пары отвечает `ACTION_FAILED: Нельзя создавать
+  циклическую зависимость (<dependentId>, <taskId>)` — так же, как настоящий цикл. Если флаг до записи
+  был `true`, мост говорит, что связь, скорее всего, уже есть (подтвердить нечем); при `false` ошибка
+  уходит как есть.
 - **Диск через сессию.** Хранилище пользователя — `disk.storage.getlist {filter{ENTITY_TYPE:"user",
   ENTITY_ID: <user.current>}}` → `ROOT_OBJECT_ID`; загрузка — `disk.folder.uploadfile {id: <корень>,
   data{NAME}, fileContent:[имя, base64], generateUniqueName:true}` формой (10 МБ файла ≈ 13 МБ тела; этому

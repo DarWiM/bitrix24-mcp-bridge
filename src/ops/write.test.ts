@@ -175,7 +175,7 @@ describe("task_description_set", () => {
   });
 
   for (const [title, reread, cause] of [
-    ["comes back in an unexpected shape", async () => ({ status: "success", data: [] }), "tasks.v2.Task.get (description) returned an unexpected shape"],
+    ["comes back in an unexpected shape", async () => ({ status: "success", data: {} }), "tasks.v2.Task.get (description) returned an unexpected shape"],
     ["fails", async () => {
       throw new Error("request timed out");
     }, "request timed out"],
@@ -224,7 +224,7 @@ describe("task_description_append", () => {
   }
 
   it("does not write when the read comes back in an unexpected shape", async () => {
-    const { ctx, call } = fakeCtx(replies({ status: "success", data: [] }));
+    const { ctx, call } = fakeCtx(replies({ status: "success", data: {} }));
 
     await expect(op("task_description_append").execute(ctx, { taskId: 42, text: "x" })).rejects.toThrow(/unexpected shape/);
     expect(call).toHaveBeenCalledTimes(1);
@@ -380,7 +380,7 @@ describe("task_move", () => {
   });
 
   for (const [title, reread, cause] of [
-    ["comes back in an unexpected shape", async () => ({ result: [] }), "tasks.task.get returned an unexpected shape"],
+    ["comes back in an unexpected shape", async () => ({ result: {} }), "tasks.task.get returned an unexpected shape"],
     ["fails", async () => {
       throw new Error("extension not connected");
     }, "extension not connected"],
@@ -925,25 +925,101 @@ describe("task_to_sprint", () => {
 });
 
 describe("task_to_backlog", () => {
-  it("moves sprint tasks to the backlog, re-reads them and leaves backlog ones alone", async () => {
-    const { ctx, call } = fakeCtx(replies(scrumTask("7"), backlog, { result: true }, scrumTask("1"), scrumTask("1")));
+  const groupStagesGet = (entityId: number) => rest("/rest/task.stages.get.json", { entityId });
+  // task.stages.get keys stages by id and sends ids as strings.
+  const groupStages = {
+    result: {
+      "981": { ID: "981", TITLE: "Новые", SORT: "100", SYSTEM_TYPE: "NEW" },
+      "983": { ID: "983", TITLE: "Выполняются", SORT: "200", SYSTEM_TYPE: null },
+    },
+  };
+  const stageUpdate = (taskId: number, stageId: number) => rest("/rest/tasks.task.update.json", { taskId, fields: { STAGE_ID: stageId } });
+  const getTask = (taskId: number) => rest("/rest/tasks.task.get.json", { taskId, select: TASK_STAGE_SELECT });
+
+  it("moves a sprint task to the backlog and out of its sprint column, re-reading both", async () => {
+    const { ctx, call } = fakeCtx(
+      replies(scrumTask("7"), backlog, groupStages, { result: true }, scrumTask("1"), { result: { task: {} } }, taskReply("981")),
+    );
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      scrumGet(42), backlogGet(15), groupStagesGet(15), scrumUpdate(42, 1), scrumGet(42), stageUpdate(42, 981), getTask(42),
+    ]);
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: true }] });
+  });
+
+  it("only moves the stage of a backlog task still sitting in a sprint column", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply("2397"), { result: { task: {} } }, taskReply("981")));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      scrumGet(42), backlogGet(15), groupStagesGet(15), getTask(42), stageUpdate(42, 981), getTask(42),
+    ]);
+    expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: true }] });
+  });
+
+  it("says a deleted task is gone, though its scrum item still answers, and writes nothing", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, { result: [] }));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(call).toHaveBeenCalledTimes(4);
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: "задача 42 не найдена или нет доступа (удалена или скрыта от тебя)" }],
+    });
+  });
+
+  for (const stageId of ["981", "983", "0"]) {
+    it(`leaves a backlog task in stage ${stageId} alone`, async () => {
+      const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply(stageId)));
+
+      const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+      expect(call).toHaveBeenCalledTimes(4);
+      expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: Number(stageId), changed: false }] });
+    });
+  }
+
+  it("reads the backlog and the project stages once per project", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply("981"), scrumTask("1"), taskReply("983")));
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42, 43] });
 
-    expect(call.mock.calls.map((c) => c[0])).toEqual([scrumGet(42), backlogGet(15), scrumUpdate(42, 1), scrumGet(42), scrumGet(43)]);
+    expect(call.mock.calls.map((c) => c[0])).toEqual([
+      scrumGet(42), backlogGet(15), groupStagesGet(15), getTask(42), scrumGet(43), getTask(43),
+    ]);
     expect(result).toEqual({
       results: [
-        { taskId: 42, ok: true, backlogId: 1, changed: true },
-        { taskId: 43, ok: true, backlogId: 1, changed: false },
+        { taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: false },
+        { taskId: 43, ok: true, backlogId: 1, stageId: 983, changed: false },
       ],
     });
   });
 
+  for (const [title, stages] of [
+    ["has no NEW stage", { result: { "983": { ID: "983", TITLE: "Выполняются", SYSTEM_TYPE: null } } }],
+    ["has no stages at all", { result: [] }],
+  ] as const) {
+    it(`touches nothing when the project ${title}`, async () => {
+      const { ctx, call } = fakeCtx(replies(scrumTask("7"), backlog, stages));
+
+      const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+      expect(call).toHaveBeenCalledTimes(3);
+      expect(result).toEqual({
+        results: [{ taskId: 42, ok: false, error: "у проекта 15 нет стартовой стадии (SYSTEM_TYPE NEW) в task.stages.get — ничего не изменено" }],
+      });
+    });
+  }
+
   it("fails a move Bitrix answered true to but did not make", async () => {
-    const { ctx } = fakeCtx(replies(scrumTask("7"), backlog, { result: true }, scrumTask("7")));
+    const { ctx, call } = fakeCtx(replies(scrumTask("7"), backlog, groupStages, { result: true }, scrumTask("7")));
 
     const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
+    expect(call).toHaveBeenCalledTimes(5);
     expect(result).toEqual({
       results: [{ taskId: 42, ok: false, error: "Bitrix ответил успехом, но задача не в бэклоге (сейчас в 7)" }],
     });
@@ -956,9 +1032,9 @@ describe("task_to_backlog", () => {
     }, "extension not connected"],
   ] as const) {
     it(`says the move was sent when the re-read ${title}`, async () => {
-      const first = replies(scrumTask("7"), backlog, { result: true });
+      const first = replies(scrumTask("7"), backlog, groupStages, { result: true });
       let n = 0;
-      const { ctx } = fakeCtx(async (target) => (n++ < 3 ? first(target) : reread()));
+      const { ctx } = fakeCtx(async (target) => (n++ < 4 ? first(target) : reread()));
 
       const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
 
@@ -973,6 +1049,66 @@ describe("task_to_backlog", () => {
       });
     });
   }
+
+  it("says the task stayed in the sprint column when the stage write fails, and how to fix it", async () => {
+    const first = replies(scrumTask("7"), backlog, groupStages, { result: true }, scrumTask("1"));
+    let n = 0;
+    const { ctx } = fakeCtx(async (target) => {
+      if (n++ < 5) return first(target);
+      throw new Error("ACCESS_DENIED");
+    });
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error:
+            "задача в бэклоге, но осталась в колонке спринта (ACCESS_DENIED) — повтори bitrix_task_to_backlog — у задачи, уже стоящей в бэклоге, он переставит только стадию",
+        },
+      ],
+    });
+  });
+
+  it("fails a stage write Bitrix answered to but did not apply", async () => {
+    const { ctx } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, taskReply("2397"), { result: { task: {} } }, taskReply("2397")));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error:
+            "Bitrix ответил успехом, но задача в стадии 2397, а не «Новые» (981) — повтори bitrix_task_to_backlog — у задачи, уже стоящей в бэклоге, он переставит только стадию",
+        },
+      ],
+    });
+  });
+
+  it("says the stage was sent when its re-read fails", async () => {
+    const first = replies(scrumTask("1"), backlog, groupStages, taskReply("2397"), { result: { task: {} } });
+    let n = 0;
+    const { ctx } = fakeCtx(async (target) => {
+      if (n++ < 5) return first(target);
+      throw new Error("extension not connected");
+    });
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(result).toEqual({
+      results: [
+        {
+          taskId: 42,
+          ok: false,
+          error: "стадия отправлена, но перечитать задачу не удалось (проверь через bitrix_task_get): extension not connected",
+        },
+      ],
+    });
+  });
 
   it("refuses a task outside any scrum project", async () => {
     const { ctx, call } = fakeCtx(replies(scrumTask("0", "0")));

@@ -35,6 +35,16 @@ function replies(...pages: unknown[]): CallFn {
   };
 }
 
+async function rejection(p: Promise<unknown>): Promise<Error> {
+  try {
+    await p;
+  } catch (e) {
+    if (e instanceof Error) return e;
+    throw e;
+  }
+  throw new Error("expected promise to reject");
+}
+
 function op(name: string): Operation {
   const found = OPERATIONS.find((o) => o.name === name);
   if (!found) throw new Error(`no operation ${name}`);
@@ -369,16 +379,45 @@ describe("task_gantt_link", () => {
     expect(result).toHaveProperty("note", expect.stringMatching(/остаются связи Ганта/));
   });
 
-  it("rejects a self-link, an unknown type or a type on removal before any request", async () => {
+  it("rejects a self-link before any request", async () => {
     const { ctx, call } = fakeCtx();
 
-    for (const args of [
-      { taskId: 42, dependentId: 42 },
-      { taskId: 42, dependentId: 43, type: "start_start" },
-      { taskId: 42, dependentId: 43, remove: true, type: "finish_start" },
-    ]) {
-      await expect(op("task_gantt_link").execute(ctx, args)).rejects.toThrow(OpInputError);
-    }
+    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 42 })).rejects.toThrow(OpInputError);
     expect(call).not.toHaveBeenCalled();
+  });
+
+  it("ignores a leftover type argument", async () => {
+    const { ctx, call } = fakeCtx(replies(ganttFlag(false), DONE, ganttFlag(true)));
+
+    const result = await op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43, type: "finish_start" });
+
+    expect(call.mock.calls[1][0]).toEqual(rest("/rest/task.dependence.add.json", { ...pair, linkType: 2 }));
+    expect(result).toEqual({ taskId: 42, dependentId: 43, linked: true, confirmed: true });
+  });
+
+  const cycle = new Error("ACTION_FAILED: Нельзя создавать циклическую зависимость (43, 42)");
+
+  it("reads a cycle refusal as a likely repeat when the dependent task already had Gantt links", async () => {
+    const { ctx, call } = fakeCtx(replies(ganttFlag(true), cycle));
+
+    const e = await rejection(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 }));
+
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(e.message).toContain("Нельзя создавать циклическую зависимость (43, 42)");
+    expect(e.message).toMatch(/у задачи 43 уже есть связи Ганта/i);
+    expect(e.message).toMatch(/скорее всего, именно эта связь уже существует/);
+    expect(e.message).toMatch(/ничего не записано$/);
+  });
+
+  it("passes a cycle refusal on as is when the dependent task had no Gantt links", async () => {
+    const { ctx } = fakeCtx(replies(ganttFlag(false), cycle));
+
+    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(cycle.message);
+  });
+
+  it("passes any other refusal on as is", async () => {
+    const { ctx } = fakeCtx(replies(ganttFlag(true), new Error("ACTION_FAILED: доступ запрещён")));
+
+    await expect(op("task_gantt_link").execute(ctx, { taskId: 42, dependentId: 43 })).rejects.toThrow(/^ACTION_FAILED: доступ запрещён$/);
   });
 });

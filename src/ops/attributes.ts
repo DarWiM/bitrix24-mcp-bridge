@@ -6,12 +6,11 @@
 import { z } from "zod";
 import { forEachTask, taskIdsArg } from "./batch.js";
 import { currentUserId } from "./board.js";
-import { mayHaveHappened, numeric, parseResponse, reread } from "./calls.js";
+import { mayHaveHappened, numeric, parseResponse, parseTaskCard, reread, v2 } from "./calls.js";
 import { TASK_V2_UPDATE, dateArg, fromTs, sameMinute, toTs } from "./content.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
-import { TASK_V2_GET, callTarget } from "./read.js";
+import { TASK_V2_GET } from "./read.js";
 
-const v2 = (action: string) => callTarget({ action, method: "POST", bodyType: "json" });
 const DEADLINE_UPDATE = v2("tasks.v2.Task.Deadline.update");
 const MUTE = v2("tasks.v2.Task.Attention.mute");
 const UNMUTE = v2("tasks.v2.Task.Attention.unmute");
@@ -48,7 +47,7 @@ type Reminder = z.infer<typeof remindersResponse>["data"][number];
 
 async function readCard<T>(ctx: OpContext, taskId: number, schema: z.ZodType<T, z.ZodTypeDef, unknown>, what: string) {
   const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
-  return parseResponse(schema, raw, `tasks.v2.Task.get (${what})`);
+  return parseTaskCard(schema, raw, `tasks.v2.Task.get (${what})`, taskId);
 }
 
 async function readReminders(ctx: OpContext, taskId: number) {

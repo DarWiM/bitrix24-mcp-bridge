@@ -5,11 +5,10 @@
 
 import { z } from "zod";
 import { MAX_BATCH, errorMessage } from "./batch.js";
-import { REST_TASK_GET, numeric, parseResponse, reread, restMethod } from "./calls.js";
+import { REST_TASK_GET, numeric, parseResponse, parseTaskCard, reread, restMethod, v2 } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
-import { TASK_RELATED, TASK_V2_GET, callTarget } from "./read.js";
+import { TASK_RELATED, TASK_V2_GET } from "./read.js";
 
-const v2 = (action: string) => callTarget({ action, method: "POST", bodyType: "json" });
 const RELATED_ADD = v2("tasks.v2.Task.Relation.Related.add");
 const RELATED_DELETE = v2("tasks.v2.Task.Relation.Related.delete");
 const CHILD_ADD = v2("tasks.v2.Task.Relation.Child.add");
@@ -44,12 +43,12 @@ async function readRelated(ctx: OpContext, taskId: number) {
 
 async function readParent(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "PARENT_ID"] } });
-  return parseResponse(parentResponse, raw, "tasks.task.get").result.task.parentId;
+  return parseTaskCard(parentResponse, raw, "tasks.task.get", taskId).result.task.parentId;
 }
 
 async function hasGanttLinks(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
-  return parseResponse(ganttFlagResponse, raw, "tasks.v2.Task.get (containsGanttLinks)").data.containsGanttLinks;
+  return parseTaskCard(ganttFlagResponse, raw, "tasks.v2.Task.get (containsGanttLinks)", taskId).data.containsGanttLinks;
 }
 
 const taskList = (ids: number[]) => ids.map((id) => ({ id }));
@@ -170,13 +169,15 @@ export const RELATION_OPERATIONS: Operation[] = [
     name: "task_gantt_link",
     description:
       "⚠ МУТИРУЮЩИЙ. Связь задач на диаграмме Ганта «окончание → начало»: dependentId начинается после " +
-      "завершения taskId. По умолчанию связь добавляется; remove: true — удалить связь. type — только " +
-      "\"finish_start\" (по умолчанию) и только при добавлении. Прочие связи задач не трогаются. Прочитать " +
-      "отдельную связь нельзя: Bitrix сообщает только, есть ли у задачи dependentId хоть одна связь Ганта, — " +
+      "завершения taskId. По умолчанию связь добавляется; remove: true — удалить связь. Прочие связи задач " +
+      "не трогаются. Прочитать отдельную связь нельзя: Bitrix сообщает только, есть ли у задачи dependentId " +
+      "хоть одна связь Ганта, — " +
       "по нему запись и проверяется. confirmed: true — подтверждено: после добавления связи появились, после " +
       "удаления не осталось ни одной. confirmed: false и note — подтвердить нельзя: при добавлении у задачи уже " +
-      "были связи Ганта, при удалении у неё остаются другие. Если связей после добавления нет — ошибка. Связь " +
-      "видят все, кто видит задачи; уведомляет ли Bitrix участников — не проверено. " +
+      "были связи Ганта, при удалении у неё остаются другие. Если связей после добавления нет — ошибка. Повтор " +
+      "уже существующей связи Bitrix отвергает как циклическую зависимость — если у dependentId уже были связи " +
+      "Ганта, ошибка скажет, что эта связь, скорее всего, уже есть. Связь видят все, кто видит задачи; " +
+      "уведомляет ли Bitrix участников — не проверено. " +
       "Ответ: { taskId, dependentId, linked, confirmed, note? }.",
     mutating: true,
     // Up to three requests in a row.
@@ -185,12 +186,10 @@ export const RELATION_OPERATIONS: Operation[] = [
       taskId: idArg(),
       dependentId: idArg(),
       remove: z.boolean().optional(),
-      type: z.enum(["finish_start"]).optional(),
     },
     run: async (ctx, a) => {
       const invalid = (message: string) => new OpInputError(`invalid arguments for task_gantt_link — ${message}`);
       if (a.dependentId === a.taskId) throw invalid("a task cannot depend on itself");
-      if (a.remove && a.type !== undefined) throw invalid("type applies only when adding a link");
       const link = { taskId: a.taskId, dependentId: a.dependentId };
       const pair = { taskIdFrom: a.taskId, taskIdTo: a.dependentId };
       const readAfter = () => reread(hasGanttLinks(ctx, a.dependentId), `bitrix_task_get_v2 задачи ${a.dependentId}`);
@@ -209,7 +208,15 @@ export const RELATION_OPERATIONS: Operation[] = [
       const before = await hasGanttLinks(ctx, a.dependentId).catch((e: unknown) => {
         throw new Error(`не удалось прочитать связи Ганта задачи ${a.dependentId}: ${errorMessage(e)}; ничего не записано — повтор безопасен`);
       });
-      await ctx.call({ ...GANTT_ADD, params: { ...pair, linkType: FINISH_START } });
+      await ctx.call({ ...GANTT_ADD, params: { ...pair, linkType: FINISH_START } }).catch((e: unknown) => {
+        // A repeat of an existing link is refused with the same words as a real cycle.
+        if (!before || !/циклическ/i.test(errorMessage(e))) throw e;
+        throw new Error(
+          `Bitrix отклонил связь как циклическую зависимость (${errorMessage(e)}). У задачи ${a.dependentId} уже есть связи Ганта, ` +
+            "так что, скорее всего, именно эта связь уже существует — повтор Bitrix отвергает так же; прочитать связь и " +
+            "подтвердить это нельзя, ничего не записано",
+        );
+      });
       if (!(await readAfter())) throw new Error(`Bitrix ответил успехом, но не применил связь: у задачи ${a.dependentId} нет связей Ганта`);
       if (!before) return { ...link, linked: true, confirmed: true };
       return {

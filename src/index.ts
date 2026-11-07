@@ -104,6 +104,7 @@ async function runMcpClient() {
     operations: OPERATIONS,
     defaultPortal: cfg.defaultPortal,
     portals: Object.keys(cfg.portals),
+    downloadsDir: paths.downloadsDir,
   });
   await server.connect(new StdioServerTransport());
   console.error("[mcp] bitrix24-bridge client running on stdio");

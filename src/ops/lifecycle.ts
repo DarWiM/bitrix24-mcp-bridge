@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { errorMessage, forEachTask, taskIdsArg } from "./batch.js";
 import { readTaskStage } from "./board.js";
-import { numeric, parseResponse } from "./calls.js";
+import { numeric, parseResponse, v2 } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { PROJECTS_GET, callTarget } from "./read.js";
 
@@ -15,7 +15,6 @@ const DOD_NECESSARY = dod("isNecessary");
 const DOD_SETTINGS = dod("getSettings");
 const DOD_LIST = dod("getList");
 const DOD_SAVE = dod("saveList");
-const v2 = (action: string) => callTarget({ action, method: "POST", bodyType: "json" });
 const STATUS_COMPLETE = v2("tasks.v2.Task.Status.complete");
 const STATUS_RENEW = v2("tasks.v2.Task.Status.renew");
 

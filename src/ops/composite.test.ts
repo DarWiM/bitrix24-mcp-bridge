@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
@@ -538,5 +538,80 @@ describe("call_recording", () => {
     await expect(op("call_recording").execute(ctx, { callId: 4242 })).rejects.toThrow(/no recording/);
     expect(call).toHaveBeenCalledTimes(1);
     expect(callBinary).not.toHaveBeenCalled(); // no download attempted
+  });
+});
+
+describe("downloads folder reminder", () => {
+  // A sparse file: stat reports the size, nothing is written to disk.
+  function grownDir(): string {
+    const dir = tempDir();
+    const old = join(dir, "old-recording.mp3");
+    writeFileSync(old, "");
+    truncateSync(old, 600 * 1024 * 1024);
+    return dir;
+  }
+  const reminder = (dir: string) => `папка загрузок моста ${dir} занимает 600 МБ — предложи пользователю удалить ненужные файлы (мост сам их не удаляет)`;
+  const fileUrl = "https://d.bitrix24.ru/bitrix/services/main/ajax.php?action=disk.api.file.download&fileId=1";
+
+  it("rides on a file_download reply once the folder holds more than 500 MB", async () => {
+    const dir = grownDir();
+    const { ctx } = fakeCtx({ callBinary: downloads({ bytes: 5, contentType: "image/png", fileName: "photo.png" }), downloadsDir: dir });
+
+    const payload = await run("file_download", ctx, { url: fileUrl });
+
+    expect(payload.path).toBe(join(dir, "photo.png"));
+    expect(payload.warning).toBe(reminder(dir));
+  });
+
+  it("stays out of a file_download reply when the file was saved outside the folder", async () => {
+    const dir = grownDir();
+    const elsewhere = tempDir();
+    const { ctx } = fakeCtx({ callBinary: downloads({ bytes: 5, contentType: "image/png", fileName: "photo.png" }), downloadsDir: dir });
+
+    const payload = await run("file_download", ctx, { url: fileUrl, savePath: join(elsewhere, "photo.png") });
+
+    expect(payload.path).toBe(join(elsewhere, "photo.png"));
+    expect(payload.warning).toBeUndefined();
+  });
+
+  it("rides on a reply saved by name into the folder", async () => {
+    const dir = grownDir();
+    const { ctx } = fakeCtx({ callBinary: downloads({ bytes: 5, contentType: "image/png", fileName: "photo.png" }), downloadsDir: dir });
+
+    expect((await run("file_download", ctx, { url: fileUrl, savePath: "chosen.png" })).warning).toBe(reminder(dir));
+  });
+
+  it("stays out of a file_download reply while the folder is small", async () => {
+    const { ctx } = fakeCtx({ callBinary: downloads({ bytes: 5, contentType: "image/png", fileName: "photo.png" }) });
+
+    expect((await run("file_download", ctx, { url: fileUrl })).warning).toBeUndefined();
+  });
+
+  it("rides on a call_recording reply", async () => {
+    const audio = "/bitrix/services/main/ajax.php?action=call.Track.download&signedParameters=sp.sig";
+    const dir = grownDir();
+    const { ctx } = fakeCtx({
+      call: async () => html(`<div data-call-id="4242"><div data-audio-src="${audio}"></div></div>`),
+      callBinary: downloads({ bytes: 5, contentType: "audio/ogg", fileName: "call.ogg" }),
+      downloadsDir: dir,
+    });
+
+    expect((await run("call_recording", ctx, { callId: 4242 })).warning).toBe(reminder(dir));
+  });
+
+  it("rides on a call_detail reply only when the transcript went to a file", async () => {
+    const dir = grownDir();
+    const spilled = fakeCtx({ call: async () => html(pageWithTranscript(400)), downloadsDir: dir });
+    const inline = fakeCtx({ call: async () => html(pageWithTranscript(3)), downloadsDir: dir });
+
+    expect((await run("call_detail", spilled.ctx, { callId: 4242 })).warning).toBe(reminder(dir));
+    expect((await run("call_detail", inline.ctx, { callId: 4242 })).warning).toBeUndefined();
+  });
+
+  it("rides on a task_comments reply when the discussion went to a file", async () => {
+    const dir = grownDir();
+    const { ctx } = fakeCtx({ call: replies(commentsPage(Array.from({ length: 200 }, (_, i) => 1000 + i), false)), downloadsDir: dir });
+
+    expect((await run("task_comments", ctx, { taskId: 42 })).warning).toBe(reminder(dir));
   });
 });

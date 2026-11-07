@@ -11,13 +11,14 @@ import {
   moveToColumn,
   perGroup,
   readBacklogId,
+  readGroupStages,
   readScrumTask,
   readTaskStage,
   refuseClosingColumns,
   targetColumn,
   type SprintColumn,
 } from "./board.js";
-import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, reread, restMethod } from "./calls.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, parseTaskCard, reread, restMethod, v2 } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
@@ -33,7 +34,7 @@ const BOARD_CREATE = callTarget({
   method: "POST",
 });
 // The official tasks.task.result.add exists in REST 3.0 only, which the session refuses.
-const RESULT_ADD = callTarget({ action: "tasks.v2.Task.Result.add", method: "POST", bodyType: "json" });
+const RESULT_ADD = v2("tasks.v2.Task.Result.add");
 
 export const DESCRIPTION_MAX = 100_000;
 const RESULT_MAX = 20_000;
@@ -59,7 +60,7 @@ const usersResponse = z.object({
 // Raw BBCode, `[disk file id=…]` included — what a point-edit has to write back untouched.
 export async function readDescription(ctx: OpContext, taskId: number): Promise<string> {
   const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
-  return parseResponse(descriptionResponse, raw, "tasks.v2.Task.get (description)").data.description ?? "";
+  return parseTaskCard(descriptionResponse, raw, "tasks.v2.Task.get (description)", taskId).data.description ?? "";
 }
 
 const DESCRIPTION_MAY_HAVE_CHANGED = "описание могло измениться — сверь через bitrix_task_get_v2 перед повтором";
@@ -81,7 +82,7 @@ export async function writeDescription(ctx: OpContext, taskId: number, text: str
 
 async function readResponsible(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "RESPONSIBLE_ID"] } });
-  return parseResponse(responsibleResponse, raw, "tasks.task.get").result.task;
+  return parseTaskCard(responsibleResponse, raw, "tasks.task.get", taskId).result.task;
 }
 
 const userIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
@@ -92,7 +93,7 @@ function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITO
   const response = membersResponse(def.key);
   const readMembers = async (ctx: OpContext, taskId: number) => {
     const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", def.field] } });
-    return parseResponse(response, raw, "tasks.task.get").result.task[def.key];
+    return parseTaskCard(response, raw, "tasks.task.get", taskId).result.task[def.key];
   };
   return defineOperation({
     name: def.name,
@@ -163,6 +164,23 @@ async function placeInSprint(
   // the board, so a task left off it has to go back to the backlog first.
   const moved = await moveToColumn(ctx, taskId, target, fromBacklog ? RETRY_FROM_BACKLOG : undefined);
   return { sprintId, ...moved, fromBacklog };
+}
+
+const RETRY_TO_BACKLOG = "повтори bitrix_task_to_backlog — у задачи, уже стоящей в бэклоге, он переставит только стадию";
+
+// Moving the scrum item leaves STAGE_ID on the sprint column. movetask answers false for a backlog
+// task; a plain field update does what the UI's drag into the backlog ends up with.
+async function leaveSprintColumn(ctx: OpContext, taskId: number, start: { id: number; name: string }) {
+  await ctx.call({ ...TASK_UPDATE, params: { taskId, fields: { STAGE_ID: start.id } } }).catch((e: unknown) => {
+    throw new Error(`задача в бэклоге, но осталась в колонке спринта (${errorMessage(e)}) — ${RETRY_TO_BACKLOG}`);
+  });
+  const { stageId } = await readTaskStage(ctx, taskId).catch((e: unknown) => {
+    throw new Error(`стадия отправлена, но перечитать задачу не удалось (проверь через bitrix_task_get): ${errorMessage(e)}`);
+  });
+  if (stageId !== start.id) {
+    throw new Error(`Bitrix ответил успехом, но задача в стадии ${stageId ?? "?"}, а не «${start.name}» (${start.id}) — ${RETRY_TO_BACKLOG}`);
+  }
+  return { stageId: start.id };
 }
 
 const MEMBERS_HINT =
@@ -292,24 +310,33 @@ export const WRITE_OPERATIONS: Operation[] = [
     name: "task_to_backlog",
     description:
       "⚠ МУТИРУЮЩИЙ. Вернуть задачи (taskIds — до 50) в БЭКЛОГ их scrum-проекта; с доски спринта они " +
-      "пропадают — это видят все участники проекта. Задачи, которые уже в бэклоге, не трогаются " +
+      "пропадают — это видят все участники проекта. Задача уходит из колонки спринта в стартовую стадию " +
+      "канбана проекта, как при переносе в веб-интерфейсе. Задача, которая уже в бэклоге, но всё ещё числится " +
+      "в колонке спринта, только переставляется в эту стадию; остальные задачи бэклога не трогаются " +
       "(changed: false). Задачи обрабатываются по очереди; ошибка одной не останавливает остальные. " +
-      "Ответ: { results: [{ taskId, ok, error?, backlogId, changed }] } — положение перечитано после переноса.",
+      "Ответ: { results: [{ taskId, ok, error?, backlogId, stageId, changed }] } — положение и стадия перечитаны после переноса.",
     mutating: true,
     budget: "long",
     input: { taskIds: taskIdsArg() },
     run: async (ctx, a) => {
       const backlogOf = perGroup((groupId) => readBacklogId(ctx, groupId));
+      const stagesOf = perGroup((groupId) => readGroupStages(ctx, groupId));
       return forEachTask(a.taskIds, async (taskId) => {
         const task = await readScrumTask(ctx, taskId);
         const backlogId = await backlogOf(task.groupId);
-        if (task.entityId === backlogId) return { backlogId, changed: false };
+        const stages = await stagesOf(task.groupId);
+        if (task.entityId === backlogId) {
+          const { stageId } = await readTaskStage(ctx, taskId);
+          // 0 turns up on backlog tasks too and is left as Bitrix keeps it.
+          if (!stageId || stages.ids.has(stageId)) return { backlogId, stageId: stageId ?? 0, changed: false };
+          return { backlogId, ...(await leaveSprintColumn(ctx, taskId, stages.start)), changed: true };
+        }
         await ctx.call({ ...SCRUM_TASK_UPDATE, params: { id: taskId, fields: { entityId: backlogId } } });
         const after = await readScrumTask(ctx, taskId).catch((e: unknown) => {
           throw new Error(`перенос отправлен, но перечитать задачу не удалось (проверь через bitrix_task_scrum_info): ${errorMessage(e)}`);
         });
         if (after.entityId !== backlogId) throw new Error(`Bitrix ответил успехом, но задача не в бэклоге (сейчас в ${after.entityId})`);
-        return { backlogId, changed: true };
+        return { backlogId, ...(await leaveSprintColumn(ctx, taskId, stages.start)), changed: true };
       });
     },
   }),

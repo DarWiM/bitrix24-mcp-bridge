@@ -3,7 +3,7 @@
 
 import { z } from "zod";
 import { errorMessage } from "./batch.js";
-import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
+import { REST_TASK_GET, numeric, parseResponse, parseTaskCard, restMethod } from "./calls.js";
 import { OpInputError, type OpContext } from "./operation.js";
 
 const SPRINT_LIST = restMethod("tasks.api.scrum.sprint.list");
@@ -11,6 +11,8 @@ const SPRINT_STAGES = restMethod("tasks.api.scrum.kanban.getStages");
 const STAGE_MOVE = restMethod("task.stages.movetask");
 const SCRUM_TASK_GET = restMethod("tasks.api.scrum.task.get");
 const BACKLOG_GET = restMethod("tasks.api.scrum.backlog.get");
+// The project's own (non-scrum) kanban, not the sprint board.
+const GROUP_STAGES = restMethod("task.stages.get");
 const USER_CURRENT = restMethod("user.current");
 
 const TASK_STAGE_SELECT = ["ID", "GROUP_ID", "STAGE_ID", "STATUS"];
@@ -25,6 +27,9 @@ const taskResponse = z.object({
 const scrumTaskResponse = z.object({ result: z.object({ entityId: numeric, groupId: numeric.nullish() }) });
 const backlogResponse = z.object({ result: z.object({ id: numeric }) });
 const currentUserResponse = z.object({ result: z.object({ ID: numeric }) });
+const groupStage = z.object({ ID: numeric, TITLE: z.string(), SYSTEM_TYPE: z.string().nullish() });
+// Keyed by stage id; PHP sends an empty map as [].
+const groupStagesResponse = z.object({ result: z.union([z.record(groupStage), z.array(groupStage)]) });
 
 export interface SprintColumn {
   id: number;
@@ -54,7 +59,7 @@ export async function activeSprintColumns(ctx: OpContext, groupId: number): Prom
 
 export async function readTaskStage(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: TASK_STAGE_SELECT } });
-  return parseResponse(taskResponse, raw, "tasks.task.get").result.task;
+  return parseTaskCard(taskResponse, raw, "tasks.task.get", taskId).result.task;
 }
 
 // The request below goes out at most once per operation call, whichever helper asks first.
@@ -92,6 +97,17 @@ export async function readScrumTask(ctx: OpContext, taskId: number) {
 export async function readBacklogId(ctx: OpContext, groupId: number) {
   const raw = await ctx.call({ ...BACKLOG_GET, params: { id: groupId } });
   return parseResponse(backlogResponse, raw, "tasks.api.scrum.backlog.get").result.id;
+}
+
+// A task outside every sprint sits in a stage of the project's own kanban: the UI puts a task dragged
+// into the backlog into its NEW stage. A STAGE_ID outside these stages is a sprint column, and the
+// sprint board keeps showing the task there.
+export async function readGroupStages(ctx: OpContext, groupId: number) {
+  const raw = await ctx.call({ ...GROUP_STAGES, params: { entityId: groupId } });
+  const stages = Object.values(parseResponse(groupStagesResponse, raw, "task.stages.get").result);
+  const start = stages.find((s) => s.SYSTEM_TYPE === "NEW");
+  if (!start) throw new Error(`у проекта ${groupId} нет стартовой стадии (SYSTEM_TYPE NEW) в task.stages.get — ничего не изменено`);
+  return { ids: new Set(stages.map((s) => s.ID)), start: { id: start.ID, name: start.TITLE } };
 }
 
 function findColumn(columns: SprintColumn[], column: number | string): SprintColumn | undefined {

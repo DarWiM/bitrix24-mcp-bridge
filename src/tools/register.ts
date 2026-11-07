@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { CallSink } from "../bridge/uds-client.js";
+import { downloadsWarning } from "../ops/download.js";
 import type { Operation } from "../ops/operation.js";
 import { HELP } from "./help.js";
 import { PACKAGE_VERSION } from "../version.js";
@@ -10,6 +11,8 @@ export interface ToolDeps {
   operations: Operation[];
   defaultPortal: string;
   portals: string[];
+  // Measured here, not by the daemon: both run with the same environment, hence the same folder.
+  downloadsDir: string;
 }
 
 function ok(data: unknown) { return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }; }
@@ -52,6 +55,16 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
         // the copy it loaded until someone hits "Обновить" — so a stale extension is reported
         // rather than left to fail later with a confusing error.
         const stale = portals.filter((p) => p.connected && p.extensionVersion !== PACKAGE_VERSION);
+        const warnings: string[] = [];
+        if (stale.length > 0) {
+          warnings.push(
+            `расширение устарело (${stale.map((p) => `${p.alias}: ${p.extensionVersion ?? "до 0.3.0"}`).join(", ")}), ` +
+              `мост версии ${PACKAGE_VERSION}. Файлы уже обновлены — нажми «Обновить» на расширении в chrome://extensions ` +
+              "и перезагрузи вкладку портала, иначе новые методы работать не будут.",
+          );
+        }
+        const downloads = await downloadsWarning(deps.downloadsDir);
+        if (downloads !== undefined) warnings.push(`${downloads}.`);
         return ok({
           configured: true,
           defaultPortal: deps.defaultPortal,
@@ -59,14 +72,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
           // null: the daemon is too old to report whether mutating operations are allowed.
           mutations: mutations ?? null,
           portals,
-          ...(stale.length > 0
-            ? {
-                warning:
-                  `расширение устарело (${stale.map((p) => `${p.alias}: ${p.extensionVersion ?? "до 0.3.0"}`).join(", ")}), ` +
-                  `мост версии ${PACKAGE_VERSION}. Файлы уже обновлены — нажми «Обновить» на расширении в chrome://extensions ` +
-                  "и перезагрузи вкладку портала, иначе новые методы работать не будут.",
-              }
-            : {}),
+          ...(warnings.length > 0 ? { warning: warnings.join(" ") } : {}),
         });
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));

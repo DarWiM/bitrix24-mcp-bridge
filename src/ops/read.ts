@@ -10,14 +10,17 @@ export function callTarget(entry: Pick<CallTarget, "method"> & Partial<CallTarge
   return { endpoint: AJAX, action: null, params: {}, bodyType: "form", responseType: "json", ...entry };
 }
 
+// An ajax action with a JSON body: what the v2 controllers (and ui.entityselector) take.
+export const v2 = (action: string) => callTarget({ action, method: "POST", bodyType: "json" });
+
 const TASKS_LIST = callTarget({ action: "tasks.task.list", method: "POST" });
 const TASK_GET = callTarget({ action: "tasks.task.get", method: "POST" });
-export const TASK_V2_GET = callTarget({ action: "tasks.v2.Task.get", method: "POST", bodyType: "json" });
-const TASK_SCRUM_INFO = callTarget({ action: "tasks.v2.Scrum.getTaskInfo", method: "POST", bodyType: "json" });
-const TASK_FILES = callTarget({ action: "tasks.v2.File.listObjects", method: "POST", bodyType: "json" });
-const TASK_VIEWS_COUNT = callTarget({ action: "tasks.v2.Task.View.User.count", method: "POST", bodyType: "json" });
-const TASK_SUBTASKS = callTarget({ action: "tasks.v2.Task.Relation.Child.list", method: "POST", bodyType: "json" });
-export const TASK_RELATED = callTarget({ action: "tasks.v2.Task.Relation.Related.list", method: "POST", bodyType: "json" });
+export const TASK_V2_GET = v2("tasks.v2.Task.get");
+const TASK_SCRUM_INFO = v2("tasks.v2.Scrum.getTaskInfo");
+const TASK_FILES = v2("tasks.v2.File.listObjects");
+const TASK_VIEWS_COUNT = v2("tasks.v2.Task.View.User.count");
+const TASK_SUBTASKS = v2("tasks.v2.Task.Relation.Child.list");
+export const TASK_RELATED = v2("tasks.v2.Task.Relation.Related.list");
 const PROJECTS_LIST = callTarget({ action: "socialnetwork.api.workgroup.list", method: "POST" });
 export const PROJECTS_GET = callTarget({ action: "socialnetwork.api.workgroup.get", method: "POST" });
 const CHATS_RECENT = callTarget({
@@ -33,8 +36,8 @@ export const CHAT_MESSAGES_TAIL = callTarget({
   params: { "order[id]": "DESC", limit: 25 },
 });
 const CHAT_MESSAGE_READ = callTarget({ action: "im.v2.Chat.Message.read", method: "POST" });
-const ENTITYSELECTOR_LOAD = callTarget({ action: "ui.entityselector.load", method: "POST", bodyType: "json" });
-const ENTITYSELECTOR_SEARCH = callTarget({ action: "ui.entityselector.doSearch", method: "POST", bodyType: "json" });
+const ENTITYSELECTOR_LOAD = v2("ui.entityselector.load");
+const ENTITYSELECTOR_SEARCH = v2("ui.entityselector.doSearch");
 const RECENT_LOAD = callTarget({ action: "im.v2.Recent.load", method: "POST" });
 const RECENT_TAIL = callTarget({ action: "im.v2.Recent.tail", method: "POST" });
 const CHAT_DIALOG_ID = callTarget({ action: "im.v2.Chat.getDialogId", method: "POST" });

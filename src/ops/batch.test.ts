@@ -76,6 +76,46 @@ describe("forEachTask", () => {
     ]);
   });
 
+  it("keeps as much room as the slowest task so far once one took longer than 30 s", async () => {
+    let clock = 0;
+    const seen: number[] = [];
+
+    // Budget 120 s; the first task takes 50 s, the second 20 s. The second starts with 70 s left, over
+    // the 50 s the first took; the third would start with 50 s left — enough for a 30 s reserve, not
+    // for another task as slow as the first.
+    const batch = await forEachTask(
+      [1, 2, 3],
+      async (taskId) => {
+        seen.push(taskId);
+        clock += taskId === 1 ? 50_000 : 20_000;
+        return {};
+      },
+      { budgetMs: 120_000, now: () => clock },
+    );
+
+    expect(seen).toEqual([1, 2]);
+    expect(batch.results[2]).toMatchObject({ taskId: 3, ok: false, error: expect.stringContaining("истекло время пакета") });
+  });
+
+  it("counts a failed task's duration too", async () => {
+    let clock = 0;
+    const seen: number[] = [];
+
+    const batch = await forEachTask(
+      [1, 2],
+      async (taskId) => {
+        seen.push(taskId);
+        clock += 70_000;
+        throw new Error("timeout");
+      },
+      { budgetMs: 130_000, now: () => clock },
+    );
+
+    // 60 s left after the first one: over 30 s, but not over the 70 s it took.
+    expect(seen).toEqual([1]);
+    expect(batch.results[1]).toMatchObject({ taskId: 2, ok: false, error: expect.stringContaining("истекло время пакета") });
+  });
+
   it("plans against the client's long budget by default", async () => {
     let clock = 0;
     const seen: number[] = [];
@@ -175,6 +215,56 @@ describe("forEachTaskVetted", () => {
       { taskId: 1, ok: false, error: expect.stringContaining("истекло время пакета") },
       { taskId: 2, ok: false, error: expect.stringContaining("истекло время пакета") },
     ]);
+  });
+});
+
+describe("forEachTaskVetted pacing", () => {
+  it("keeps a failed read's own error when the writes run out of time, in input order", async () => {
+    let clock = 0;
+
+    // Budget 40 s; the reads take 6 s each, so no write fits — but task 2 never got that far.
+    const batch = await forEachTaskVetted(
+      [1, 2, 3],
+      {
+        prepare: async (taskId) => {
+          clock += 6_000;
+          if (taskId === 2) throw new Error("задача 2 не найдена или нет доступа (удалена или скрыта от тебя)");
+        },
+        vet: () => {},
+        apply: async () => ({}),
+      },
+      { budgetMs: 40_000, now: () => clock },
+    );
+
+    expect(batch.results).toEqual([
+      { taskId: 1, ok: false, error: expect.stringContaining("истекло время пакета") },
+      { taskId: 2, ok: false, error: "задача 2 не найдена или нет доступа (удалена или скрыта от тебя)" },
+      { taskId: 3, ok: false, error: expect.stringContaining("истекло время пакета") },
+    ]);
+  });
+
+  it("keeps the slowest read of the first pass as the room a write needs", async () => {
+    let clock = 0;
+    const applied: number[] = [];
+
+    // Budget 150 s; the read takes 90 s, leaving 60 s — over a 30 s reserve, not over 90 s.
+    const batch = await forEachTaskVetted(
+      [1],
+      {
+        prepare: async () => {
+          clock += 90_000;
+        },
+        vet: () => {},
+        apply: async (taskId) => {
+          applied.push(taskId);
+          return {};
+        },
+      },
+      { budgetMs: 150_000, now: () => clock },
+    );
+
+    expect(applied).toEqual([]);
+    expect(batch.results[0]).toMatchObject({ taskId: 1, ok: false, error: expect.stringContaining("истекло время пакета") });
   });
 });
 
