@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v1.0.0...bitrix24-mcp-bridge-v1.1.0) (2026-11-07)
+
+
+### Features
+
+* **core:** remind to clean the downloads folder ([1e6ea94](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/1e6ea94d8884fd2c8e694c778161af31712fd549))
+
+
+### Bug Fixes
+
+* **core:** explain missing tasks, repeated Gantt links and running out of time ([620a2dc](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/620a2dc371e6c479874fb91921c2adb9623e8df5))
+* **core:** move tasks returned to the backlog out of the sprint column ([438b038](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/438b0385475e24d267f802f5d4fda43068624c7d))
+* move backlog tasks out of the sprint column; clearer errors; downloads reminder ([8dfbe39](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/8dfbe39720931d8a50a49e8862498e0d18c3af9f))
+
 ## [1.0.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v0.5.0...bitrix24-mcp-bridge-v1.0.0) (2026-11-06)
 
 
