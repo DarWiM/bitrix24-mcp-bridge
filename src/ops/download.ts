@@ -5,6 +5,7 @@
 
 import { basename, isAbsolute, join } from "node:path";
 import { existsSync, renameSync, rmSync } from "node:fs";
+import { lstat, readdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 
 export interface ResolvedTarget {
@@ -125,4 +126,28 @@ export function resolveDestination(req: DestinationRequest): string {
     throw new Error(`${path} already exists — pass overwrite: true to replace it`);
   }
   return path;
+}
+
+// The bridge never deletes what it saved there; past this size the agent is asked to remind the user.
+export const DOWNLOADS_WARN_BYTES = 500 * 1024 * 1024;
+
+// Downloads land directly in the folder (a relative savePath is cut to a file name), so its own
+// files are what it holds. A folder that cannot be measured gets no warning rather than an error.
+export async function downloadsWarning(downloadsDir: string): Promise<string | undefined> {
+  let bytes: number;
+  try {
+    const entries = await readdir(downloadsDir, { withFileTypes: true });
+    // A file removed between the listing and its stat counts as nothing.
+    const sizes = await Promise.all(
+      entries.filter((e) => e.isFile()).map((e) => lstat(join(downloadsDir, e.name)).then((s) => s.size, () => 0)),
+    );
+    bytes = sizes.reduce((sum, size) => sum + size, 0);
+  } catch {
+    return undefined;
+  }
+  if (bytes <= DOWNLOADS_WARN_BYTES) return undefined;
+  return (
+    `папка загрузок моста ${downloadsDir} занимает ${Math.round(bytes / 1024 / 1024)} МБ — ` +
+    "предложи пользователю удалить ненужные файлы (мост сам их не удаляет)"
+  );
 }

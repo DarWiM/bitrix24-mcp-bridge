@@ -180,7 +180,10 @@ daemon. Набор операций фиксирован в коде; произ
 - `/bitrix/tools/disk/uf.php` с `action` = `download`, `show` или `downloadArchiveByEntity`.
 
 Повторённый (`action=…&action=…`) или массивный (`action[]=…`) `action` отклоняется: PHP читает
-другое значение, чем проверка. Файлы ложатся в `~/.bitrix24-mcp-bridge/downloads/`.
+другое значение, чем проверка. Файлы ложатся в `~/.bitrix24-mcp-bridge/downloads/`; мост их не удаляет.
+Когда файлы папки в сумме больше 500 МБ, напоминание почистить её (`warning`) приходит в ответах
+операций, записавших файл в эту папку, — `bitrix_file_download`, `bitrix_call_recording`,
+`bitrix_call_detail` и `bitrix_task_comments` (последние две — когда сохранили файл), — и в `bitrix_status`.
 
 Известное ограничение: другие формы ссылок портала на файлы (например, `/disk/downloadFile/…` из
 интерфейса Диска или публичные `/docs/pub/…`) отклоняются — бери ссылку из ответа моста.

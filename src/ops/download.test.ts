@@ -1,8 +1,17 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, safeFileName, tempDownloadPath } from "./download.js";
+import {
+  DOWNLOADS_WARN_BYTES,
+  downloadsWarning,
+  fileNameFromUrl,
+  finalizeDownload,
+  resolveDestination,
+  resolvePortalUrl,
+  safeFileName,
+  tempDownloadPath,
+} from "./download.js";
 
 const ORIGINS = { acme: "https://acme.bitrix24.ru", other: "https://other.bitrix24.ru" };
 const temps: string[] = [];
@@ -180,5 +189,44 @@ describe("finalizeDownload", () => {
     const dir = tempDir();
     const final = finalizeDownload({ tempPath: staged(dir), serverName: "../../evil.sh", fallbackName: "x.bin", downloadsDir: dir });
     expect(final).toBe(join(dir, "evil.sh"));
+  });
+});
+
+describe("downloadsWarning", () => {
+  const MB = 1024 * 1024;
+  // Sparse: the size is what stat reports, nothing is written to disk.
+  const sized = (path: string, bytes: number) => {
+    writeFileSync(path, "");
+    truncateSync(path, bytes);
+  };
+
+  it("asks to remind the user once the folder's files add up to more than 500 MB", async () => {
+    const dir = tempDir();
+    sized(join(dir, "call-1.mp3"), 300 * MB);
+    sized(join(dir, "video.mp4"), 250 * MB);
+
+    expect(await downloadsWarning(dir)).toBe(
+      `папка загрузок моста ${dir} занимает 550 МБ — предложи пользователю удалить ненужные файлы (мост сам их не удаляет)`,
+    );
+  });
+
+  it("says nothing at the threshold or below", async () => {
+    const dir = tempDir();
+    sized(join(dir, "a.bin"), DOWNLOADS_WARN_BYTES);
+
+    expect(await downloadsWarning(dir)).toBeUndefined();
+  });
+
+  it("counts only the folder's own files", async () => {
+    const dir = tempDir();
+    mkdirSync(join(dir, "nested"));
+    sized(join(dir, "nested", "big.bin"), 600 * MB);
+    sized(join(dir, "small.bin"), MB);
+
+    expect(await downloadsWarning(dir)).toBeUndefined();
+  });
+
+  it("says nothing when the folder cannot be read", async () => {
+    expect(await downloadsWarning(join(tempDir(), "missing"))).toBeUndefined();
   });
 });

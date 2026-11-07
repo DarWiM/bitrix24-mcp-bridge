@@ -153,7 +153,9 @@ bitrix24-mcp-bridge`. Для другого MCP-клиента — та же к�
 Ссылка с повторённым или массивным (`action[]=`) `action` отклоняется — PHP взял бы другое значение,
 чем проверка. Чужой origin → `refusing to download from … — not a configured portal`, другая ссылка
 портала → `refusing to download … — not a portal file link`. Файлы ложатся
-в `~/.bitrix24-mcp-bridge/downloads/` (cleanup эту папку не трогает).
+в `~/.bitrix24-mcp-bridge/downloads/` (cleanup эту папку не трогает). Когда файлы в ней в сумме больше
+500 МБ, ответы операций, сохранивших файл, и `bitrix_status` несут `warning` с напоминанием почистить
+папку; сам мост ничего там не удаляет.
 
 ---
 

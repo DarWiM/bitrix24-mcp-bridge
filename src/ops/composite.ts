@@ -2,12 +2,12 @@
 // built here rather than passed through from the portal.
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { DownloadResult } from "../../shared/wire.js";
 import { formatTranscript, parseCallDetail, type CallDetail } from "./callDetail.js";
 import { collectChatCalls, readMessagePage, sortCalls, type ChatCall } from "./chatCalls.js";
-import { fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
+import { downloadsWarning, fileNameFromUrl, finalizeDownload, resolveDestination, resolvePortalUrl, tempDownloadPath } from "./download.js";
 import { agentParams, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { CHAT_MESSAGES_TAIL, callTarget } from "./read.js";
 import { formatComments, parseComments, parseFirstPage, type TaskComment } from "./taskComments.js";
@@ -96,6 +96,14 @@ async function downloadToDisk(ctx: OpContext, origins: Record<string, string>, a
   };
 }
 
+// The replies that put a file into the downloads folder remind about it once it has grown large;
+// a file saved elsewhere (an absolute savePath) does not add to it.
+async function withDownloadsWarning<T extends object>(ctx: OpContext, written: string, reply: T): Promise<T & { warning?: string }> {
+  if (dirname(resolve(written)) !== resolve(ctx.downloadsDir)) return reply;
+  const warning = await downloadsWarning(ctx.downloadsDir);
+  return warning === undefined ? reply : { ...reply, warning };
+}
+
 export const COMPOSITE_OPERATIONS: Operation[] = [
   defineOperation({
     name: "call_detail",
@@ -131,7 +139,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       writeFileSync(files.transcript, formatTranscript(call), "utf8");
       // The JSON copy keeps the transcript — it is the archive, not the context-sized reply.
       writeFileSync(files.json, JSON.stringify(call, null, 1), "utf8");
-      return { ...call, transcript: [], files };
+      return withDownloadsWarning(ctx, files.transcript, { ...call, transcript: [], files });
     },
   }),
   // The legacy forum discussion tasks had before task chats. The first page is a server-rendered
@@ -219,7 +227,7 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       };
       writeFileSync(files.text, formatComments(taskId, comments, reachedHistoryStart), "utf8");
       writeFileSync(files.json, JSON.stringify(result, null, 1), "utf8");
-      return { ...result, comments: [], files };
+      return withDownloadsWarning(ctx, files.text, { ...result, comments: [], files });
     },
   }),
   defineOperation({
@@ -235,7 +243,10 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
     mutating: false,
     budget: "download",
     input: { url: z.string(), savePath: z.string().optional(), overwrite: z.boolean().optional() },
-    run: (ctx, a) => downloadToDisk(ctx, ctx.origins, { ...a, fallbackName: "bitrix-file" }),
+    run: async (ctx, a) => {
+      const saved = await downloadToDisk(ctx, ctx.origins, { ...a, fallbackName: "bitrix-file" });
+      return withDownloadsWarning(ctx, saved.path, saved);
+    },
   }),
   defineOperation({
     name: "call_recording",
@@ -250,7 +261,8 @@ export const COMPOSITE_OPERATIONS: Operation[] = [
       const detail = await loadCallDetail(ctx, callId, undefined, false);
       if (!detail.recording?.url) throw new Error(`call ${callId} has no recording`);
       // The link comes from this portal's own page, so it must point back at this portal.
-      return downloadToDisk(ctx, { [ctx.portal]: ctx.origin }, { url: detail.recording.url, savePath, overwrite, fallbackName: `call-${detail.id}.mp3` });
+      const saved = await downloadToDisk(ctx, { [ctx.portal]: ctx.origin }, { url: detail.recording.url, savePath, overwrite, fallbackName: `call-${detail.id}.mp3` });
+      return withDownloadsWarning(ctx, saved.path, saved);
     },
   }),
   defineOperation({

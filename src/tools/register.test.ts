@@ -1,4 +1,7 @@
-import { describe, it, expect, mock } from "bun:test";
+import { afterEach, describe, it, expect, mock } from "bun:test";
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -38,6 +41,8 @@ function deps(overrides: Partial<ToolDeps> = {}): ToolDeps {
     operations: OPERATIONS,
     defaultPortal: "acme",
     portals: ["acme"],
+    // No such folder: nothing to measure, no reminder.
+    downloadsDir: join(tmpdir(), "br24-no-downloads-here"),
     ...overrides,
   };
 }
@@ -123,9 +128,24 @@ describe("registerTools", () => {
 });
 
 describe("bitrix_status tool", () => {
-  async function status(portals: DaemonStatus["portals"], extra: Partial<DaemonStatus> = {}) {
-    const client = await connect(deps({ sink: { op: mock(), status: async () => ({ portals, version: "0.0.0-dev", ...extra }) } }));
+  async function status(portals: DaemonStatus["portals"], extra: Partial<DaemonStatus> = {}, downloadsDir?: string) {
+    const sink = { op: mock(), status: async () => ({ portals, version: "0.0.0-dev", ...extra }) };
+    const client = await connect(deps({ sink, ...(downloadsDir !== undefined ? { downloadsDir } : {}) }));
     return JSON.parse(readResult(await client.callTool({ name: "bitrix_status", arguments: {} })).text);
+  }
+
+  const temps: string[] = [];
+  afterEach(() => {
+    while (temps.length) rmSync(temps.pop()!, { recursive: true, force: true });
+  });
+
+  // A downloads folder holding a 600 MB sparse file: stat reports the size, nothing is written to disk.
+  function grownDownloads(): string {
+    const dir = mkdtempSync(join(tmpdir(), "br24-status-"));
+    temps.push(dir);
+    writeFileSync(join(dir, "big.bin"), "");
+    truncateSync(join(dir, "big.bin"), 600 * 1024 * 1024);
+    return dir;
   }
 
   it("reports the default portal and each portal's connection state", async () => {
@@ -156,5 +176,21 @@ describe("bitrix_status tool", () => {
     const payload = await status([{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: false, extensionVersion: null }]);
 
     expect(payload.warning).toBeUndefined();
+  });
+
+  it("reminds to clean the downloads folder once it holds more than 500 MB", async () => {
+    const dir = grownDownloads();
+    const payload = await status([], {}, dir);
+
+    expect(payload.warning).toBe(
+      `папка загрузок моста ${dir} занимает 600 МБ — предложи пользователю удалить ненужные файлы (мост сам их не удаляет).`,
+    );
+  });
+
+  it("puts both warnings in one, the extension first", async () => {
+    const dir = grownDownloads();
+    const payload = await status([{ alias: "acme", origin: "https://acme.bitrix24.ru", connected: true, extensionVersion: "0.2.1" }], {}, dir);
+
+    expect(payload.warning).toMatch(/^расширение устарело .* папка загрузок моста .* МБ/);
   });
 });
