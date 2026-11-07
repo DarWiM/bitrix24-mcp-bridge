@@ -6,9 +6,9 @@ import { BUDGET_TIMEOUT_MS, idArg } from "./operation.js";
 
 export const MAX_BATCH = 50;
 
-// Room for the task already running when the batch stops starting new ones: about one portal
-// request at the daemon's 30 s timeout.
-const BATCH_RESERVE_MS = 30_000;
+// Room for the step already running when a call stops starting new ones: at least one portal
+// request at the daemon's 30 s timeout, more once a step of this call has taken longer.
+const STEP_RESERVE_MS = 30_000;
 const SKIPPED = "не выполнено: истекло время пакета — перечитайте состояние и повторите только эти задачи";
 
 // A factory for the same `$ref` reason as idArg. Duplicates are refused: the same task twice
@@ -43,6 +43,27 @@ export interface BatchOptions {
 
 export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+// Paces the steps of one call against what the client waits for it. The slowest step so far is the
+// best guess for the next one, so steps that take several requests each stop early enough too.
+export function budgetPace({ budgetMs = BUDGET_TIMEOUT_MS.long, now = Date.now }: BatchOptions = {}) {
+  const deadline = now() + budgetMs;
+  let longestMs = 0;
+  return {
+    // `thenRequests`: requests the call still makes after the step, each given a full reserve.
+    canStart: (thenRequests = 0) => now() + Math.max(STEP_RESERVE_MS, longestMs) + thenRequests * STEP_RESERVE_MS < deadline,
+    async time<R>(step: () => Promise<R>): Promise<R> {
+      const startedAt = now();
+      try {
+        return await step();
+      } finally {
+        longestMs = Math.max(longestMs, now() - startedAt);
+      }
+    },
+  };
+}
+
+type Pace = ReturnType<typeof budgetPace>;
+
 // Sequential on purpose: the side effects (chat announcements, notifications) then happen in the
 // order the agent asked for, and the portal sees one request of the session at a time.
 // Past the client's timeout the agent would see no results at all, so tasks that cannot fit are
@@ -50,17 +71,20 @@ export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : St
 export async function forEachTask<T extends object>(
   taskIds: number[],
   fn: (taskId: number) => Promise<T>,
-  { budgetMs = BUDGET_TIMEOUT_MS.long, now = Date.now }: BatchOptions = {},
+  opts: BatchOptions = {},
 ): Promise<BatchResult<T>> {
-  const startBefore = now() + budgetMs - BATCH_RESERVE_MS;
+  return eachTask(taskIds, fn, budgetPace(opts));
+}
+
+async function eachTask<T extends object>(taskIds: number[], fn: (taskId: number) => Promise<T>, pace: Pace): Promise<BatchResult<T>> {
   const results: TaskOutcome<T>[] = [];
   for (const taskId of taskIds) {
-    if (now() >= startBefore) {
+    if (!pace.canStart()) {
       results.push({ taskId, ok: false, error: SKIPPED });
       continue;
     }
     try {
-      const fields = await fn(taskId);
+      const fields = await pace.time(() => fn(taskId));
       const verdict = { taskId, ok: true as const };
       // Spread twice: first for the key order, last so the operation's fields cannot overwrite it.
       results.push({ ...verdict, ...fields, ...verdict });
@@ -81,19 +105,27 @@ export async function forEachTaskVetted<P, T extends object>(
     vet: (prepared: P[]) => void;
     apply: (taskId: number, prepared: P) => Promise<T>;
   },
-  { budgetMs = BUDGET_TIMEOUT_MS.long, now = Date.now }: BatchOptions = {},
+  opts: BatchOptions = {},
 ): Promise<BatchResult<T>> {
-  const startedAt = now();
-  const { results } = await forEachTask(taskIds, async (taskId) => ({ prepared: await steps.prepare(taskId) }), { budgetMs, now });
+  // One pace for both passes: the slowest read is a floor for the room a write needs.
+  const pace = budgetPace(opts);
+  const { results } = await eachTask(taskIds, async (taskId) => ({ prepared: await steps.prepare(taskId) }), pace);
   steps.vet(results.flatMap((r) => (r.ok ? [r.prepared] : [])));
   const firstPass = new Map(results.map((r) => [r.taskId, r]));
-  return forEachTask(
-    taskIds,
+  // Only the tasks that would actually start are paced: a failed read keeps its own error even when
+  // time is up.
+  const ready = results.flatMap((r) => (r.ok ? [r.taskId] : []));
+  const secondPass = await eachTask(
+    ready,
     async (taskId) => {
       const first = firstPass.get(taskId);
       if (!first?.ok) throw new Error(first?.error ?? SKIPPED);
       return steps.apply(taskId, first.prepared);
     },
-    { budgetMs: budgetMs - (now() - startedAt), now },
+    pace,
   );
+  const applied = new Map(secondPass.results.map((r) => [r.taskId, r]));
+  return {
+    results: results.map((first) => (first.ok ? (applied.get(first.taskId) ?? { taskId: first.taskId, ok: false, error: SKIPPED }) : first)),
+  };
 }

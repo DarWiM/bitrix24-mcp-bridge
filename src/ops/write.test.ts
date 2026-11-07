@@ -175,7 +175,7 @@ describe("task_description_set", () => {
   });
 
   for (const [title, reread, cause] of [
-    ["comes back in an unexpected shape", async () => ({ status: "success", data: [] }), "tasks.v2.Task.get (description) returned an unexpected shape"],
+    ["comes back in an unexpected shape", async () => ({ status: "success", data: {} }), "tasks.v2.Task.get (description) returned an unexpected shape"],
     ["fails", async () => {
       throw new Error("request timed out");
     }, "request timed out"],
@@ -224,7 +224,7 @@ describe("task_description_append", () => {
   }
 
   it("does not write when the read comes back in an unexpected shape", async () => {
-    const { ctx, call } = fakeCtx(replies({ status: "success", data: [] }));
+    const { ctx, call } = fakeCtx(replies({ status: "success", data: {} }));
 
     await expect(op("task_description_append").execute(ctx, { taskId: 42, text: "x" })).rejects.toThrow(/unexpected shape/);
     expect(call).toHaveBeenCalledTimes(1);
@@ -380,7 +380,7 @@ describe("task_move", () => {
   });
 
   for (const [title, reread, cause] of [
-    ["comes back in an unexpected shape", async () => ({ result: [] }), "tasks.task.get returned an unexpected shape"],
+    ["comes back in an unexpected shape", async () => ({ result: {} }), "tasks.task.get returned an unexpected shape"],
     ["fails", async () => {
       throw new Error("extension not connected");
     }, "extension not connected"],
@@ -958,6 +958,17 @@ describe("task_to_backlog", () => {
       scrumGet(42), backlogGet(15), groupStagesGet(15), getTask(42), stageUpdate(42, 981), getTask(42),
     ]);
     expect(result).toEqual({ results: [{ taskId: 42, ok: true, backlogId: 1, stageId: 981, changed: true }] });
+  });
+
+  it("says a deleted task is gone, though its scrum item still answers, and writes nothing", async () => {
+    const { ctx, call } = fakeCtx(replies(scrumTask("1"), backlog, groupStages, { result: [] }));
+
+    const result = await op("task_to_backlog").execute(ctx, { taskIds: [42] });
+
+    expect(call).toHaveBeenCalledTimes(4);
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: "задача 42 не найдена или нет доступа (удалена или скрыта от тебя)" }],
+    });
   });
 
   for (const stageId of ["981", "983", "0"]) {

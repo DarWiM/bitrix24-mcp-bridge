@@ -4,15 +4,15 @@
 // says it does.
 
 import { z } from "zod";
-import { MAX_BATCH, errorMessage, forEachTask, taskIdsArg } from "./batch.js";
-import { numeric, parseResponse, restMethod } from "./calls.js";
+import { MAX_BATCH, budgetPace, errorMessage, forEachTask, taskIdsArg } from "./batch.js";
+import { numeric, parseResponse, parseTaskCard, restMethod, v2 } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
-import { TASK_V2_GET, callTarget } from "./read.js";
+import { TASK_V2_GET } from "./read.js";
 import { DESCRIPTION_FORMAT, DESCRIPTION_MAX, readDescription, writeDescription } from "./write.js";
 
 // The classic TAGS field cannot be cleared through a form body; the v2 update replaces the list.
-export const TASK_V2_UPDATE = callTarget({ action: "tasks.v2.Task.update", method: "POST", bodyType: "json" });
-const PLAN_UPDATE = callTarget({ action: "tasks.v2.Task.Plan.update", method: "POST", bodyType: "json" });
+export const TASK_V2_UPDATE = v2("tasks.v2.Task.update");
+const PLAN_UPDATE = v2("tasks.v2.Task.Plan.update");
 const CHECKLIST_LIST = restMethod("task.checklistitem.getlist");
 const CHECKLIST_ADD = restMethod("task.checklistitem.add");
 const CHECKLIST_UPDATE = restMethod("task.checklistitem.update");
@@ -37,12 +37,12 @@ class SentUnconfirmed extends Error {}
 
 async function readTags(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
-  return parseResponse(tagsResponse, raw, "tasks.v2.Task.get (tags)").data.tags.map((t) => t.name);
+  return parseTaskCard(tagsResponse, raw, "tasks.v2.Task.get (tags)", taskId).data.tags.map((t) => t.name);
 }
 
 async function readPlan(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
-  const { startPlanTs, endPlanTs } = parseResponse(planResponse, raw, "tasks.v2.Task.get (plan dates)").data;
+  const { startPlanTs, endPlanTs } = parseTaskCard(planResponse, raw, "tasks.v2.Task.get (plan dates)", taskId).data;
   return { startPlanTs: startPlanTs ?? 0, endPlanTs: endPlanTs ?? 0 };
 }
 
@@ -177,7 +177,8 @@ export const CONTENT_OPERATIONS: Operation[] = [
       "текст (как в пункте рендерится BBCode, не проверено). Изменения видят все, кто видит задачу. Сначала все " +
       "itemId сверяются с чек-листом (нет пункта — ничего не меняется), затем действия выполняются по " +
       "очереди: add, rename, complete, reopen, remove — всего до 50 действий за вызов; при сбое посередине " +
-      "ошибка перечисляет сделанное. Удаление группы (пункта с parentId 0) убирает и её пункты: отдельно они не " +
+      "ошибка перечисляет сделанное; если время вызова на исходе, оставшиеся действия не начинаются — ошибка " +
+      "перечисляет и сделанное, и не выполненное. Удаление группы (пункта с parentId 0) убирает и её пункты: отдельно они не " +
       "удаляются, и остались ли они, не проверяется; новые пункты в вызове, где удаляется группа, после записи " +
       "тоже не проверяются (Bitrix мог положить их в эту группу). " +
       "Ответ: { taskId, added, items } — added — id новых пунктов, items — чек-лист, перечитанный после правки.",
@@ -218,45 +219,16 @@ export const CONTENT_OPERATIONS: Operation[] = [
       const removedAndEdited = remove.find((id) => renamed.includes(id) || complete.includes(id) || reopen.includes(id));
       if (removedAndEdited !== undefined) throw invalid(`item ${removedAndEdited} is removed and edited at once`);
 
+      const pace = budgetPace();
       const before = await readChecklist(ctx, TASKID);
       const missing = touched.filter((id) => !before.some((item) => item.id === id));
       if (missing.length > 0) {
         throw new Error(`в чек-листе задачи ${TASKID} нет пунктов ${missing.join(", ")} — ничего не изменено; список — bitrix_task_checklist`);
       }
 
-      const done: string[] = [];
-      const step = async (label: string, request: () => Promise<void>) => {
-        try {
-          await request();
-        } catch (e) {
-          const outcome = e instanceof SentUnconfirmed ? "отправлено, ответ не распознан" : `не выполнено (${errorMessage(e)})`;
-          throw new Error(
-            `${label}: ${outcome}; до этого сделано: ${done.join(", ") || "ничего"} — перечитай чек-лист (bitrix_task_checklist) перед повтором`,
-          );
-        }
-        done.push(label);
-      };
       const mark = (target: typeof CHECKLIST_COMPLETE, ITEMID: number, method: string) => async () => {
         parseResponse(checklistDoneResponse, await ctx.call({ ...target, params: { TASKID, ITEMID } }), method);
       };
-
-      const added: number[] = [];
-      for (const TITLE of add) {
-        await step(`добавить «${TITLE}»`, async () => {
-          const raw = await ctx.call({ ...CHECKLIST_ADD, params: { TASKID, FIELDS: { TITLE } } });
-          const parsed = checklistAddResponse.safeParse(raw);
-          if (!parsed.success) throw new SentUnconfirmed();
-          added.push(parsed.data.result);
-        });
-      }
-      for (const { itemId, title } of rename) {
-        // Answers null on success.
-        await step(`переименовать ${itemId}`, async () => {
-          await ctx.call({ ...CHECKLIST_UPDATE, params: { TASKID, ITEMID: itemId, FIELDS: { TITLE: title } } });
-        });
-      }
-      for (const id of complete) await step(`отметить ${id}`, mark(CHECKLIST_COMPLETE, id, "task.checklistitem.complete"));
-      for (const id of reopen) await step(`снять отметку ${id}`, mark(CHECKLIST_RENEW, id, "task.checklistitem.renew"));
       // Removing a group takes its items with it: they are not deleted again, nor reported as not applied.
       const gone = new Set<number>();
       const drop = (id: number) => {
@@ -264,10 +236,52 @@ export const CONTENT_OPERATIONS: Operation[] = [
         gone.add(id);
         for (const item of before) if (item.parentId === id) drop(item.id);
       };
-      for (const id of remove) {
-        if (gone.has(id)) continue;
-        await step(`удалить ${id}`, mark(CHECKLIST_DELETE, id, "task.checklistitem.delete"));
+      const toDelete = remove.filter((id) => {
+        if (gone.has(id)) return false;
         drop(id);
+        return true;
+      });
+
+      const added: number[] = [];
+      const actions: Array<{ label: string; run: () => Promise<void> }> = [
+        ...add.map((TITLE) => ({
+          label: `добавить «${TITLE}»`,
+          run: async () => {
+            const raw = await ctx.call({ ...CHECKLIST_ADD, params: { TASKID, FIELDS: { TITLE } } });
+            const parsed = checklistAddResponse.safeParse(raw);
+            if (!parsed.success) throw new SentUnconfirmed();
+            added.push(parsed.data.result);
+          },
+        })),
+        ...rename.map(({ itemId, title }) => ({
+          label: `переименовать ${itemId}`,
+          // Answers null on success.
+          run: async () => {
+            await ctx.call({ ...CHECKLIST_UPDATE, params: { TASKID, ITEMID: itemId, FIELDS: { TITLE: title } } });
+          },
+        })),
+        ...complete.map((id) => ({ label: `отметить ${id}`, run: mark(CHECKLIST_COMPLETE, id, "task.checklistitem.complete") })),
+        ...reopen.map((id) => ({ label: `снять отметку ${id}`, run: mark(CHECKLIST_RENEW, id, "task.checklistitem.renew") })),
+        ...toDelete.map((id) => ({ label: `удалить ${id}`, run: mark(CHECKLIST_DELETE, id, "task.checklistitem.delete") })),
+      ];
+      for (const [i, action] of actions.entries()) {
+        const done = actions.slice(0, i).map((a) => a.label).join(", ") || "ничего";
+        // Room for the action and the re-read after the last one, or the agent would see a timeout
+        // instead of what was done.
+        if (!pace.canStart(1)) {
+          const rest = actions.slice(i).map((a) => a.label).join(", ");
+          throw new Error(
+            `истекло время вызова, не выполнено: ${rest}; до этого сделано: ${done} — перечитай чек-лист (bitrix_task_checklist) перед повтором`,
+          );
+        }
+        try {
+          await pace.time(action.run);
+        } catch (e) {
+          const outcome = e instanceof SentUnconfirmed ? "отправлено, ответ не распознан" : `не выполнено (${errorMessage(e)})`;
+          throw new Error(
+            `${action.label}: ${outcome}; до этого сделано: ${done} — перечитай чек-лист (bitrix_task_checklist) перед повтором`,
+          );
+        }
       }
       // Where a new item lands is Bitrix's choice, so a removed group may have taken it along.
       const isGroup = (id: number) =>

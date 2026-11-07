@@ -18,7 +18,7 @@ import {
   targetColumn,
   type SprintColumn,
 } from "./board.js";
-import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, reread, restMethod } from "./calls.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, parseTaskCard, reread, restMethod, v2 } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { TASK_V2_GET, callTarget } from "./read.js";
 
@@ -34,7 +34,7 @@ const BOARD_CREATE = callTarget({
   method: "POST",
 });
 // The official tasks.task.result.add exists in REST 3.0 only, which the session refuses.
-const RESULT_ADD = callTarget({ action: "tasks.v2.Task.Result.add", method: "POST", bodyType: "json" });
+const RESULT_ADD = v2("tasks.v2.Task.Result.add");
 
 export const DESCRIPTION_MAX = 100_000;
 const RESULT_MAX = 20_000;
@@ -60,7 +60,7 @@ const usersResponse = z.object({
 // Raw BBCode, `[disk file id=…]` included — what a point-edit has to write back untouched.
 export async function readDescription(ctx: OpContext, taskId: number): Promise<string> {
   const raw = await ctx.call({ ...TASK_V2_GET, params: { task: { id: taskId } } });
-  return parseResponse(descriptionResponse, raw, "tasks.v2.Task.get (description)").data.description ?? "";
+  return parseTaskCard(descriptionResponse, raw, "tasks.v2.Task.get (description)", taskId).data.description ?? "";
 }
 
 const DESCRIPTION_MAY_HAVE_CHANGED = "описание могло измениться — сверь через bitrix_task_get_v2 перед повтором";
@@ -82,7 +82,7 @@ export async function writeDescription(ctx: OpContext, taskId: number, text: str
 
 async function readResponsible(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "RESPONSIBLE_ID"] } });
-  return parseResponse(responsibleResponse, raw, "tasks.task.get").result.task;
+  return parseTaskCard(responsibleResponse, raw, "tasks.task.get", taskId).result.task;
 }
 
 const userIdsArg = () => z.array(idArg()).max(MAX_BATCH).optional();
@@ -93,7 +93,7 @@ function memberListOperation(def: { name: string; field: "ACCOMPLICES" | "AUDITO
   const response = membersResponse(def.key);
   const readMembers = async (ctx: OpContext, taskId: number) => {
     const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", def.field] } });
-    return parseResponse(response, raw, "tasks.task.get").result.task[def.key];
+    return parseTaskCard(response, raw, "tasks.task.get", taskId).result.task[def.key];
   };
   return defineOperation({
     name: def.name,

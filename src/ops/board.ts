@@ -3,7 +3,7 @@
 
 import { z } from "zod";
 import { errorMessage } from "./batch.js";
-import { REST_TASK_GET, numeric, parseResponse, restMethod } from "./calls.js";
+import { REST_TASK_GET, numeric, parseResponse, parseTaskCard, restMethod } from "./calls.js";
 import { OpInputError, type OpContext } from "./operation.js";
 
 const SPRINT_LIST = restMethod("tasks.api.scrum.sprint.list");
@@ -59,7 +59,7 @@ export async function activeSprintColumns(ctx: OpContext, groupId: number): Prom
 
 export async function readTaskStage(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: TASK_STAGE_SELECT } });
-  return parseResponse(taskResponse, raw, "tasks.task.get").result.task;
+  return parseTaskCard(taskResponse, raw, "tasks.task.get", taskId).result.task;
 }
 
 // The request below goes out at most once per operation call, whichever helper asks first.

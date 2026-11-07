@@ -8,7 +8,7 @@ import { z } from "zod";
 import { runtimePaths } from "../paths.js";
 import { errorMessage } from "./batch.js";
 import { currentUserId } from "./board.js";
-import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, restMethod, reread } from "./calls.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, parseTaskCard, restMethod, reread } from "./calls.js";
 import { BUDGET_TIMEOUT_MS, OpInputError, UPLOAD_TIMEOUT_MS, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 
 const STORAGE_LIST = restMethod("disk.storage.getlist");
@@ -39,7 +39,7 @@ const fileNameArg = () =>
 
 async function readTaskFiles(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "UF_TASK_WEBDAV_FILES"] } });
-  return parseResponse(taskFilesResponse, raw, "tasks.task.get").result.task.ufTaskWebdavFiles ?? [];
+  return parseTaskCard(taskFilesResponse, raw, "tasks.task.get", taskId).result.task.ufTaskWebdavFiles ?? [];
 }
 
 function fileError(path: string, e: unknown) {

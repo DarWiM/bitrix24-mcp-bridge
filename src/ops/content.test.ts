@@ -1,4 +1,4 @@
-import { describe, it, expect, mock } from "bun:test";
+import { afterEach, describe, it, expect, mock, setSystemTime } from "bun:test";
 import type { CallTarget, DownloadResult } from "../../shared/wire.js";
 import { OpInputError, OpRefusedError, type OpContext, type Operation } from "./operation.js";
 import { createRegistry, runOperation } from "./registry.js";
@@ -138,10 +138,13 @@ describe("task_description_replace", () => {
   }
 
   it("does not write when the read fails or comes back in an unexpected shape", async () => {
-    for (const reply of [new Error("timeout"), { status: "success", data: [] }]) {
+    for (const [reply, message] of [
+      [new Error("timeout"), "timeout"],
+      [{ status: "success", data: {} }, "tasks.v2.Task.get (description) returned an unexpected shape"],
+    ] as const) {
       const { ctx, call } = fakeCtx(replies(reply));
 
-      await expect(op("task_description_replace").execute(ctx, { taskId: 42, find: "a", replace: "b" })).rejects.toThrow();
+      await expect(op("task_description_replace").execute(ctx, { taskId: 42, find: "a", replace: "b" })).rejects.toThrow(message);
       expect(call).toHaveBeenCalledTimes(1);
     }
   });
@@ -179,6 +182,17 @@ describe("task_tags", () => {
     expect(call.mock.calls[0][0]).toEqual(json("tasks.v2.Task.get", { task: { id: 42 } }));
     expect(call.mock.calls[1][0]).toEqual(json("tasks.v2.Task.update", { task: { id: 42, tags: [{ name: "backend" }, { name: "релиз" }] } }));
     expect(result).toEqual({ results: [{ taskId: 42, ok: true, tags: ["backend", "релиз"], changed: true }] });
+  });
+
+  it("says a deleted or hidden task is gone instead of an unexpected shape, and writes nothing", async () => {
+    const { ctx, call } = fakeCtx(replies({ status: "success", data: null, errors: [] }));
+
+    const result = await op("task_tags").execute(ctx, { taskIds: [42], add: ["a"] });
+
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      results: [{ taskId: 42, ok: false, error: "задача 42 не найдена или нет доступа (удалена или скрыта от тебя)" }],
+    });
   });
 
   it("clears the list with an empty array", async () => {
@@ -309,6 +323,44 @@ describe("task_checklist_edit", () => {
     expect(String(err)).toMatch(/ACCESS_DENIED/);
     expect(String(err)).toMatch(/отметить 11/);
     expect(String(err)).toMatch(/bitrix_task_checklist/);
+  });
+
+  describe("near the end of the client's wait", () => {
+    afterEach(() => {
+      setSystemTime();
+    });
+
+    it("starts no action without room for one as slow as the slowest so far and the re-read, and lists done and not done", async () => {
+      let now = Date.parse("2026-11-07T10:00:00Z");
+      setSystemTime(new Date(now));
+      const next = replies(before, { result: true }, { result: true });
+      // Each action takes 100 s: after two, 105 s of the 305 s are left — under 100 s + 30 s for the re-read.
+      const { ctx, call } = fakeCtx(async (target, portal) => {
+        if (target.endpoint.includes("complete")) {
+          now += 100_000;
+          setSystemTime(new Date(now));
+        }
+        return next(target, portal);
+      });
+
+      const err = await op("task_checklist_edit").execute(ctx, { taskId: 42, complete: [11, 12, 13] }).catch((e: unknown) => e);
+
+      expect(call).toHaveBeenCalledTimes(3);
+      expect(err).toBeInstanceOf(Error);
+      expect(String(err)).toContain(
+        "истекло время вызова, не выполнено: отметить 13; до этого сделано: отметить 11, отметить 12 — перечитай чек-лист (bitrix_task_checklist) перед повтором",
+      );
+    });
+
+    it("runs every action when they are quick", async () => {
+      setSystemTime(new Date("2026-11-07T10:00:00Z"));
+      const after = checklist(["10", "0", "BX_CHECKLIST_1", "N"], ["11", "10", "Тесты", "Y"], ["12", "10", "Ревью", "Y"], ["13", "10", "Лишнее", "Y"]);
+      const { ctx, call } = fakeCtx(replies(before, { result: true }, { result: true }, { result: true }, after));
+
+      await op("task_checklist_edit").execute(ctx, { taskId: 42, complete: [11, 12, 13] });
+
+      expect(call).toHaveBeenCalledTimes(5);
+    });
   });
 
   it("reports an add whose answer is not recognised as sent, not as failed", async () => {

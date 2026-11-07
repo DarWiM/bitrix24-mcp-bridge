@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import { forEachTask, taskIdsArg } from "./batch.js";
-import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, restMethod } from "./calls.js";
+import { REST_TASK_GET, mayHaveHappened, numeric, parseResponse, parseTaskCard, restMethod } from "./calls.js";
 import { OpInputError, defineOperation, idArg, type OpContext, type Operation } from "./operation.js";
 import { callTarget } from "./read.js";
 
@@ -45,7 +45,7 @@ async function postMessage(ctx: OpContext, dialogId: string, text: string, reply
 
 async function readTaskChat(ctx: OpContext, taskId: number) {
   const raw = await ctx.call({ ...REST_TASK_GET, params: { taskId, select: ["ID", "CHAT_ID"] } });
-  return parseResponse(taskChatResponse, raw, "tasks.task.get").result.task.chatId;
+  return parseTaskCard(taskChatResponse, raw, "tasks.task.get", taskId).result.task.chatId;
 }
 
 export const CHAT_OPERATIONS: Operation[] = [
