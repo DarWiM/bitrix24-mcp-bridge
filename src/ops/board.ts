@@ -37,24 +37,28 @@ export interface SprintColumn {
   type: string;
 }
 
-export async function activeSprintColumns(ctx: OpContext, groupId: number): Promise<{ sprintId: number; columns: SprintColumn[] }> {
+export async function readActiveSprintId(ctx: OpContext, groupId: number): Promise<number | null> {
   const sprints = parseResponse(
     sprintsResponse,
     await ctx.call({ ...SPRINT_LIST, params: { filter: { GROUP_ID: groupId, STATUS: "active" } } }),
     "tasks.api.scrum.sprint.list",
   );
   // Checked again here: were the filter ignored, the first sprint could be a finished one.
-  const sprint = sprints.result.find((s) => s.status === "active");
-  if (!sprint) throw new Error(`в проекте ${groupId} нет активного спринта — сначала начните спринт на scrum-доске (или это не scrum-проект)`);
+  return sprints.result.find((s) => s.status === "active")?.id ?? null;
+}
+
+export async function activeSprintColumns(ctx: OpContext, groupId: number): Promise<{ sprintId: number; columns: SprintColumn[] }> {
+  const sprintId = await readActiveSprintId(ctx, groupId);
+  if (sprintId === null) throw new Error(`в проекте ${groupId} нет активного спринта — сначала начните спринт на scrum-доске (или это не scrum-проект)`);
   const stages = parseResponse(
     stagesResponse,
-    await ctx.call({ ...SPRINT_STAGES, params: { sprintId: sprint.id } }),
+    await ctx.call({ ...SPRINT_STAGES, params: { sprintId } }),
     "tasks.api.scrum.kanban.getStages",
   );
   const columns = [...stages.result]
     .sort((a, b) => a.sort - b.sort)
     .map(({ id, name, type }) => ({ id, name, type: type ?? "" }));
-  return { sprintId: sprint.id, columns };
+  return { sprintId, columns };
 }
 
 export async function readTaskStage(ctx: OpContext, taskId: number) {
