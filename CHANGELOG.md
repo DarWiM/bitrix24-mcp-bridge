@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v1.1.0...bitrix24-mcp-bridge-v1.1.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **core:** take tasks returned to the backlog off the sprint board ([5976ced](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/5976ced916fefe45ea6814e1fe35b1da5f9103ca))
+* take tasks returned to the backlog off the sprint board ([44a61fa](https://github.com/DarWiM/bitrix24-mcp-bridge/commit/44a61facb3aa78c2d06fbdbffa3d6a02e2f333d9))
+
 ## [1.1.0](https://github.com/DarWiM/bitrix24-mcp-bridge/compare/bitrix24-mcp-bridge-v1.0.0...bitrix24-mcp-bridge-v1.1.0) (2026-11-07)
 
 
